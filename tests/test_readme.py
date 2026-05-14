@@ -24,7 +24,8 @@ def test_readme_includes_codex_plus_icon_and_toc():
 def test_readme_has_badges_language_switch_and_project_charts():
     text = Path("README.md").read_text(encoding="utf-8")
 
-    assert "[English](README_EN.md)" in text
+    assert '<a href="README_EN.md">English</a>' in text
+    assert "[English](README_EN.md)" not in text
     assert "img.shields.io/github/v/release/BigPizzaV3/CodexPlusPlus" in text
     assert "img.shields.io/github/stars/BigPizzaV3/CodexPlusPlus" in text
     assert "contrib.rocks/image?repo=BigPizzaV3/CodexPlusPlus" in text
@@ -56,7 +57,8 @@ def test_english_readme_exists_and_matches_core_sections():
     text = Path("README_EN.md").read_text(encoding="utf-8")
 
     assert "# Codex++" in text
-    assert "[中文](README.md)" in text
+    assert '<a href="README.md">中文</a>' in text
+    assert "[中文](README.md)" not in text
     assert "Provider Sync" in text
     assert "switch model_provider without losing historical conversations" in text
     assert "img.shields.io/github/v/release/BigPizzaV3/CodexPlusPlus" in text
