@@ -259,7 +259,7 @@ type RelayProtocol = "responses" | "chatCompletions";
 type RelayMode = "official" | "mixedApi" | "pureApi" | "aggregate";
 const PROTOCOL_PROXY_BASE_URL = "http://127.0.0.1:57321/v1";
 const CHAT_UPSTREAM_BASE_URL_KEY = "codex_plus_chat_base_url";
-const SCRIPT_MARKET_REPOSITORY_URL = "https://github.com/BigPizzaV3/CodexPlusPlusScriptMarket";
+const SCRIPT_MARKET_DISABLED = true;
 
 const emptyContextSelection = (): RelayContextSelection => ({
   mcpServers: [],
@@ -2904,48 +2904,54 @@ function UserScriptsScreen({ settings, market, actions }: { settings: SettingsRe
   const installedCount = marketScripts.filter((script) => script.installed).length;
   return (
     <>
+      {SCRIPT_MARKET_DISABLED ? null : (
+        <>
+          <Panel>
+            <CardHead title={t("脚本市场")} detail={tf("{0} 个市场脚本，已安装 {1} 个，本地整体 {2}", [marketScripts.length, installedCount, inventory?.enabled === false ? t("关闭") : t("开启")])} />
+            <CardContent>
+              <div className="metric-list">
+                <Metric label={t("市场状态")} value={market?.market.message ?? t("尚未刷新")} />
+                <Metric label={t("远程脚本")} value={tf("{0} 个", [marketScripts.length])} />
+                <Metric label={t("已安装")} value={tf("{0} 个", [installedCount])} />
+                <Metric label={t("本地整体")} value={inventory?.enabled === false ? t("关闭") : t("开启")} />
+              </div>
+              <Toolbar>
+                <Button onClick={() => void actions.refreshScriptMarket()}>
+                  <RefreshCw className="h-4 w-4" />
+                  {t("刷新市场")}
+                </Button>
+                <Button onClick={() => void actions.refreshCurrent()} variant="secondary">
+                  <RefreshCw className="h-4 w-4" />
+                  {t("刷新本地")}
+                </Button>
+              </Toolbar>
+            </CardContent>
+          </Panel>
+          <Panel>
+            <CardHead title={t("市场脚本")} detail={market?.market.updatedAt ? tf("清单更新时间：{0}", [market.market.updatedAt]) : t("从 GitHub 静态清单加载")} />
+            <CardContent>
+              {marketScripts.length ? (
+                <div className="script-market-grid">
+                  {marketScripts.map((script) => (
+                    <MarketScriptCard key={script.id} script={script} actions={actions} />
+                  ))}
+                </div>
+              ) : (
+                <div className="empty">{market?.status === "failed" ? market.message : t("点击刷新市场加载远程脚本。")}</div>
+              )}
+            </CardContent>
+          </Panel>
+        </>
+      )}
       <Panel>
-        <CardHead title={t("脚本市场")} detail={tf("{0} 个市场脚本，已安装 {1} 个，本地整体 {2}", [marketScripts.length, installedCount, inventory?.enabled === false ? t("关闭") : t("开启")])} />
+        <CardHead title={t("本地脚本")} detail={t("内置、手动和市场安装脚本；可在这里启停或删除用户脚本")} />
         <CardContent>
-          <div className="metric-list">
-            <Metric label={t("市场状态")} value={market?.market.message ?? t("尚未刷新")} />
-            <Metric label={t("远程脚本")} value={tf("{0} 个", [marketScripts.length])} />
-            <Metric label={t("已安装")} value={tf("{0} 个", [installedCount])} />
-            <Metric label={t("本地整体")} value={inventory?.enabled === false ? t("关闭") : t("开启")} />
-          </div>
           <Toolbar>
-            <Button onClick={() => void actions.refreshScriptMarket()}>
-              <RefreshCw className="h-4 w-4" />
-              {t("刷新市场")}
-            </Button>
-            <Button onClick={() => void actions.openExternalUrl(SCRIPT_MARKET_REPOSITORY_URL)} variant="secondary">
-              <ExternalLink className="h-4 w-4" />
-              {t("投稿")}
-            </Button>
             <Button onClick={() => void actions.refreshCurrent()} variant="secondary">
               <RefreshCw className="h-4 w-4" />
               {t("刷新本地")}
             </Button>
           </Toolbar>
-        </CardContent>
-      </Panel>
-      <Panel>
-        <CardHead title={t("市场脚本")} detail={market?.market.updatedAt ? tf("清单更新时间：{0}", [market.market.updatedAt]) : t("从 GitHub 静态清单加载")} />
-        <CardContent>
-          {marketScripts.length ? (
-            <div className="script-market-grid">
-              {marketScripts.map((script) => (
-                <MarketScriptCard key={script.id} script={script} actions={actions} />
-              ))}
-            </div>
-          ) : (
-            <div className="empty">{market?.status === "failed" ? market.message : t("点击刷新市场加载远程脚本。")}</div>
-          )}
-        </CardContent>
-      </Panel>
-      <Panel>
-        <CardHead title={t("本地脚本")} detail={t("内置、手动和市场安装脚本；可在这里启停或删除用户脚本")} />
-        <CardContent>
           <div className="table">
             {scripts.length ? scripts.map((script) => <ScriptRow key={script.key} script={script} actions={actions} />) : <div className="empty">{t("未发现用户脚本。")}</div>}
           </div>

@@ -835,6 +835,23 @@ fn script_market_manifest_filters_invalid_entries() {
     assert_eq!(manifest.scripts[0].tags, vec!["ui"]);
 }
 
+#[tokio::test]
+async fn empty_default_market_url_returns_empty_manifest_without_network() {
+    assert!(codex_plus_core::script_market::DEFAULT_MARKET_INDEX_URL.is_empty());
+    assert!(
+        !codex_plus_core::script_market::DEFAULT_MARKET_INDEX_URL
+            .contains("CodexPlusPlusScriptMarket")
+    );
+    let manifest = codex_plus_core::script_market::fetch_market_manifest(
+        codex_plus_core::script_market::DEFAULT_MARKET_INDEX_URL,
+    )
+    .await
+    .unwrap();
+    assert_eq!(manifest.version, 1);
+    assert!(manifest.updated_at.is_none());
+    assert!(manifest.scripts.is_empty());
+}
+
 #[test]
 fn user_script_inventory_includes_market_metadata() {
     let temp = tempfile::tempdir().unwrap();
