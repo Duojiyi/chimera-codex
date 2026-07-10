@@ -293,15 +293,15 @@ git commit -m "feat: disable upstream ScriptMarket in Chimera edition"
 - Modify: `apps/codex-plus-manager/src-tauri/src/lib.rs`
 - Modify: `assets/inject/stepwise-inject.js`
 
-- [ ] **Step 1: Locate and remove JOJO overview panel**
+- [x] **Step 1: Locate and remove JOJO overview panel**
 
 删除 `App.tsx` 中 `jojocode-overview` 相关 JSX（约概览页硬编码横幅），以及打开 `https://jojocode.com/` 的按钮处理。
 
-- [ ] **Step 2: Remove recommendations route/nav item**
+- [x] **Step 2: Remove recommendations route/nav item**
 
 删除侧栏「推荐内容」导航项、路由分支、`load_ads` 页面。
 
-- [ ] **Step 3: Replace About links + window branding**
+- [x] **Step 3: Replace About links + window branding**
 
 将 GitHub 链接改为本项目公开仓库；上游归属放在 README/About 的独立致谢中。删除不属于 Chimera 的 Discord/Telegram/赞赏入口；品牌标题改为 `Chimera Codex`。
 
@@ -309,16 +309,16 @@ git commit -m "feat: disable upstream ScriptMarket in Chimera edition"
 `src-tauri/src/lib.rs`：凡硬编码 `Codex++ Manager` / 窗口 title 一并替换。
 `index.html` 与 `stepwise-inject.js`：替换用户可见旧名称；内部日志前缀可保留以兼容诊断。
 
-- [ ] **Step 4: Remove CSS + unused i18n keys**
+- [x] **Step 4: Remove CSS + unused i18n keys**
 
 删除 `styles.css` 中 `.jojocode-overview*` 规则块；删除已无入口的「推荐内容」相关 i18n 键并同步 `tools/i18n-keys.json`。
 
-- [ ] **Step 5: Typecheck**
+- [x] **Step 5: Typecheck**
 
 Run: `cd apps/codex-plus-manager && npm ci && npm run vite:build && npx tsc --noEmit`
 Expected: exit 0
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/codex-plus-manager/src/App.tsx apps/codex-plus-manager/src/styles.css apps/codex-plus-manager/src/i18n-en.ts tools/i18n-keys.json apps/codex-plus-manager/index.html apps/codex-plus-manager/src-tauri/tauri.conf.json apps/codex-plus-manager/src-tauri/src/lib.rs assets/inject/stepwise-inject.js

@@ -25,12 +25,12 @@
 
 - [x] T1. 安全规范 remotes：公开仓库=`origin`，BigPizzaV3=`upstream`，补全历史并阻断 upstream push
 - [x] T2. 新增 `brand/product.toml`、生成脚本、Rust/TS generated branding 与 `-Check`
-- [ ] T3. 短路生产 `ads.rs` 网络入口，删除 builtin append，保留纯 normalize 测试
-- [ ] T4. 停止 `assets.rs` sponsor 变量/图片注入，更新 `cdp_bridge.rs`
-- [ ] T5. 清理 `renderer-inject.js` 推荐/赞赏/Ad-List
-- [ ] T6. 禁用远端 ScriptMarket，保留本地脚本管理
-- [ ] T7. 删除 App JOJO/推荐 UI、CSS、i18n 与生成键
-- [ ] T8. 品牌化 About、HTML title、Tauri 窗口/托盘、Stepwise 用户文案
+- [x] T3. 短路生产 `ads.rs` 网络入口，删除 builtin append，保留纯 normalize 测试
+- [x] T4. 停止 `assets.rs` sponsor 变量/图片注入，更新 `cdp_bridge.rs`
+- [x] T5. 清理 `renderer-inject.js` 推荐/赞赏/Ad-List
+- [x] T6. 禁用远端 ScriptMarket，保留本地脚本管理
+- [x] T7. 删除 App JOJO/推荐 UI、CSS、i18n 与生成键
+- [x] T8. 品牌化 About、HTML title、Tauri 窗口/托盘、Stepwise 用户文案
 - [ ] T9. 引入标准 SemVer，统一 Cargo/package/Tauri 版本
 - [ ] T10. updater 改公开 latest.json，严格 Win/macOS+arch matcher
 - [ ] T11. latest.json 增加 size/SHA-256，下载验证后才启动安装器
