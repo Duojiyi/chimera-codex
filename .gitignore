@@ -13,7 +13,22 @@ apps/codex-plus-manager/src-tauri/gen/
 .codex_asar_extract_latest/
 .superpowers/
 .claude/
-docs/superpowers/
+docs/superpowers/*
+!docs/superpowers/README.md
+!docs/superpowers/specs/
+docs/superpowers/specs/*
+!docs/superpowers/specs/2026-07-10-chimera-private-fork-design.md
+!docs/superpowers/plans/
+docs/superpowers/plans/*
+!docs/superpowers/plans/2026-07-10-chimera-private-fork.md
+!docs/superpowers/todos/
+docs/superpowers/todos/*
+!docs/superpowers/todos/2026-07-10-chimera-private-fork-todo.md
+!docs/superpowers/reports/
+docs/superpowers/reports/*
+!docs/superpowers/reports/2026-07-10-cross-verification.md
+!docs/superpowers/audits/
+!docs/superpowers/audits/**
 
 *.log
 .DS_Store

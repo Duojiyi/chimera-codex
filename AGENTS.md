@@ -4,9 +4,11 @@
 
 ## 项目概述
 
-本仓库是 [BigPizzaV3/CodexPlusPlus](https://github.com/BigPizzaV3/CodexPlusPlus) 的 fork，目标是实现「按模型粒度配置上下文窗口与自动压缩阈值」feature（对应 issue #1171 / #931）。
+本仓库是 [BigPizzaV3/CodexPlusPlus](https://github.com/BigPizzaV3/CodexPlusPlus) 的公开发行 fork。当前目标是在保留「按模型粒度配置上下文窗口与自动压缩阈值」能力的基础上，制作并维护 Chimera Codex 发行版：去推广、浅层品牌化、ChimeraHub 首次配置、独立公开更新源，以及跟踪上游正式 Release 的自动同步。
 
 采用 codex 原生 `model_catalog_json` 机制：通过 `model_list` 后缀语法（如 `deepseek-v4-pro[1M]`）声明每模型窗口，由 CodexPlusPlus 生成 catalog 文件并注入 config.toml 指针，codex 客户端运行时按模型识别各自窗口。
+
+Chimera 品牌、默认中转和去推广改动不回推上游；可复用的通用 bugfix 可以拆分后向上游提交。
 
 ## 仓库结构
 
@@ -51,10 +53,20 @@
 - 断言读 config.toml 文本，如 `assert!(config.contains("model_catalog_json"))`
 - 改行为要同步改/加对应测试
 
+## TDD 与双盲审计
+
+- 每个可观察行为改动必须先写会失败的测试（Red），再做最小实现（Green），最后仅在必要时重构（Refactor）；禁止先改实现再补测试。
+- Plan 中每个 `Step` checkbox 是一个最小任务；TODO 中的 `T*` checkbox 是对应大任务聚合门。每个最小任务完成后必须保留 Red、Green 和针对性回归命令的结果。
+- 每个最小任务完成后进行两次相互独立的审计：审计 A 只按需求、测试与可观察行为查漏；审计 B 独立按 diff、边界和回归面查漏。两次结论在记录前不得互相引用。
+- 每个大任务完成后，额外进行一次聚合双盲审计，复核任务边界、所有子任务证据和未覆盖风险。
+- 审计发现未关闭前不得勾选 TODO，不得进入依赖它的下一任务。审计记录保存在 `docs/superpowers/audits/`。
+
 ## 与上游同步
 
 - `upstream` = https://github.com/BigPizzaV3/CodexPlusPlus.git
-- `origin` = 用户自己的 GitHub fork（待创建）
-- feature 分支命名：`codex/per-model-context` 或类似
-- 定期 `git fetch upstream && git rebase upstream/main` 保持同步
-- 目标：全栈完成后向主仓提 PR 合并
+- `origin` = https://github.com/Duojiyi/chimera-codex.git（公开仓库，已完成创建与可达性核验）
+- 当前本地仓库已完成非 shallow 化；任何后续推送前仍必须逐项核对 remote、分支和工作树状态
+- 功能分支命名：`codex/<feature>`；自动同步分支：`sync/upstream-vX.Y.Z`
+- 自动发行只跟踪上游正式 Release tag，通过同步 PR + required checks 合入，不直接 rebase/覆盖本项目 `main`
+- 发布版本格式：`X.Y.Z-chimera.N`
+- 严禁把 Chimera 定制误推到 `upstream`
