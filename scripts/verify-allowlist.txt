@@ -18,7 +18,3 @@ scripts/installer/windows/CodexPlusPlus.nsi:Codex++ 管理工具:legacy shortcut
 
 # DMG stage README.txt migration steps for old app bundle names
 scripts/installer/macos/package-dmg.sh:Codex++ 管理工具:legacy migration instructions embedded in DMG README.txt
-
-# Workflow artifact rename lands in Task 8; NSIS OutFile already ChimeraCodex-
-.github/workflows/release-assets.yml:CodexPlusPlus-:legacy zip artifact names pending Task 8 ChimeraCodex rename
-.github/workflows/pr-build.yml:CodexPlusPlus-:legacy zip artifact names pending Task 8 ChimeraCodex rename

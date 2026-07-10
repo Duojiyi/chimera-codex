@@ -1,25 +1,78 @@
 name: Release assets
 
 on:
-  release:
-    types: [published]
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: chimera-release-${{ github.repository }}-main
+  cancel-in-progress: false
+
 jobs:
+  resolve-version:
+    name: Resolve version / idempotent gate
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      should_publish: ${{ steps.resolve.outputs.should_publish }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read Cargo workspace version and check tag
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(
+            awk '
+              /^\[workspace\.package\]/ { in_pkg=1; next }
+              /^\[/ { in_pkg=0 }
+              in_pkg && /^version[[:space:]]*=/ {
+                if (match($0, /"[^"]+"/)) {
+                  print substr($0, RSTART+1, RLENGTH-2)
+                  exit
+                }
+              }
+            ' Cargo.toml
+          )"
+          if [[ -z "$version" ]]; then
+            echo "error: failed to read [workspace.package].version from Cargo.toml" >&2
+            exit 1
+          fi
+          tag="v${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Resolved Cargo version: ${version} (tag ${tag})"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "Tag ${tag} already exists on origin — idempotent exit (skip publish)."
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Tag ${tag} not found — continue build-first publish."
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
   windows-installer:
+    name: Windows x64 build
+    needs: resolve-version
+    if: needs.resolve-version.outputs.should_publish == 'true'
     runs-on: windows-latest
     steps:
-      - name: Checkout release tag
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/codex-plus-manager/package-lock.json
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -29,7 +82,7 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: apps/codex-plus-manager
-        run: npm install --package-lock=false
+        run: npm ci
 
       - name: Build frontend
         working-directory: apps/codex-plus-manager
@@ -45,17 +98,16 @@ jobs:
           Copy-Item target/release/codex-plus-plus.exe dist/windows/app/
           Copy-Item target/release/codex-plus-plus-manager.exe dist/windows/app/
 
-      - name: Build Windows zip asset
+      - name: Build Windows zip and installer
         shell: pwsh
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.version }}
         run: |
-          $version = "${{ github.event.release.tag_name }}".TrimStart("v", "V")
+          $version = $env:VERSION
+          if (-not $version) { throw "VERSION is empty" }
           New-Item -ItemType Directory -Force dist/windows | Out-Null
-          Compress-Archive -Path dist/windows/app/* -DestinationPath "dist/windows/CodexPlusPlus-$version-windows-x64.zip" -Force
+          Compress-Archive -Path dist/windows/app/* -DestinationPath "dist/windows/ChimeraCodex-$version-windows-x64.zip" -Force
 
-      - name: Build Windows installer
-        shell: pwsh
-        run: |
-          $version = "${{ github.event.release.tag_name }}".TrimStart("v", "V")
           $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
           if (-not (Test-Path $makensis)) {
             $makensis = "makensis"
@@ -64,37 +116,47 @@ jobs:
           & $makensis "/INPUTCHARSET" "UTF8" "/DVERSION=$version" CodexPlusPlus.nsi
           Pop-Location
 
-      - name: Upload Windows installer
-        uses: softprops/action-gh-release@v2
+          $setup = "dist/windows/ChimeraCodex-$version-windows-x64-setup.exe"
+          $zip = "dist/windows/ChimeraCodex-$version-windows-x64.zip"
+          if (-not (Test-Path $setup)) { throw "missing $setup" }
+          if (-not (Test-Path $zip)) { throw "missing $zip" }
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ github.event.release.tag_name }}
-          files: |
-            dist/windows/*.exe
-            dist/windows/*.zip
+          name: chimera-codex-windows-x64
+          path: |
+            dist/windows/ChimeraCodex-*-windows-x64-setup.exe
+            dist/windows/ChimeraCodex-*-windows-x64.zip
+          if-no-files-found: error
 
   macos-dmg:
     name: macOS DMG (${{ matrix.arch }})
+    needs: resolve-version
+    if: needs.resolve-version.outputs.should_publish == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - arch: x64
             runner: macos-15-intel
             target: x86_64-apple-darwin
+            lipo_arch: x86_64
           - arch: arm64
             runner: macos-14
             target: aarch64-apple-darwin
+            lipo_arch: arm64
     steps:
-      - name: Checkout release tag
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/codex-plus-manager/package-lock.json
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -103,7 +165,7 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: apps/codex-plus-manager
-        run: npm install --package-lock=false
+        run: npm ci
 
       - name: Build frontend
         working-directory: apps/codex-plus-manager
@@ -112,89 +174,200 @@ jobs:
       - name: Build binaries
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Build macOS DMG
+      - name: Build macOS DMG and zip
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.version }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          VERSION="${VERSION#V}"
+          set -euo pipefail
+          VERSION="${VERSION:?}"
           BINARY_DIR="$PWD/target/${{ matrix.target }}/release" bash scripts/installer/macos/package-dmg.sh "$VERSION" "${{ matrix.arch }}"
-
-      - name: Build macOS zip asset
-        shell: bash
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          VERSION="${VERSION#V}"
-          mkdir -p dist/macos/app-${{ matrix.arch }}
+          mkdir -p "dist/macos/app-${{ matrix.arch }}"
           cp "target/${{ matrix.target }}/release/codex-plus-plus" "dist/macos/app-${{ matrix.arch }}/"
           cp "target/${{ matrix.target }}/release/codex-plus-plus-manager" "dist/macos/app-${{ matrix.arch }}/"
-          (cd dist/macos && zip -r "CodexPlusPlus-${VERSION}-macos-${{ matrix.arch }}.zip" "app-${{ matrix.arch }}")
+          (cd dist/macos && zip -r "ChimeraCodex-${VERSION}-macos-${{ matrix.arch }}.zip" "app-${{ matrix.arch }}")
+          test -f "dist/macos/ChimeraCodex-${VERSION}-macos-${{ matrix.arch }}.dmg"
+          test -f "dist/macos/ChimeraCodex-${VERSION}-macos-${{ matrix.arch }}.zip"
 
       - name: Verify macOS bundle structure
         run: |
           set -euo pipefail
+          expected_arch="${{ matrix.lipo_arch }}"
           test -L "dist/macos/stage/Applications"
           test "$(readlink "dist/macos/stage/Applications")" = "/Applications"
           for app in "dist/macos/stage/Chimera Codex.app" "dist/macos/stage/Chimera Codex 管理工具.app"; do
             test -f "$app/Contents/Info.plist"
             test -f "$app/Contents/PkgInfo"
-            test -x "$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+            exe_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+            exe_path="$app/Contents/MacOS/$exe_name"
+            test -x "$exe_path"
             short_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
             build_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")"
             case "$short_ver" in *-*) echo "error: CFBundleShortVersionString must be X.Y.Z, got $short_ver" >&2; exit 1 ;; esac
             case "$build_ver" in ''|*[!0-9]*|0*) echo "error: CFBundleVersion must be positive integer, got $build_ver" >&2; exit 1 ;; esac
             plutil -lint "$app/Contents/Info.plist" >/dev/null
+            archs="$(lipo -archs "$exe_path")"
+            case " $archs " in
+              *" $expected_arch "*) ;;
+              *) echo "error: expected arch $expected_arch in '$archs' for $exe_path" >&2; exit 1 ;;
+            esac
             codesign -dv "$app" >/dev/null 2>&1
-            echo "verified (ad-hoc only, not notarized): $app"
+            echo "verified (ad-hoc only, not notarized): $app arch=$archs"
           done
 
-      - name: Upload macOS DMG
-        uses: softprops/action-gh-release@v2
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ github.event.release.tag_name }}
-          files: |
-            dist/macos/*.dmg
-            dist/macos/*.zip
+          name: chimera-codex-macos-${{ matrix.arch }}
+          path: |
+            dist/macos/ChimeraCodex-*-macos-${{ matrix.arch }}.dmg
+            dist/macos/ChimeraCodex-*-macos-${{ matrix.arch }}.zip
+          if-no-files-found: error
 
-  latest-json:
-    name: Upload static latest.json
-    runs-on: ubuntu-latest
+  publish-release:
+    name: Draft → upload → publish
     needs:
+      - resolve-version
       - windows-installer
       - macos-dmg
+    if: needs.resolve-version.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
     steps:
-      - name: Generate latest.json
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: chimera-codex-windows-x64
+          path: release-assets
+
+      - name: Download macOS x64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: chimera-codex-macos-x64
+          path: release-assets
+
+      - name: Download macOS arm64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: chimera-codex-macos-arm64
+          path: release-assets
+
+      - name: Create draft, upload assets, publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          TAG: ${{ github.event.release.tag_name }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+          TAG: ${{ needs.resolve-version.outputs.tag }}
+          TARGET_SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          gh release view "$TAG" --repo "$REPO" --json assets,body,tagName,url > release.json
+          VERSION="${VERSION:?}"
+          TAG="${TAG:?}"
+          mkdir -p release-assets
+          shopt -s nullglob
+          assets=(release-assets/ChimeraCodex-*)
+          if [[ ${#assets[@]} -lt 4 ]]; then
+            echo "error: expected at least 4 ChimeraCodex assets, found ${#assets[@]}" >&2
+            ls -la release-assets >&2 || true
+            exit 1
+          fi
+
           node <<'NODE'
           const fs = require("fs");
-          const release = JSON.parse(fs.readFileSync("release.json", "utf8"));
+          const crypto = require("crypto");
+          const path = require("path");
+
           const repo = process.env.REPO;
-          const tag = release.tagName || process.env.TAG;
-          const version = tag.replace(/^v/i, "");
+          const version = process.env.VERSION;
+          const tag = process.env.TAG;
           const baseUrl = `https://github.com/${repo}/releases/download/${tag}`;
-          const assets = (release.assets || [])
-            .map((asset) => asset.name)
-            .filter((name) => name !== "latest.json")
-            .map((name) => ({ name, url: `${baseUrl}/${encodeURIComponent(name)}` }));
+          const dir = "release-assets";
+
+          const files = fs.readdirSync(dir)
+            .filter((name) => name.startsWith("ChimeraCodex-"))
+            .sort();
+
+          const assets = files.map((name) => {
+            const full = path.join(dir, name);
+            const buf = fs.readFileSync(full);
+            const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
+            return {
+              name,
+              url: `${baseUrl}/${encodeURIComponent(name)}`,
+              sha256,
+              size: buf.length,
+            };
+          });
+
           const payload = {
             version: `v${version}`,
-            url: release.url || `https://github.com/${repo}/releases/tag/${tag}`,
-            body: release.body || "",
-            assets
+            url: `https://github.com/${repo}/releases/tag/${tag}`,
+            body: [
+              `Chimera Codex ${version}`,
+              "",
+              "macOS builds are ad-hoc signed only and are **not notarized**.",
+              "On first launch, use right-click → Open (or clear quarantine) as documented in README.",
+            ].join("\n"),
+            assets,
           };
-          fs.writeFileSync("latest.json", `${JSON.stringify(payload, null, 2)}\n`);
-          NODE
-          cat latest.json
 
-      - name: Upload latest.json
+          fs.writeFileSync("latest.json", `${JSON.stringify(payload, null, 2)}\n`);
+          fs.writeFileSync("release-notes.md", `${payload.body}\n`);
+          console.log(JSON.stringify(payload, null, 2));
+          NODE
+
+          # Draft first so /releases/latest is unchanged until publish succeeds.
+          gh release create "$TAG" \
+            --repo "$REPO" \
+            --target "$TARGET_SHA" \
+            --title "Chimera Codex ${VERSION}" \
+            --notes-file release-notes.md \
+            --draft
+
+          upload_list=(release-assets/ChimeraCodex-* latest.json)
+          gh release upload "$TAG" "${upload_list[@]}" --repo "$REPO"
+
+          # Publish only after every asset (including latest.json) uploaded.
+          gh release edit "$TAG" --repo "$REPO" --draft=false --prerelease=false
+
+      - name: Anonymous smoke — latest.json and one asset
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.release.tag_name }}
           REPO: ${{ github.repository }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
         shell: bash
-        run: gh release upload "$TAG" latest.json --clobber --repo "$REPO"
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION:?}"
+          latest_url="https://github.com/${REPO}/releases/latest/download/latest.json"
+          setup_name="ChimeraCodex-${VERSION}-windows-x64-setup.exe"
+          setup_url="https://github.com/${REPO}/releases/latest/download/${setup_name}"
+
+          ok=0
+          for i in 1 2 3 4 5 6; do
+            if curl -fsSL --retry 2 --retry-delay 2 "$latest_url" -o /tmp/latest-smoke.json; then
+              ok=1
+              break
+            fi
+            echo "latest.json not ready yet (attempt $i); sleeping..."
+            sleep 5
+          done
+          if [[ "$ok" -ne 1 ]]; then
+            echo "error: anonymous latest.json download failed" >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json, sys
+          data = json.load(open("/tmp/latest-smoke.json", encoding="utf-8"))
+          assert data.get("version"), "missing version"
+          assets = data.get("assets") or []
+          assert assets, "missing assets"
+          for a in assets:
+              assert a.get("name") and a.get("url") and a.get("sha256") and a.get("size") is not None
+          print("latest.json smoke ok:", data["version"], "assets=", len(assets))
+          PY
+
+          curl -fsSL --retry 3 --retry-delay 2 -o /tmp/asset-smoke.bin -r 0-1023 "$setup_url"
+          test -s /tmp/asset-smoke.bin
+          echo "anonymous asset range request ok: ${setup_name}"

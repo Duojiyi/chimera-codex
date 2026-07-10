@@ -567,33 +567,33 @@ git commit -m "docs: document Chimera distribution and add branding gates"
 - Modify: `.github/workflows/release-assets.yml`
 - Modify: `.github/workflows/pr-build.yml`（产物名一致）
 
-- [ ] **Step 1: Replace the release-created trigger**
+- [x] **Step 1: Replace the release-created trigger**
 
 `release-assets.yml` 使用 `push: main` + `workflow_dispatch`。入口读取 Cargo workspace version：若远端已存在 `v<version>` tag 则幂等退出；tag 不存在才继续。不要先创建 Release 再期待 `release: published` 触发第二个 workflow。
 
 添加同版本 concurrency group，避免定时同步与手工发布重复。
 
-- [ ] **Step 2: Build all platforms before publishing**
+- [x] **Step 2: Build all platforms before publishing**
 
 Windows x64、macOS x64、macOS arm64 各自构建、验证并上传 Actions artifact。所有构建都使用 `npm ci` 和 lockfile。macOS bundle 检查使用 Chimera 新路径，并验证 plist、架构和 ad-hoc codesign；不声称 notarized。
 
 任一矩阵失败都不得创建公开 tag/Release。
 
-- [ ] **Step 3: Rename artifacts strictly**
+- [x] **Step 3: Rename artifacts strictly**
 
 将 `CodexPlusPlus-$version-windows-x64.zip/setup.exe` 改为 `ChimeraCodex-$version-windows-x64.*`；macOS DMG 同理。
 
-- [ ] **Step 4: Final publish job**
+- [x] **Step 4: Final publish job**
 
 最终 job 下载三平台 Actions artifacts，计算每个发布资产的 SHA-256 和 size，生成 `latest.json`。然后在当前 `main` SHA 创建 `v<version>` draft Release，上传安装资产与 manifest；上传全部成功后才 publish，且 `prerelease=false`。
 
 失败时保留 draft 供排查，不改变 `/releases/latest/download/latest.json`。成功后用匿名 HTTP 请求验证 `latest.json` 和至少一个资产可下载。
 
-- [ ] **Step 5: PR build parity**
+- [x] **Step 5: PR build parity**
 
 `pr-build.yml` 使用同一构建脚本、命名与 bundle 验证，但只上传 Actions artifact，不创建 tag/Release。加入 `generate-branding -Check`、扫描、Rust 测试、前端 build/typecheck。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add .github/workflows/release-assets.yml .github/workflows/pr-build.yml

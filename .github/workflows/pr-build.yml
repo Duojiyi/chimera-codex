@@ -9,9 +9,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: pr-build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  windows-artifacts:
-    name: Windows artifacts
+  gates:
+    name: Branding / ads / Rust / frontend
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -21,16 +25,23 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/codex-plus-manager/package-lock.json
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install NSIS
-        run: choco install nsis -y
+      - name: Branding generate check
+        shell: pwsh
+        run: pwsh -File scripts/generate-branding.ps1 -Check
+
+      - name: Verify no upstream ads
+        shell: pwsh
+        run: pwsh -File scripts/verify-no-upstream-ads.ps1
 
       - name: Install frontend dependencies
         working-directory: apps/codex-plus-manager
-        run: npm install --package-lock=false
+        run: npm ci
 
       - name: TypeScript check
         working-directory: apps/codex-plus-manager
@@ -43,6 +54,70 @@ jobs:
       - name: Rust tests
         run: cargo test --workspace
 
+  resolve-version:
+    name: Resolve Cargo version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read Cargo workspace version
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(
+            awk '
+              /^\[workspace\.package\]/ { in_pkg=1; next }
+              /^\[/ { in_pkg=0 }
+              in_pkg && /^version[[:space:]]*=/ {
+                if (match($0, /"[^"]+"/)) {
+                  print substr($0, RSTART+1, RLENGTH-2)
+                  exit
+                }
+              }
+            ' Cargo.toml
+          )"
+          if [[ -z "$version" ]]; then
+            echo "error: failed to read [workspace.package].version from Cargo.toml" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Resolved Cargo version: ${version}"
+
+  windows-artifacts:
+    name: Windows artifacts
+    needs:
+      - gates
+      - resolve-version
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/codex-plus-manager/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install NSIS
+        run: choco install nsis -y
+
+      - name: Install frontend dependencies
+        working-directory: apps/codex-plus-manager
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: apps/codex-plus-manager
+        run: npm run vite:build
+
       - name: Build release binaries
         run: cargo build --release
 
@@ -53,14 +128,16 @@ jobs:
           Copy-Item target/release/codex-plus-plus.exe dist/windows/app/
           Copy-Item target/release/codex-plus-plus-manager.exe dist/windows/app/
 
-      - name: Build Windows installer
+      - name: Build Windows zip and installer
         shell: pwsh
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.version }}
         run: |
-          $version = "${{ github.ref_name }}".TrimStart("v", "V")
-          $version = $version -replace '[\\/]', '-'
-          if (-not $version -or $version -eq "main") {
-            $version = "0.0.0-${{ github.run_number }}"
-          }
+          $version = $env:VERSION
+          if (-not $version) { throw "VERSION is empty" }
+          New-Item -ItemType Directory -Force dist/windows | Out-Null
+          Compress-Archive -Path dist/windows/app/* -DestinationPath "dist/windows/ChimeraCodex-$version-windows-x64.zip" -Force
+
           $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
           if (-not (Test-Path $makensis)) {
             $makensis = "makensis"
@@ -69,22 +146,25 @@ jobs:
           & $makensis "/INPUTCHARSET" "UTF8" "/DVERSION=$version" CodexPlusPlus.nsi
           Pop-Location
 
-      - name: Upload Windows binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: codex-plus-plus-windows-binaries
-          path: dist/windows/app/*
-          if-no-files-found: error
+          $setup = "dist/windows/ChimeraCodex-$version-windows-x64-setup.exe"
+          $zip = "dist/windows/ChimeraCodex-$version-windows-x64.zip"
+          if (-not (Test-Path $setup)) { throw "missing $setup" }
+          if (-not (Test-Path $zip)) { throw "missing $zip" }
 
-      - name: Upload Windows installer
+      - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: codex-plus-plus-windows-installer
-          path: dist/windows/*.exe
+          name: chimera-codex-windows-x64
+          path: |
+            dist/windows/ChimeraCodex-*-windows-x64-setup.exe
+            dist/windows/ChimeraCodex-*-windows-x64.zip
           if-no-files-found: error
 
   macos-dmg:
     name: macOS DMG (${{ matrix.arch }})
+    needs:
+      - gates
+      - resolve-version
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -93,9 +173,11 @@ jobs:
           - arch: x64
             runner: macos-15-intel
             target: x86_64-apple-darwin
+            lipo_arch: x86_64
           - arch: arm64
             runner: macos-14
             target: aarch64-apple-darwin
+            lipo_arch: arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -104,6 +186,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/codex-plus-manager/package-lock.json
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -112,7 +196,7 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: apps/codex-plus-manager
-        run: npm install --package-lock=false
+        run: npm ci
 
       - name: Build frontend
         working-directory: apps/codex-plus-manager
@@ -121,37 +205,51 @@ jobs:
       - name: Build release binaries
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Build macOS DMG
+      - name: Build macOS DMG and zip
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.version }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          VERSION="${VERSION#V}"
-          VERSION="${VERSION//\//-}"
-          if [ -z "$VERSION" ] || [ "$VERSION" = "main" ]; then
-            VERSION="0.0.0-${GITHUB_RUN_NUMBER}"
-          fi
+          set -euo pipefail
+          VERSION="${VERSION:?}"
           BINARY_DIR="$PWD/target/${{ matrix.target }}/release" bash scripts/installer/macos/package-dmg.sh "$VERSION" "${{ matrix.arch }}"
+          mkdir -p "dist/macos/app-${{ matrix.arch }}"
+          cp "target/${{ matrix.target }}/release/codex-plus-plus" "dist/macos/app-${{ matrix.arch }}/"
+          cp "target/${{ matrix.target }}/release/codex-plus-plus-manager" "dist/macos/app-${{ matrix.arch }}/"
+          (cd dist/macos && zip -r "ChimeraCodex-${VERSION}-macos-${{ matrix.arch }}.zip" "app-${{ matrix.arch }}")
+          test -f "dist/macos/ChimeraCodex-${VERSION}-macos-${{ matrix.arch }}.dmg"
+          test -f "dist/macos/ChimeraCodex-${VERSION}-macos-${{ matrix.arch }}.zip"
 
       - name: Verify macOS bundle structure
         run: |
           set -euo pipefail
+          expected_arch="${{ matrix.lipo_arch }}"
           test -L "dist/macos/stage/Applications"
           test "$(readlink "dist/macos/stage/Applications")" = "/Applications"
           for app in "dist/macos/stage/Chimera Codex.app" "dist/macos/stage/Chimera Codex 管理工具.app"; do
             test -f "$app/Contents/Info.plist"
             test -f "$app/Contents/PkgInfo"
-            test -x "$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+            exe_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+            exe_path="$app/Contents/MacOS/$exe_name"
+            test -x "$exe_path"
             short_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
             build_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")"
             case "$short_ver" in *-*) echo "error: CFBundleShortVersionString must be X.Y.Z, got $short_ver" >&2; exit 1 ;; esac
             case "$build_ver" in ''|*[!0-9]*|0*) echo "error: CFBundleVersion must be positive integer, got $build_ver" >&2; exit 1 ;; esac
             plutil -lint "$app/Contents/Info.plist" >/dev/null
+            archs="$(lipo -archs "$exe_path")"
+            case " $archs " in
+              *" $expected_arch "*) ;;
+              *) echo "error: expected arch $expected_arch in '$archs' for $exe_path" >&2; exit 1 ;;
+            esac
             codesign -dv "$app" >/dev/null 2>&1
-            echo "verified (ad-hoc only, not notarized): $app"
+            echo "verified (ad-hoc only, not notarized): $app arch=$archs"
           done
 
-      - name: Upload macOS DMG
+      - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: codex-plus-plus-macos-${{ matrix.arch }}-dmg
-          path: dist/macos/*.dmg
+          name: chimera-codex-macos-${{ matrix.arch }}
+          path: |
+            dist/macos/ChimeraCodex-*-macos-${{ matrix.arch }}.dmg
+            dist/macos/ChimeraCodex-*-macos-${{ matrix.arch }}.zip
           if-no-files-found: error
