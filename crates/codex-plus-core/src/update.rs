@@ -221,7 +221,11 @@ pub async fn perform_update(
     })
 }
 
-pub fn verify_downloaded_bytes(bytes: &[u8], expected_sha256: &str, expected_size: u64) -> anyhow::Result<()> {
+pub fn verify_downloaded_bytes(
+    bytes: &[u8],
+    expected_sha256: &str,
+    expected_size: u64,
+) -> anyhow::Result<()> {
     if bytes.len() as u64 != expected_size {
         anyhow::bail!(
             "downloaded asset size mismatch: expected {expected_size}, got {}",

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use super::{
-    InstallOptions, LEGACY_MOJIBAKE_MANAGER_LNK, LEGACY_MANAGER_NAME, LEGACY_SILENT_NAME,
+    InstallOptions, LEGACY_MANAGER_NAME, LEGACY_MOJIBAKE_MANAGER_LNK, LEGACY_SILENT_NAME,
     MANAGER_BINARY, MANAGER_NAME, SILENT_BINARY, SILENT_NAME, install_root_or_default,
     legacy_shortcut_names, option_or_current_exe, windows_legacy_shortcut_paths,
 };
@@ -205,6 +205,10 @@ fn _entrypoint_names() -> (&'static str, &'static str) {
 
 #[allow(dead_code)]
 fn _legacy_entrypoint_names() -> (&'static str, &'static str) {
-    let _ = (LEGACY_SILENT_NAME, LEGACY_MANAGER_NAME, LEGACY_MOJIBAKE_MANAGER_LNK);
+    let _ = (
+        LEGACY_SILENT_NAME,
+        LEGACY_MANAGER_NAME,
+        LEGACY_MOJIBAKE_MANAGER_LNK,
+    );
     legacy_shortcut_names()
 }

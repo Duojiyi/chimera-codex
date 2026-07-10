@@ -2,8 +2,8 @@ use codex_plus_core::branding::{
     DISPLAY_MANAGER_NAME, DISPLAY_SILENT_NAME, MACOS_BUILD_NUMBER, PUBLISHER,
 };
 use codex_plus_core::install::{
-    InstallOptions, LEGACY_MANAGER_NAME, LEGACY_SILENT_NAME, MANAGER_BINARY, SILENT_BINARY,
-    SILENT_NAME, MANAGER_NAME, app_bundle_names, build_macos_app_bundle,
+    InstallOptions, LEGACY_MANAGER_NAME, LEGACY_SILENT_NAME, MANAGER_BINARY, MANAGER_NAME,
+    SILENT_BINARY, SILENT_NAME, app_bundle_names, build_macos_app_bundle,
     build_windows_entrypoint_plan, companion_binary_path_from_exe, default_install_root_strategy,
     detect_legacy_macos_apps, legacy_app_bundle_names, legacy_shortcut_names, shortcut_names,
     windows_legacy_shortcut_paths,
@@ -33,7 +33,10 @@ fn windows_entrypoint_plan_creates_chimera_shortcuts_not_legacy() {
     let plan = build_windows_entrypoint_plan(&options);
 
     assert!(plan.silent_shortcut.ends_with("Chimera Codex.lnk"));
-    assert!(plan.manager_shortcut.ends_with("Chimera Codex 管理工具.lnk"));
+    assert!(
+        plan.manager_shortcut
+            .ends_with("Chimera Codex 管理工具.lnk")
+    );
     assert!(!plan.silent_shortcut.contains("Codex++.lnk"));
     assert_eq!(plan.launcher_path, "C:/Tools/codex-plus-plus.exe");
     assert_eq!(plan.manager_path, "C:/Tools/codex-plus-plus-manager.exe");
@@ -88,7 +91,10 @@ fn windows_entrypoint_plan_can_request_owned_data_removal_without_shell_script()
     let plan = build_windows_entrypoint_plan(&options);
 
     assert!(plan.silent_shortcut.ends_with("Chimera Codex.lnk"));
-    assert!(plan.manager_shortcut.ends_with("Chimera Codex 管理工具.lnk"));
+    assert!(
+        plan.manager_shortcut
+            .ends_with("Chimera Codex 管理工具.lnk")
+    );
     assert!(plan.remove_owned_data);
 }
 
@@ -134,12 +140,11 @@ fn macos_bundle_metadata_uses_chimera_names_and_numeric_versions() {
         .next()
         .expect("marketing version");
     assert!(
-        silent
-            .info_plist
-            .contains(&format!("<key>CFBundleShortVersionString</key>\n  <string>{short_version}</string>"))
-            || silent.info_plist.contains(&format!(
-                "<key>CFBundleShortVersionString</key>\n  <string>{short_version}</string>"
-            ))
+        silent.info_plist.contains(&format!(
+            "<key>CFBundleShortVersionString</key>\n  <string>{short_version}</string>"
+        )) || silent.info_plist.contains(&format!(
+            "<key>CFBundleShortVersionString</key>\n  <string>{short_version}</string>"
+        ))
     );
     assert!(!silent.info_plist.contains(&format!(
         "<key>CFBundleShortVersionString</key>\n  <string>{}</string>",
@@ -174,7 +179,10 @@ fn installer_exports_chimera_and_legacy_entrypoint_names() {
         app_bundle_names(),
         ("Chimera Codex.app", "Chimera Codex 管理工具.app")
     );
-    assert_eq!(legacy_shortcut_names(), ("Codex++.lnk", "Codex++ 管理工具.lnk"));
+    assert_eq!(
+        legacy_shortcut_names(),
+        ("Codex++.lnk", "Codex++ 管理工具.lnk")
+    );
     assert_eq!(
         legacy_app_bundle_names(),
         ("Codex++.app", "Codex++ 管理工具.app")
@@ -216,14 +224,24 @@ fn macos_detects_legacy_apps_without_deleting_them() {
     let detected = detect_legacy_macos_apps(&[root.path().to_path_buf()]);
 
     assert_eq!(detected.paths.len(), 2);
-    assert!(detected.paths.iter().any(|path| path.ends_with("Codex++.app")));
+    assert!(
+        detected
+            .paths
+            .iter()
+            .any(|path| path.ends_with("Codex++.app"))
+    );
     assert!(
         detected
             .paths
             .iter()
             .any(|path| path.ends_with("Codex++ 管理工具.app"))
     );
-    assert!(!detected.paths.iter().any(|path| path.ends_with("Chimera Codex.app")));
+    assert!(
+        !detected
+            .paths
+            .iter()
+            .any(|path| path.ends_with("Chimera Codex.app"))
+    );
     assert!(!detected.message.is_empty());
     assert!(legacy_silent.exists());
     assert!(legacy_manager.exists());
@@ -269,9 +287,7 @@ fn companion_binary_path_resolves_macos_manager_app_next_to_silent_app() {
 fn macos_bundle_does_not_wrap_the_bundle_executable_in_itself() {
     let options = InstallOptions {
         install_root: Some("/Applications".into()),
-        launcher_path: Some(
-            "/Applications/Chimera Codex.app/Contents/MacOS/CodexPlusPlus".into(),
-        ),
+        launcher_path: Some("/Applications/Chimera Codex.app/Contents/MacOS/CodexPlusPlus".into()),
         manager_path: Some(
             "/Applications/Chimera Codex 管理工具.app/Contents/MacOS/CodexPlusPlusManager".into(),
         ),
@@ -309,8 +325,15 @@ fn windows_nsi_uses_chimera_branding_keeps_install_dir_and_cleans_legacy() {
     assert!(nsi.contains("Name \"Chimera Codex\""));
     assert!(nsi.contains("ChimeraCodex-${VERSION}-windows-x64-setup.exe"));
     assert!(nsi.contains("InstallDir \"$LOCALAPPDATA\\Programs\\Codex++\""));
-    assert!(nsi.contains("Publisher\" \"ChimeraHub\"") || nsi.contains("\"Publisher\" \"ChimeraHub\"") || nsi.contains("Publisher\" \"ChimeraHub"));
-    assert!(nsi.contains("DisplayName\" \"Chimera Codex\"") || nsi.contains("\"DisplayName\" \"Chimera Codex\""));
+    assert!(
+        nsi.contains("Publisher\" \"ChimeraHub\"")
+            || nsi.contains("\"Publisher\" \"ChimeraHub\"")
+            || nsi.contains("Publisher\" \"ChimeraHub")
+    );
+    assert!(
+        nsi.contains("DisplayName\" \"Chimera Codex\"")
+            || nsi.contains("\"DisplayName\" \"Chimera Codex\"")
+    );
     assert!(nsi.contains("Delete \"$DESKTOP\\Codex++.lnk\""));
     assert!(nsi.contains("Delete \"$DESKTOP\\Codex++ 管理工具.lnk\""));
     assert!(nsi.contains("Delete \"$DESKTOP\\Chimera Codex.lnk\""));

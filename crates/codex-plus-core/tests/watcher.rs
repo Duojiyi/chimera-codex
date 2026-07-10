@@ -87,7 +87,7 @@ fn codex_process_filter_keeps_only_windowsapps_codex_processes() {
 }
 
 #[test]
-fn codex_process_filter_keeps_chatgpt_desktop_package_processes() {
+fn codex_process_filter_keeps_openai_codex_package_processes() {
     let processes = [
         (
             21,
@@ -99,7 +99,7 @@ fn codex_process_filter_keeps_chatgpt_desktop_package_processes() {
         ),
         (
             23,
-            r"C:\Program Files\WindowsApps\OpenAI.ChatGPT-Desktop_1.2026.133.0_x64__abc\app\resources\ChatGPT.exe",
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__abc\app\resources\ChatGPT.exe",
         ),
         (
             24,
@@ -107,7 +107,8 @@ fn codex_process_filter_keeps_chatgpt_desktop_package_processes() {
         ),
     ];
 
-    assert_eq!(codex_process_ids(processes), vec![21, 22]);
+    // Standalone ChatGPT Desktop is not Codex; only OpenAI.Codex(*) package apps match.
+    assert_eq!(codex_process_ids(processes), vec![22]);
 }
 
 #[test]
@@ -208,7 +209,7 @@ fn find_codex_processes_combines_store_and_local_installs() {
             parent_process_id: 0,
             exe_file: "ChatGPT.exe".to_string(),
             executable_path: Some(std::path::PathBuf::from(
-                r"C:\Program Files\WindowsApps\OpenAI.ChatGPT-Desktop_1.2026.133.0_x64__abc\app\ChatGPT.exe",
+                r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__abc\app\ChatGPT.exe",
             )),
         },
         WindowsProcessInfo {

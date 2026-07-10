@@ -83,10 +83,7 @@ impl ShortcutState {
 }
 
 pub fn shortcut_names() -> (&'static str, &'static str) {
-    (
-        "Chimera Codex.lnk",
-        "Chimera Codex 管理工具.lnk",
-    )
+    ("Chimera Codex.lnk", "Chimera Codex 管理工具.lnk")
 }
 
 pub fn legacy_shortcut_names() -> (&'static str, &'static str) {

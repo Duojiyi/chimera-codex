@@ -105,12 +105,14 @@ fn latest_json_selects_strict_chimera_platform_assets() {
     assert_eq!(release.version, "1.2.34-chimera.1");
     assert_eq!(release.body, "静态更新描述");
     if cfg!(windows) {
-        let expected_name =
-            format!("{ARTIFACT_PREFIX}-1.2.34-chimera.1-windows-x64-setup.exe");
+        let expected_name = format!("{ARTIFACT_PREFIX}-1.2.34-chimera.1-windows-x64-setup.exe");
         let expected_hash = "11".repeat(32);
         assert_eq!(release.asset_name.as_deref(), Some(expected_name.as_str()));
         assert_eq!(release.asset_size, Some(100));
-        assert_eq!(release.asset_sha256.as_deref(), Some(expected_hash.as_str()));
+        assert_eq!(
+            release.asset_sha256.as_deref(),
+            Some(expected_hash.as_str())
+        );
     } else if cfg!(target_os = "macos") {
         let expected = match std::env::consts::ARCH {
             "x86_64" => format!("{ARTIFACT_PREFIX}-1.2.34-chimera.1-macos-x64.dmg"),

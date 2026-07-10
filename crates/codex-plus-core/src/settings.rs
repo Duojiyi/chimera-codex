@@ -1696,7 +1696,10 @@ experimental_bearer_token = "sk-existing""#
 
         let loaded = store.load().unwrap();
 
-        assert!(!path.exists(), "missing settings must not be created on load");
+        assert!(
+            !path.exists(),
+            "missing settings must not be created on load"
+        );
         assert_eq!(loaded, chimera_first_run_settings());
         assert_eq!(loaded.active_relay_id, "chimerahub");
         assert!(loaded.relay_profiles_enabled);
@@ -1706,10 +1709,7 @@ experimental_bearer_token = "sk-existing""#
         assert_eq!(profile.name, "ChimeraHub");
         assert_eq!(profile.relay_mode, RelayMode::PureApi);
         assert_eq!(profile.protocol, RelayProtocol::Responses);
-        assert_eq!(
-            profile.base_url,
-            crate::branding::DEFAULT_RELAY_BASE_URL
-        );
+        assert_eq!(profile.base_url, crate::branding::DEFAULT_RELAY_BASE_URL);
         assert_eq!(profile.model, crate::branding::DEFAULT_RELAY_MODEL);
         assert!(profile.api_key.is_empty());
         assert!(profile.config_contents.is_empty());

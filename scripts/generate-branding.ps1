@@ -273,15 +273,11 @@ function Compare-FilesExact {
     if (-not (Test-Path -LiteralPath $ActualPath)) {
         throw "Missing generated file in working tree: $ActualPath"
     }
-    $expected = [System.IO.File]::ReadAllBytes($ExpectedPath)
-    $actual = [System.IO.File]::ReadAllBytes($ActualPath)
-    if ($expected.Length -ne $actual.Length) {
-        throw "Generated drift (length): $ActualPath"
-    }
-    for ($i = 0; $i -lt $expected.Length; $i++) {
-        if ($expected[$i] -ne $actual[$i]) {
-            throw "Generated drift (byte $i): $ActualPath"
-        }
+    # Normalize newlines so Windows autocrlf checkouts do not false-fail -Check.
+    $expected = ([System.IO.File]::ReadAllText($ExpectedPath) -replace "`r`n", "`n" -replace "`r", "`n")
+    $actual = ([System.IO.File]::ReadAllText($ActualPath) -replace "`r`n", "`n" -replace "`r", "`n")
+    if ($expected -cne $actual) {
+        throw "Generated drift: $ActualPath"
     }
 }
 

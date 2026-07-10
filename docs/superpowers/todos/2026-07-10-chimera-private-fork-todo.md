@@ -57,24 +57,24 @@
 - [x] T26. `sync-upstream.yml` 轮询正式 Release、去重、建 PR、auto-merge、Issue 去重
 - [x] T27. 同步 workflow 不直接创建 Release；main 新版本由发布 workflow 处理
 - [x] T28. 冲突/test/hash failure 演练：main/latest 不变，无重复 Issue/Release（DryRun+静态路径已证；真实冲突/Issue 演练待首次启用 token 后执行，见 `audits/task-9-step-4-*.md`）
-- [ ] T29. 首次公开 Release：匿名 latest/asset 下载成功
+- [ ] T29. 首次公开 Release：匿名 latest/asset 下载成功（**待用户推送并触发 release workflow 后**）
 
 ## 验收（S1–S12）
 
-- [ ] V1. UI 无推荐/JOJO/赞助/赞赏（S1）
-- [ ] V2. 无 Ad-List 网络请求（S2）
-- [ ] V3. 更新检查匿名读取公开 latest.json，不回落上游（S3）
-- [ ] V4. 全新安装默认 ChimeraHub，Key-first，`/v1`；升级不覆盖（S4/S9）
-- [ ] V5. Windows 原版覆盖安装无重复入口，更新器识别资产并校验哈希（S5/S10/S11）
-- [ ] V6. 上游正式 Release → PR → checks → merge → build-first Release（S6）
-- [ ] V7. 冲突告警可用（S7）
-- [ ] V8. `.1→.2`、跨上游版本比较正确（S8）
-- [ ] V9. Windows + macOS x64/arm64 资产齐全；macOS 未 notarize 说明清楚（S12）
-- [ ] V10. macOS 原版旧 App 被检测，完成迁移后只留新入口（S10）
-- [ ] V11. `generate-branding -Check` 与 `verify-no-upstream-ads.ps1` exit 0
-- [ ] V12. `cargo fmt --check`、`cargo test`、manager build/typecheck 全绿
-- [ ] V13. ScriptMarket 不访问上游，本地脚本仍可用
-- [ ] V14. 错误哈希/大小时不启动安装器，latest 仍指向上一成功版本（S11）
+- [x] V1. UI 无推荐/JOJO/赞助/赞赏（S1）— 代码/扫描门禁已证；安装包目视待 Release
+- [x] V2. 无 Ad-List 网络请求（S2）— 生产短路 + 扫描
+- [x] V3. 更新检查匿名读取公开 latest.json，不回落上游（S3）— updater 单测 + branding URL
+- [x] V4. 全新安装默认 ChimeraHub，Key-first，`/v1`；升级不覆盖（S4/S9）— settings/command 单测
+- [ ] V5. Windows 原版覆盖安装无重复入口，更新器识别资产并校验哈希（S5/S10/S11）— **待安装包冒烟**
+- [ ] V6. 上游正式 Release → PR → checks → merge → build-first Release（S6）— **待 token + 推送**
+- [ ] V7. 冲突告警可用（S7）— **待 token 演练**
+- [x] V8. `.1→.2`、跨上游版本比较正确（S8）— updater 单测
+- [ ] V9. Windows + macOS x64/arm64 资产齐全；macOS 未 notarize 说明清楚（S12）— README 已写；**资产待 Release**
+- [ ] V10. macOS 原版旧 App 被检测，完成迁移后只留新入口（S10）— 代码已有；**待 macOS 冒烟**
+- [x] V11. `generate-branding -Check` 与 `verify-no-upstream-ads.ps1` exit 0
+- [x] V12. `cargo fmt --check`、`cargo test`（core+manager）、manager typecheck 全绿
+- [x] V13. ScriptMarket 不访问上游，本地脚本仍可用
+- [x] V14. 错误哈希/大小时不启动安装器（S11）— updater 单测；远端 latest 回滚待 Release
 
 ## 明确不做（防范围蔓延）
 

@@ -1,5 +1,5 @@
+use std::cell::RefCell;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
 
 const APP_STATE_DIR: &str = ".codex-session-delete";
 const SETTINGS_FILE: &str = "settings.json";
@@ -35,21 +35,15 @@ pub fn default_pending_provider_import_path() -> PathBuf {
 }
 
 fn settings_path_for_tests() -> Option<PathBuf> {
-    SETTINGS_PATH_FOR_TESTS
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .ok()
-        .and_then(|path| path.clone())
+    SETTINGS_PATH_FOR_TESTS.with(|path| path.borrow().clone())
 }
 
-static SETTINGS_PATH_FOR_TESTS: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+thread_local! {
+    static SETTINGS_PATH_FOR_TESTS: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
 
 pub fn set_settings_path_for_tests(path: Option<PathBuf>) -> Option<PathBuf> {
-    SETTINGS_PATH_FOR_TESTS
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .ok()
-        .and_then(|mut current| std::mem::replace(&mut *current, path))
+    SETTINGS_PATH_FOR_TESTS.with(|current| std::mem::replace(&mut *current.borrow_mut(), path))
 }
 
 #[cfg(test)]

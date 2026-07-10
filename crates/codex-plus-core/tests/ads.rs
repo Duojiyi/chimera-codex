@@ -11,9 +11,11 @@ use serde_json::json;
 #[test]
 fn production_ad_list_urls_are_empty() {
     assert!(DEFAULT_AD_LIST_URLS.is_empty());
-    assert!(!DEFAULT_AD_LIST_URLS
-        .iter()
-        .any(|url| url.contains("BigPizzaV3/Ad-List")));
+    assert!(
+        !DEFAULT_AD_LIST_URLS
+            .iter()
+            .any(|url| url.contains("BigPizzaV3/Ad-List"))
+    );
 }
 
 #[test]

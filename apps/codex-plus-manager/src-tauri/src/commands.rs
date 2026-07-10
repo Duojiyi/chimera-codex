@@ -1370,7 +1370,10 @@ pub fn open_external_url(url: String) -> CommandResult<Value> {
 pub fn open_applications_folder() -> CommandResult<Value> {
     #[cfg(target_os = "macos")]
     {
-        match std::process::Command::new("open").arg("/Applications").status() {
+        match std::process::Command::new("open")
+            .arg("/Applications")
+            .status()
+        {
             Ok(status) if status.success() => {
                 ok("已打开 Applications。", json!({ "path": "/Applications" }))
             }
@@ -2797,9 +2800,9 @@ pub fn save_and_enable_chimera_hub(
         return failed(
             "供应商切换锁已损坏，请重启管理器后再试。",
             relay_switch_payload(
-                SettingsStore::default().load().unwrap_or_else(|_| {
-                    codex_plus_core::settings::chimera_first_run_settings()
-                }),
+                SettingsStore::default()
+                    .load()
+                    .unwrap_or_else(|_| codex_plus_core::settings::chimera_first_run_settings()),
                 status,
                 None,
             ),
@@ -2936,7 +2939,11 @@ pub fn save_and_enable_chimera_hub(
     }
 }
 
-fn build_chimera_hub_pure_api_files(base_url: &str, model: &str, api_key: &str) -> (String, String) {
+fn build_chimera_hub_pure_api_files(
+    base_url: &str,
+    model: &str,
+    api_key: &str,
+) -> (String, String) {
     let config_contents = format!(
         "model = \"{model}\"\n\
 model_provider = \"custom\"\n\
@@ -2949,9 +2956,8 @@ base_url = \"{base_url}\"\n"
     );
     let auth_contents = format!(
         "{}\n",
-        serde_json::to_string_pretty(&json!({ "OPENAI_API_KEY": api_key })).unwrap_or_else(|_| {
-            "{\"OPENAI_API_KEY\":\"\"}".to_string()
-        })
+        serde_json::to_string_pretty(&json!({ "OPENAI_API_KEY": api_key }))
+            .unwrap_or_else(|_| { "{\"OPENAI_API_KEY\":\"\"}".to_string() })
     );
     (config_contents, auth_contents)
 }
@@ -3416,7 +3422,8 @@ fn load_overview_payload() -> (
             }
         }
     }
-    if let Some(home_apps) = directories::BaseDirs::new().map(|dirs| dirs.home_dir().join("Applications"))
+    if let Some(home_apps) =
+        directories::BaseDirs::new().map(|dirs| dirs.home_dir().join("Applications"))
     {
         if !search_roots.contains(&home_apps) {
             search_roots.push(home_apps);
