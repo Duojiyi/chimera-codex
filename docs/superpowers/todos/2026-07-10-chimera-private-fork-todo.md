@@ -45,8 +45,8 @@
 - [ ] T17. `install/mod.rs/windows.rs/macos.rs` 显示名接 branding，保留 legacy 常量
 - [ ] T18. NSIS 原目录覆盖、旧快捷方式/乱码清理、新入口、卸载回归
 - [ ] T19. macOS 新 App/DMG 名、纯数字 plist 版本、legacy App 检测提示、release 验证路径
-- [ ] T20. README/README_EN 去推广，保留 MIT 归属，写双平台升级/Gatekeeper 指南
-- [ ] T21. branding + no-promo 门禁通过，allowlist 仅覆盖明确 fixture/legacy 常量
+- [x] T20. README/README_EN 去推广，保留 MIT 归属，写双平台升级/Gatekeeper 指南
+- [x] T21. branding + no-promo 门禁通过，allowlist 仅覆盖明确 fixture/legacy 常量
 
 ## P2 — CI、上游同步与发布
 

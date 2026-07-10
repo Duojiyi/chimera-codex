@@ -439,8 +439,8 @@ export const EN_PLAIN: Record<string, string> = {
   "诊断供应商": "Diagnose provider",
   "检测": "Detect",
   "检测到 OPENAI 环境变量": "OPENAI environment variables detected",
-  "检测到来自网页的供应商配置导入请求，确认后会写入本机 Codex++ 管理工具。":
-    "A provider config import request from the web was detected; confirming writes it to this machine's Codex++ manager.",
+  "检测到来自网页的供应商配置导入请求，确认后会写入本机 Chimera Codex 管理工具。":
+    "A provider config import request from the web was detected; confirming writes it to this machine's Chimera Codex manager.",
   "概览": "Overview",
   "概览只展示关键问题，具体配置在对应页面处理": "The overview shows only key issues; specific configuration is handled on the relevant pages",
   "概览已检查": "Overview checked",

@@ -5075,7 +5075,7 @@ function PendingProviderImportDialog({
         <div className="modal-head">
           <div>
             <h2>{t("导入 Codex++ 供应商")}</h2>
-            <p>{t("检测到来自网页的供应商配置导入请求，确认后会写入本机 Codex++ 管理工具。")}</p>
+            <p>{t("检测到来自网页的供应商配置导入请求，确认后会写入本机 Chimera Codex 管理工具。")}</p>
           </div>
           <button className="toast-close" onClick={onDismiss} type="button">×</button>
         </div>

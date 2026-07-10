@@ -518,7 +518,7 @@ git commit -m "feat: add Chimera installers with legacy upgrade handling"
 - Create: `scripts/verify-no-upstream-ads.ps1`
 - Create: `scripts/verify-allowlist.txt`（仅在确有历史 fixture 时）
 
-- [ ] **Step 1: Rewrite public documentation first**
+- [x] **Step 1: Rewrite public documentation first**
 
 去掉赞助商表格、JOJO/邀请码和赞赏图片，增加：
 
@@ -529,7 +529,7 @@ git commit -m "feat: add Chimera installers with legacy upgrade handling"
 - macOS x64/arm64、ad-hoc signing、未 notarize、右键打开和旧 App 清理步骤
 - 不在文档示例中放真实 Key
 
-- [ ] **Step 2: Implement scanner**
+- [x] **Step 2: Implement scanner**
 
 脚本扫描生产源、root README、打包和 workflow。排除 `.git`、`target`、构建产物和历史设计文档；测试 fixture 若必须保留旧域名，使用逐行说明的窄 allowlist，禁止整个目录豁免。
 
@@ -547,12 +547,12 @@ git commit -m "feat: add Chimera installers with legacy upgrade handling"
 
 允许残留：上游 remote URL、LICENSE/归属说明、兼容 provider/protocol/state id、legacy 安装清理常量、经 allowlist 标注的测试 fixture。
 
-- [ ] **Step 3: Run locally**
+- [x] **Step 3: Run locally**
 
 Run: `pwsh -File scripts/verify-no-upstream-ads.ps1`
 Expected: exit 0。README 已在本 Task 前一步清理，因此不存在“扫描先落地但仓库必红”的过渡状态。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add README.md README_EN.md scripts/verify-no-upstream-ads.ps1 scripts/verify-allowlist.txt
