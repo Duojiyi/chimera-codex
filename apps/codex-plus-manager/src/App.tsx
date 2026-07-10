@@ -108,6 +108,8 @@ type OverviewResult = CommandResult<{
   update_status: string;
   settings_path: string;
   logs_path: string;
+  legacy_macos_apps?: string[];
+  legacy_macos_migration_hint?: string | null;
 }>;
 
 type PluginMarketplaceRepairResult = CommandResult<{
@@ -1994,6 +1996,14 @@ export function App() {
       openZedRemoteProject,
       forgetZedRemoteProject,
       openExternalUrl,
+      openApplicationsFolder: async () => {
+        const result = await run(() =>
+          call<CommandResult<Record<string, unknown>>>("open_applications_folder"),
+        );
+        if (result) {
+          showNotice(t("打开 Applications"), result.message, result.status);
+        }
+      },
       applyRelayInjection,
       applyPureApiInjection,
       clearRelayInjection,
@@ -2266,6 +2276,7 @@ type Actions = {
   openZedRemoteProject: (project: ZedRemoteProject, strategy?: ZedOpenStrategy) => Promise<void>;
   forgetZedRemoteProject: (project: ZedRemoteProject) => Promise<void>;
   openExternalUrl: (url: string) => Promise<void>;
+  openApplicationsFolder: () => Promise<void>;
   applyRelayInjection: () => Promise<boolean>;
   applyPureApiInjection: () => Promise<boolean>;
   clearRelayInjection: () => Promise<boolean>;
@@ -3241,6 +3252,23 @@ function MaintenanceScreen({
       <Panel>
         <CardHead title={t("入口管理")} detail={t("快捷方式写入系统实际桌面位置，不使用写死桌面路径")} />
         <CardContent>
+          {overview?.legacy_macos_migration_hint ? (
+            <div className="notice-banner" role="status">
+              <p>{overview.legacy_macos_migration_hint}</p>
+              {overview.legacy_macos_apps && overview.legacy_macos_apps.length > 0 ? (
+                <ul>
+                  {overview.legacy_macos_apps.map((path) => (
+                    <li key={path}>{path}</li>
+                  ))}
+                </ul>
+              ) : null}
+              <Toolbar>
+                <Button variant="secondary" onClick={() => void actions.openApplicationsFolder()}>
+                  {t("打开 Applications")}
+                </Button>
+              </Toolbar>
+            </div>
+          ) : null}
           <label className="check-row">
             <input checked={removeOwnedData} onChange={(event) => onRemoveOwnedDataChange(event.currentTarget.checked)} type="checkbox" />
             <span>{t("卸载时移除 Codex++ 托管数据")}</span>

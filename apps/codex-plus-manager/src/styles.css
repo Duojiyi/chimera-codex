@@ -2270,6 +2270,24 @@ body {
   margin: 10px 0;
 }
 
+.notice-banner {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--muted) / 0.35);
+  color: hsl(var(--foreground));
+}
+
+.notice-banner p {
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
+
+.notice-banner ul {
+  margin: 0 0 10px;
+  padding-left: 1.2em;
+}
+
 .check-row input {
   width: 16px;
   height: 16px;

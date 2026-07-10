@@ -1,16 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Chimera Codex macOS DMG packager.
+# Codesign is ad-hoc only (--sign -). There is no Developer ID signing and no notarization.
+
 VERSION="${1:-0.0.0}"
 ARCH="${2:-$(uname -m)}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 DIST="$ROOT/dist/macos"
 STAGE="$DIST/stage"
 BINARY_DIR="${BINARY_DIR:-$ROOT/target/release}"
-DMG="$DIST/CodexPlusPlus-${VERSION}-macos-${ARCH}.dmg"
+DMG="$DIST/ChimeraCodex-${VERSION}-macos-${ARCH}.dmg"
 ICON_SOURCE="$ROOT/apps/codex-plus-manager/src-tauri/icons/icon.png"
 ICON_NAME="codex-plus-plus.icns"
 ICON_ICNS="$DIST/$ICON_NAME"
+
+# CFBundleShortVersionString must be pure X.Y.Z (strip -chimera.N)
+SHORT_VERSION="${VERSION%%-*}"
+# CFBundleVersion must be a strictly increasing integer from brand/product.toml
+if [ -z "${MACOS_BUILD_NUMBER:-}" ]; then
+  MACOS_BUILD_NUMBER="$(
+    awk -F'=' '/^macos_build_number[[:space:]]*=/ {
+      gsub(/[[:space:]]/, "", $2);
+      print $2;
+      exit
+    }' "$ROOT/brand/product.toml"
+  )"
+fi
+if ! [[ "$MACOS_BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+  echo "error: macos_build_number must be a positive integer, got: ${MACOS_BUILD_NUMBER:-<empty>}" >&2
+  exit 1
+fi
+
+SILENT_APP_NAME="Chimera Codex"
+MANAGER_APP_NAME="Chimera Codex 管理工具"
 
 rm -rf "$DIST"
 mkdir -p "$STAGE"
@@ -65,9 +88,9 @@ create_app() {
   <key>CFBundleIdentifier</key>
   <string>$bundle_id</string>
   <key>CFBundleVersion</key>
-  <string>$VERSION</string>
+  <string>$MACOS_BUILD_NUMBER</string>
   <key>CFBundleShortVersionString</key>
-  <string>$VERSION</string>
+  <string>$SHORT_VERSION</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundlePackageType</key>
@@ -90,6 +113,7 @@ PLIST
 }
 
 sign_app() {
+  # Ad-hoc only: validates bundle structure. No Developer ID, no notarization.
   local app_dir="$1"
   local executable
   executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_dir/Contents/Info.plist")"
@@ -111,23 +135,56 @@ verify_app() {
     echo "error: missing PkgInfo in $app_dir" >&2
     return 1
   fi
+  local short_ver build_ver
+  short_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")"
+  build_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")"
+  if [[ "$short_ver" == *"-"* ]]; then
+    echo "error: CFBundleShortVersionString must be numeric X.Y.Z, got: $short_ver" >&2
+    return 1
+  fi
+  if ! [[ "$build_ver" =~ ^[1-9][0-9]*$ ]]; then
+    echo "error: CFBundleVersion must be a positive integer, got: $build_ver" >&2
+    return 1
+  fi
   codesign -dv "$app_dir" >/dev/null 2>&1 || {
     echo "error: codesign verification failed for $app_dir" >&2
     return 1
   }
 }
 
+write_migration_readme() {
+  cat > "$STAGE/README.txt" <<EOF
+Chimera Codex — macOS install notes
+===================================
+
+This DMG is ad-hoc signed only. It is NOT Developer ID signed and NOT notarized.
+If Gatekeeper blocks launch: right-click the app → Open, or clear quarantine.
+
+Upgrade from Codex++ (legacy):
+1. Quit Codex++ / Codex++ 管理工具 completely.
+2. Drag "Chimera Codex.app" and "Chimera Codex 管理工具.app" into Applications.
+3. Manually delete old "Codex++.app" and "Codex++ 管理工具.app".
+   Chimera does not delete legacy apps automatically.
+4. Open Applications and launch the new Chimera apps (right-click → Open if needed).
+
+Architecture: ${ARCH}
+Version: ${VERSION} (CFBundleShortVersionString=${SHORT_VERSION}, CFBundleVersion=${MACOS_BUILD_NUMBER})
+EOF
+}
+
 prepare_icon
-create_app "Codex++" "CodexPlusPlus" "$BINARY_DIR/codex-plus-plus" "com.bigpizzav3.codexplusplus" "true"
-create_app "Codex++ 管理工具" "CodexPlusPlusManager" "$BINARY_DIR/codex-plus-plus-manager" "com.bigpizzav3.codexplusplus.manager" "false"
+# Bundle ID and executable names stay compatible with upstream for phase 1.
+create_app "$SILENT_APP_NAME" "CodexPlusPlus" "$BINARY_DIR/codex-plus-plus" "com.bigpizzav3.codexplusplus" "true"
+create_app "$MANAGER_APP_NAME" "CodexPlusPlusManager" "$BINARY_DIR/codex-plus-plus-manager" "com.bigpizzav3.codexplusplus.manager" "false"
 
-sign_app "$STAGE/Codex++.app"
-sign_app "$STAGE/Codex++ 管理工具.app"
+sign_app "$STAGE/$SILENT_APP_NAME.app"
+sign_app "$STAGE/$MANAGER_APP_NAME.app"
 
-verify_app "$STAGE/Codex++.app"
-verify_app "$STAGE/Codex++ 管理工具.app"
+verify_app "$STAGE/$SILENT_APP_NAME.app"
+verify_app "$STAGE/$MANAGER_APP_NAME.app"
 
+write_migration_readme
 ln -s /Applications "$STAGE/Applications"
 
-hdiutil create -volname "Codex++" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+hdiutil create -volname "Chimera Codex" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 echo "$DMG"

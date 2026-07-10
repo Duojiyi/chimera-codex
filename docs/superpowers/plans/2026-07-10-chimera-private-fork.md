@@ -465,7 +465,7 @@ git commit -m "feat: add SemVer Chimera updates with asset verification"
 - Modify: `.github/workflows/release-assets.yml`（macOS bundle 验证路径）
 - Modify: `crates/codex-plus-core/tests/installers.rs`（若断言旧名）
 
-- [ ] **Step 1: Wire display constants**
+- [x] **Step 1: Wire display constants**
 
 ```rust
 pub const SILENT_NAME: &str = crate::branding::DISPLAY_SILENT_NAME;
@@ -475,12 +475,12 @@ pub const SILENT_BINARY: &str = "codex-plus-plus";
 pub const MANAGER_BINARY: &str = "codex-plus-plus-manager";
 ```
 
-- [ ] **Step 2: windows.rs 文案**
+- [x] **Step 2: windows.rs 文案**
 
 替换硬编码：新建的 `.lnk`、`DisplayName`、`Publisher=BigPizzaV3`、协议描述中的显示名。保留 legacy 名称常量用于检测和清理。
 **不要**把 `default_install_root()`（桌面快捷方式根）误当成 NSIS `Programs` 目录。
 
-- [ ] **Step 3: NSIS**
+- [x] **Step 3: NSIS**
 
 - 改 `Name`、卸载 `DisplayName`、`Publisher`、`OutFile` → `ChimeraCodex-${VERSION}-windows-x64-setup.exe`
 - **`InstallDir` 一期保持** `$LOCALAPPDATA\Programs\Codex++`（写死决策，降低迁移成本）
@@ -489,7 +489,7 @@ pub const MANAGER_BINARY: &str = "codex-plus-plus-manager";
 - 卸载同时清理两套入口和历史乱码快捷方式；修复当前 NSIS 中已经出现的乱码字面量
 - 升级失败不得提前删除现有二进制；使用临时 staging/可恢复顺序覆盖
 
-- [ ] **Step 4: macOS package-dmg.sh**
+- [x] **Step 4: macOS package-dmg.sh**
 
 显示名与 `ChimeraCodex-*-macos-*.dmg` 产物名同步；Bundle ID 和 bundle executable 一期保留兼容值。`CFBundleShortVersionString` 写 `X.Y.Z`，`CFBundleVersion` 写每次 Release 严格递增的 `macos_build_number`，不能原样写 `X.Y.Z-chimera.N`。继续使用 ad-hoc codesign 以保证 bundle 结构有效，但明确没有 Developer ID 签名和 notarization。
 
@@ -497,12 +497,12 @@ pub const MANAGER_BINARY: &str = "codex-plus-plus-manager";
 
 同步修改 release workflow 的 bundle 验证路径，避免打包已改名而 CI 仍检查旧 App。
 
-- [ ] **Step 5: Test installers unit tests**
+- [x] **Step 5: Test installers unit tests**
 
 Run: `cargo test -p codex-plus-core --test installers`
 Expected: PASS；测试覆盖原版 Windows 安装计划、旧快捷方式清理、新快捷方式创建、macOS legacy 检测与双架构 bundle 名
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/codex-plus-core/src/install scripts/installer crates/codex-plus-core/tests/installers.rs .github/workflows/release-assets.yml

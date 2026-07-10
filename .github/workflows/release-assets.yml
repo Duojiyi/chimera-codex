@@ -133,13 +133,17 @@ jobs:
           set -euo pipefail
           test -L "dist/macos/stage/Applications"
           test "$(readlink "dist/macos/stage/Applications")" = "/Applications"
-          for app in "dist/macos/stage/Codex++.app" "dist/macos/stage/Codex++ 管理工具.app"; do
+          for app in "dist/macos/stage/Chimera Codex.app" "dist/macos/stage/Chimera Codex 管理工具.app"; do
             test -f "$app/Contents/Info.plist"
             test -f "$app/Contents/PkgInfo"
             test -x "$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+            short_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
+            build_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")"
+            case "$short_ver" in *-*) echo "error: CFBundleShortVersionString must be X.Y.Z, got $short_ver" >&2; exit 1 ;; esac
+            case "$build_ver" in ''|*[!0-9]*|0*) echo "error: CFBundleVersion must be positive integer, got $build_ver" >&2; exit 1 ;; esac
             plutil -lint "$app/Contents/Info.plist" >/dev/null
             codesign -dv "$app" >/dev/null 2>&1
-            echo "verified: $app"
+            echo "verified (ad-hoc only, not notarized): $app"
           done
 
       - name: Upload macOS DMG

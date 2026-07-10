@@ -49,6 +49,10 @@ pub struct OverviewPayload {
     pub update_status: String,
     pub settings_path: String,
     pub logs_path: String,
+    #[serde(default)]
+    pub legacy_macos_apps: Vec<String>,
+    #[serde(default)]
+    pub legacy_macos_migration_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -385,7 +389,7 @@ where
 #[tauri::command]
 pub async fn load_overview() -> CommandResult<OverviewPayload> {
     let payload = tauri::async_runtime::spawn_blocking(load_overview_payload).await;
-    let Ok((codex_app_path, entrypoints, latest_launch)) = payload else {
+    let Ok((codex_app_path, entrypoints, latest_launch, legacy_macos)) = payload else {
         return failed(
             "概览后台任务失败。",
             OverviewPayload {
@@ -402,6 +406,8 @@ pub async fn load_overview() -> CommandResult<OverviewPayload> {
                 logs_path: codex_plus_core::paths::default_diagnostic_log_path()
                     .to_string_lossy()
                     .to_string(),
+                legacy_macos_apps: Vec::new(),
+                legacy_macos_migration_hint: None,
             },
         );
     };
@@ -423,6 +429,13 @@ pub async fn load_overview() -> CommandResult<OverviewPayload> {
             logs_path: codex_plus_core::paths::default_diagnostic_log_path()
                 .to_string_lossy()
                 .to_string(),
+            legacy_macos_apps: legacy_macos
+                .paths
+                .iter()
+                .map(|path| path.to_string_lossy().to_string())
+                .collect(),
+            legacy_macos_migration_hint: (!legacy_macos.message.is_empty())
+                .then_some(legacy_macos.message),
         },
     )
 }
@@ -1350,6 +1363,33 @@ pub fn open_external_url(url: String) -> CommandResult<Value> {
     match open_url(trimmed) {
         Ok(()) => ok("已在系统浏览器打开链接。", json!({ "url": trimmed })),
         Err(error) => failed(&format!("打开链接失败：{error}"), json!({ "url": trimmed })),
+    }
+}
+
+#[tauri::command]
+pub fn open_applications_folder() -> CommandResult<Value> {
+    #[cfg(target_os = "macos")]
+    {
+        match std::process::Command::new("open").arg("/Applications").status() {
+            Ok(status) if status.success() => {
+                ok("已打开 Applications。", json!({ "path": "/Applications" }))
+            }
+            Ok(status) => failed(
+                &format!("打开 Applications 失败，退出码：{status}"),
+                json!({ "path": "/Applications" }),
+            ),
+            Err(error) => failed(
+                &format!("打开 Applications 失败：{error}"),
+                json!({ "path": "/Applications" }),
+            ),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        failed(
+            "打开 Applications 仅在 macOS 可用。",
+            json!({ "path": "/Applications" }),
+        )
     }
 }
 
@@ -3306,7 +3346,7 @@ fn builtin_user_scripts_dir() -> PathBuf {
 }
 
 fn diagnostics_report() -> String {
-    let (codex_app_path, entrypoints, latest_launch) = load_overview_payload();
+    let (codex_app_path, entrypoints, latest_launch, legacy_macos) = load_overview_payload();
     let overview = ok(
         "概览已加载。",
         OverviewPayload {
@@ -3325,6 +3365,13 @@ fn diagnostics_report() -> String {
             logs_path: codex_plus_core::paths::default_diagnostic_log_path()
                 .to_string_lossy()
                 .to_string(),
+            legacy_macos_apps: legacy_macos
+                .paths
+                .iter()
+                .map(|path| path.to_string_lossy().to_string())
+                .collect(),
+            legacy_macos_migration_hint: (!legacy_macos.message.is_empty())
+                .then_some(legacy_macos.message),
         },
     );
     let settings = SettingsStore::default().load().unwrap_or_default();
@@ -3353,8 +3400,28 @@ fn load_overview_payload() -> (
     Option<PathBuf>,
     install::EntryPointState,
     Option<LaunchStatus>,
+    codex_plus_core::install::LegacyMacosApps,
 ) {
     let settings = SettingsStore::default().load().unwrap_or_default();
+    let mut search_roots = Vec::new();
+    search_roots.push(PathBuf::from("/Applications"));
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe
+            .ancestors()
+            .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("app"))
+            .and_then(|app| app.parent())
+        {
+            if parent != Path::new("/Applications") {
+                search_roots.push(parent.to_path_buf());
+            }
+        }
+    }
+    if let Some(home_apps) = directories::BaseDirs::new().map(|dirs| dirs.home_dir().join("Applications"))
+    {
+        if !search_roots.contains(&home_apps) {
+            search_roots.push(home_apps);
+        }
+    }
     (
         codex_plus_core::app_paths::resolve_codex_app_dir_with_saved(
             None,
@@ -3362,6 +3429,7 @@ fn load_overview_payload() -> (
         ),
         install::inspect_entrypoints(),
         StatusStore::default().load_latest().unwrap_or(None),
+        codex_plus_core::install::detect_legacy_macos_apps(&search_roots),
     )
 }
 

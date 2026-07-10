@@ -42,9 +42,9 @@
 - [x] T14. 仅 settings 文件不存在时创建并选中 Chimera profile
 - [x] T15. Key-first “保存并启用”原子命令；空 Key/失败不写 live config、不泄密
 - [x] T16. 现有 settings/profile/active id 升级保持测试
-- [ ] T17. `install/mod.rs/windows.rs/macos.rs` 显示名接 branding，保留 legacy 常量
-- [ ] T18. NSIS 原目录覆盖、旧快捷方式/乱码清理、新入口、卸载回归
-- [ ] T19. macOS 新 App/DMG 名、纯数字 plist 版本、legacy App 检测提示、release 验证路径
+- [x] T17. `install/mod.rs/windows.rs/macos.rs` 显示名接 branding，保留 legacy 常量
+- [x] T18. NSIS 原目录覆盖、旧快捷方式/乱码清理、新入口、卸载回归
+- [x] T19. macOS 新 App/DMG 名、纯数字 plist 版本、legacy App 检测提示、release 验证路径
 - [x] T20. README/README_EN 去推广，保留 MIT 归属，写双平台升级/Gatekeeper 指南
 - [x] T21. branding + no-promo 门禁通过，allowlist 仅覆盖明确 fixture/legacy 常量
 

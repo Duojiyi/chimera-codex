@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use super::{
-    InstallOptions, MANAGER_BINARY, MANAGER_NAME, SILENT_BINARY, SILENT_NAME,
-    install_root_or_default, option_or_current_exe,
+    InstallOptions, LEGACY_MOJIBAKE_MANAGER_LNK, LEGACY_MANAGER_NAME, LEGACY_SILENT_NAME,
+    MANAGER_BINARY, MANAGER_NAME, SILENT_BINARY, SILENT_NAME, install_root_or_default,
+    legacy_shortcut_names, option_or_current_exe, windows_legacy_shortcut_paths,
 };
 
 const UNINSTALL_SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexPlusPlus";
@@ -25,6 +26,8 @@ pub struct WindowsEntrypointPlan {
     pub quiet_uninstall_command: String,
     pub uninstall_key: String,
     pub legacy_uninstall_key: String,
+    pub display_name: String,
+    pub publisher: String,
     pub remove_owned_data: bool,
 }
 
@@ -42,11 +45,11 @@ pub fn build_windows_entrypoint_plan(options: &InstallOptions) -> WindowsEntrypo
     let quiet_uninstall_command = format!("{uninstall_command} /S");
     WindowsEntrypointPlan {
         silent_shortcut: install_root
-            .join("Codex++.lnk")
+            .join(format!("{SILENT_NAME}.lnk"))
             .to_string_lossy()
             .to_string(),
         manager_shortcut: install_root
-            .join("Codex++ 管理工具.lnk")
+            .join(format!("{MANAGER_NAME}.lnk"))
             .to_string_lossy()
             .to_string(),
         install_root: install_root.to_string_lossy().to_string(),
@@ -60,6 +63,8 @@ pub fn build_windows_entrypoint_plan(options: &InstallOptions) -> WindowsEntrypo
         quiet_uninstall_command,
         uninstall_key: "CodexPlusPlus".to_string(),
         legacy_uninstall_key: "Codex++".to_string(),
+        display_name: SILENT_NAME.to_string(),
+        publisher: crate::branding::PUBLISHER.to_string(),
         remove_owned_data: options.remove_owned_data,
     }
 }
@@ -69,16 +74,20 @@ pub fn install_shortcuts(options: &InstallOptions) -> anyhow::Result<()> {
     let plan = build_windows_entrypoint_plan(options);
     let install_root = PathBuf::from(&plan.install_root);
     std::fs::create_dir_all(&install_root)?;
+    // 先清理原版/乱码快捷方式，再创建 Chimera 入口，避免重复入口。
+    for path in windows_legacy_shortcut_paths(&install_root) {
+        let _ = std::fs::remove_file(path);
+    }
     create_entrypoint_shortcut(
         PathBuf::from(&plan.silent_shortcut),
         PathBuf::from(&plan.launcher_path),
-        "Launch Codex++ silently",
+        &format!("Launch {SILENT_NAME} silently"),
         PathBuf::from(&plan.silent_icon_path),
     )?;
     create_entrypoint_shortcut(
         PathBuf::from(&plan.manager_shortcut),
         PathBuf::from(&plan.manager_path),
-        "Open Codex++ management tool",
+        &format!("Open {MANAGER_NAME}"),
         PathBuf::from(&plan.manager_icon_path),
     )?;
     register_url_protocol(&plan.manager_path)?;
@@ -89,8 +98,12 @@ pub fn install_shortcuts(options: &InstallOptions) -> anyhow::Result<()> {
 #[cfg(windows)]
 pub fn uninstall_shortcuts(options: &InstallOptions) -> anyhow::Result<()> {
     let plan = build_windows_entrypoint_plan(options);
+    let install_root = PathBuf::from(&plan.install_root);
     let _ = std::fs::remove_file(&plan.silent_shortcut);
     let _ = std::fs::remove_file(&plan.manager_shortcut);
+    for path in windows_legacy_shortcut_paths(&install_root) {
+        let _ = std::fs::remove_file(path);
+    }
     let _ = crate::windows_integration::delete_current_user_key(&format!(
         r"{URL_PROTOCOL_SUBKEY}\shell\open\command"
     ));
@@ -144,9 +157,9 @@ fn write_uninstall_registration(plan: &WindowsEntrypointPlan) -> anyhow::Result<
         .to_string_lossy()
         .to_string();
     for (name, value) in [
-        ("DisplayName", "Codex++".to_string()),
+        ("DisplayName", plan.display_name.clone()),
         ("DisplayVersion", crate::version::VERSION.to_string()),
-        ("Publisher", "BigPizzaV3".to_string()),
+        ("Publisher", plan.publisher.clone()),
         ("DisplayIcon", plan.manager_icon_path.clone()),
         ("InstallLocation", install_location),
         ("UninstallString", plan.uninstall_command.clone()),
@@ -162,7 +175,7 @@ fn register_url_protocol(manager_path: &str) -> anyhow::Result<()> {
     crate::windows_integration::set_current_user_string_value(
         URL_PROTOCOL_SUBKEY,
         "",
-        "URL:Codex++ Import Protocol",
+        &format!("URL:{SILENT_NAME} Import Protocol"),
     )?;
     crate::windows_integration::set_current_user_string_value(
         URL_PROTOCOL_SUBKEY,
@@ -188,4 +201,10 @@ fn default_icon_path() -> PathBuf {
 #[allow(dead_code)]
 fn _entrypoint_names() -> (&'static str, &'static str) {
     (SILENT_NAME, MANAGER_NAME)
+}
+
+#[allow(dead_code)]
+fn _legacy_entrypoint_names() -> (&'static str, &'static str) {
+    let _ = (LEGACY_SILENT_NAME, LEGACY_MANAGER_NAME, LEGACY_MOJIBAKE_MANAGER_LNK);
+    legacy_shortcut_names()
 }
