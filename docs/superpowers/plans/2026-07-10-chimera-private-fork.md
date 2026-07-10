@@ -143,7 +143,7 @@ Task 完成时再做聚合双盲审计：审计者复核所有子任务证据、
 - Modify: `crates/codex-plus-core/src/lib.rs`（`pub mod branding;`）
 - Test: `crates/codex-plus-core/tests/branding.rs`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```rust
 // crates/codex-plus-core/tests/branding.rs
@@ -166,24 +166,24 @@ fn public_chimera_branding_does_not_point_at_upstream_release() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p codex-plus-core --test branding -- --nocapture`
 Expected: FAIL（brand config / generated module missing）
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `brand/product.toml` 至少声明显示名、Publisher、真实 repository、latest URL、广告开关、ChimeraHub URL、默认模型 `gpt-5.5`、`ChimeraCodex` 资产前缀和正整数 `macos_build_number`。生成脚本以确定性顺序写 Rust/TS 文件，并提供 `-Check`：重新生成到临时位置后逐字节比较，不修改工作树。
 
 在 `lib.rs` 按字母序插入 `pub mod branding;`。NSIS/DMG/Actions 不再复制 Rust 常量，改为从 TOML 读取或接收生成脚本输出。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p codex-plus-core --test branding`
 Run: `pwsh -File scripts/generate-branding.ps1 -Check`
 Expected: 两项均 PASS，且 `git diff --exit-code` 无生成漂移
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add brand/product.toml scripts/generate-branding.ps1 crates/codex-plus-core/src/branding.rs apps/codex-plus-manager/src/branding.generated.ts crates/codex-plus-core/src/lib.rs crates/codex-plus-core/tests/branding.rs

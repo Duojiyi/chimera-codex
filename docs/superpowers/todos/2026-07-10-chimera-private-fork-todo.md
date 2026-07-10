@@ -4,7 +4,7 @@
 > - Spec: `docs/superpowers/specs/2026-07-10-chimera-private-fork-design.md`
 > - Plan: `docs/superpowers/plans/2026-07-10-chimera-private-fork.md`
 > 日期：2026-07-10
-> 状态：文档与仓库初始化完成；等待用户明确批准产品代码开工
+> 状态：产品代码已开工（TDD + 双盲）；本地提交，待用户决定是否推送
 
 ## 决策与开工门
 
@@ -17,14 +17,14 @@
 - [x] D7. 产物名固定 `ChimeraCodex-*`，严格匹配平台与架构
 - [x] D8. 全新安装默认选中 ChimeraHub；Key 为空不应用；升级不覆盖已有配置
 - [x] D9. Windows x64、macOS x64/arm64 都构建；macOS 仅 ad-hoc sign，不 notarize
-- [ ] D10. 用户明确授权开工
+- [x] D10. 用户明确授权开工
 - [ ] D11. 写入真实 repository，配置 branch protection 和最小权限自动化 token（仓库与 branch protection 已完成；自动化 token/Actions 最小权限仍待实施）
 - [x] D12. 每个 checkbox 坚持 Red → Green → 双盲审计；每个大任务另做聚合双盲审计
 
 ## P0 — 仓库、品牌、去推广与安全更新
 
 - [x] T1. 安全规范 remotes：公开仓库=`origin`，BigPizzaV3=`upstream`，补全历史并阻断 upstream push
-- [ ] T2. 新增 `brand/product.toml`、生成脚本、Rust/TS generated branding 与 `-Check`
+- [x] T2. 新增 `brand/product.toml`、生成脚本、Rust/TS generated branding 与 `-Check`
 - [ ] T3. 短路生产 `ads.rs` 网络入口，删除 builtin append，保留纯 normalize 测试
 - [ ] T4. 停止 `assets.rs` sponsor 变量/图片注入，更新 `cdp_bridge.rs`
 - [ ] T5. 清理 `renderer-inject.js` 推荐/赞赏/Ad-List
