@@ -115,6 +115,7 @@ export const EN_PLAIN: Record<string, string> = {
     "The provider configuration master switch is off; changes are only saved, not written to Codex live files",
   "供应商预设列表": "Provider preset list",
   "保存": "Save",
+  "保存并启用": "Save and enable",
   "保存为默认路径": "Save as default path",
   "保存到 Codex++ state，不改写 Zed settings。": "Saved to Codex++ state, does not modify Zed settings.",
   "保存增强设置": "Save enhancement settings",
@@ -210,6 +211,7 @@ export const EN_PLAIN: Record<string, string> = {
   "启动时通过本地主进程调试端口汉化 Codex 原生菜单；不修改安装包。需重启 Codex 才生效。":
     "Localizes the Codex native menu via the local main-process debug port at launch; doesn't modify the install package. Requires restarting Codex.",
   "启用": "Enable",
+  "启用 ChimeraHub": "Enable ChimeraHub",
   "启用 Codex 图片覆盖层": "Enable Codex image overlay",
   "启用 Codex增强": "Enable Codex enhancements",
   "启用 Windows Computer Use Guard": "Enable Windows Computer Use Guard",
@@ -587,6 +589,12 @@ export const EN_PLAIN: Record<string, string> = {
   "资源": "Asset",
 
 
+  "全新安装只需填写 API Key，保存后才会写入 Codex 配置。":
+    "On a fresh install, just enter the API Key. Codex config is written only after you save.",
+  "获取 API Key": "Get API Key",
+  "输入 ChimeraHub API Key": "Enter ChimeraHub API Key",
+  "正在启用…": "Enabling…",
+  "ChimeraHub": "ChimeraHub",
   "输入中转服务的 API Key": "Enter the relay service API Key",
   "运行中": "Running",
   "返回列表": "Back to list",
@@ -766,6 +774,10 @@ export const EN_BACKEND: Record<string, string> = {
   "已清除 custom 中转 API 模式，并切换到官方 ChatGPT 登录模式。": "Custom relay API mode cleared. Switched to official ChatGPT login mode.",
   "纯 API 模式已写入：config.toml 已写入 custom provider，auth.json 已切换为当前供应商。": "Pure API mode written: config.toml now has a custom provider, auth.json switched to the current provider.",
   "纯 API 配置写入后未检测到完整 custom provider，请检查 config.toml 和供应商 API Key。": "After writing pure API config, no complete custom provider was detected. Please check config.toml and the provider API Key.",
+  "API Key 不能为空，未保存也未写入 Codex 配置。": "API Key cannot be empty. Nothing was saved or written to Codex config.",
+  "ChimeraHub 已保存并启用。": "ChimeraHub saved and enabled.",
+  "ChimeraHub 已保存，但 live 配置未完整写入；请检查 Base URL 与 API Key。":
+    "ChimeraHub was saved, but live config was not fully written. Check the Base URL and API Key.",
   "供应商导入后重新读取设置失败": "Failed to reload settings after provider import",
   "诊断日志已写入。": "Diagnostics log written.",
   "未命名供应商": "Unnamed provider",
@@ -837,6 +849,8 @@ export const EN_BACKEND_PATTERNS: Array<[RegExp, string]> = [
   [/^写入聚合供应商配置失败：(.+)$/, "Failed to write aggregate provider config: $1"],
   [/^切换纯 API 配置失败：(.+)$/, "Failed to switch to pure API config: $1"],
   [/^写入纯 API 模式失败：(.+)$/, "Failed to write pure API mode: $1"],
+  [/^保存 ChimeraHub 配置失败：(.+)$/, "Failed to save ChimeraHub config: $1"],
+  [/^启用 ChimeraHub 失败：(.+)$/, "Failed to enable ChimeraHub: $1"],
   [/^清除中转配置失败：(.+)$/, "Failed to clear relay config: $1"],
   [/^未知配置文件类型：(.+)$/, "Unknown config file type: $1"],
   [/^启动系统浏览器失败：(.+)$/, "Failed to launch system browser: $1"],

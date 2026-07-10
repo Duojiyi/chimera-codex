@@ -571,6 +571,31 @@ pub fn default_relay_profiles() -> Vec<RelayProfile> {
     vec![RelayProfile::default()]
 }
 
+/// 仅在 `settings.json` 不存在时使用的全新安装默认值。
+/// 不改变 `BackendSettings::default()` / serde 缺省，避免覆盖升级用户。
+pub fn chimera_first_run_settings() -> BackendSettings {
+    let base_url = crate::branding::DEFAULT_RELAY_BASE_URL.to_string();
+    let model = crate::branding::DEFAULT_RELAY_MODEL.to_string();
+    BackendSettings {
+        relay_profiles_enabled: true,
+        relay_base_url: base_url.clone(),
+        active_relay_id: "chimerahub".to_string(),
+        relay_profiles: vec![RelayProfile {
+            id: "chimerahub".to_string(),
+            name: "ChimeraHub".to_string(),
+            model: model.clone(),
+            base_url,
+            upstream_base_url: crate::branding::DEFAULT_RELAY_BASE_URL.to_string(),
+            api_key: String::new(),
+            protocol: RelayProtocol::Responses,
+            relay_mode: RelayMode::PureApi,
+            model_list: model,
+            ..RelayProfile::default()
+        }],
+        ..BackendSettings::default()
+    }
+}
+
 pub fn default_aggregate_member_weight() -> u32 {
     1
 }
@@ -674,7 +699,7 @@ impl SettingsStore {
         let contents = match fs::read_to_string(&self.path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(BackendSettings::default());
+                return Ok(chimera_first_run_settings());
             }
             Err(error) => {
                 return Err(error)
@@ -721,7 +746,7 @@ impl SettingsStore {
         let contents = match fs::read_to_string(&self.path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(settings_to_object(&BackendSettings::default()));
+                return Ok(settings_to_object(&chimera_first_run_settings()));
             }
             Err(error) => {
                 return Err(error)
@@ -1664,11 +1689,74 @@ experimental_bearer_token = "sk-existing""#
     }
 
     #[test]
-    fn settings_store_load_missing_file_returns_default() {
+    fn settings_store_load_missing_file_returns_chimera_first_run_without_writing() {
         let dir = temp_dir();
-        let store = SettingsStore::new(dir.join("settings.json"));
+        let path = dir.join("settings.json");
+        let store = SettingsStore::new(path.clone());
 
-        assert_eq!(store.load().unwrap(), BackendSettings::default());
+        let loaded = store.load().unwrap();
+
+        assert!(!path.exists(), "missing settings must not be created on load");
+        assert_eq!(loaded, chimera_first_run_settings());
+        assert_eq!(loaded.active_relay_id, "chimerahub");
+        assert!(loaded.relay_profiles_enabled);
+        assert_eq!(loaded.relay_profiles.len(), 1);
+        let profile = &loaded.relay_profiles[0];
+        assert_eq!(profile.id, "chimerahub");
+        assert_eq!(profile.name, "ChimeraHub");
+        assert_eq!(profile.relay_mode, RelayMode::PureApi);
+        assert_eq!(profile.protocol, RelayProtocol::Responses);
+        assert_eq!(
+            profile.base_url,
+            crate::branding::DEFAULT_RELAY_BASE_URL
+        );
+        assert_eq!(profile.model, crate::branding::DEFAULT_RELAY_MODEL);
+        assert!(profile.api_key.is_empty());
+        assert!(profile.config_contents.is_empty());
+        assert!(profile.auth_contents.is_empty());
+    }
+
+    #[test]
+    fn settings_store_load_existing_file_preserves_active_profile_without_chimera_injection() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let store = SettingsStore::new(path);
+        let existing = BackendSettings {
+            active_relay_id: "my-relay".to_string(),
+            relay_base_url: "https://example.test/v1".to_string(),
+            relay_api_key: "sk-existing".to_string(),
+            relay_profiles: vec![RelayProfile {
+                id: "my-relay".to_string(),
+                name: "Existing".to_string(),
+                base_url: "https://example.test/v1".to_string(),
+                relay_mode: RelayMode::PureApi,
+                ..RelayProfile::default()
+            }],
+            relay_profiles_enabled: false,
+            ..BackendSettings::default()
+        };
+        store.save(&existing).unwrap();
+
+        let loaded = store.load().unwrap();
+
+        assert_eq!(loaded.active_relay_id, "my-relay");
+        assert!(!loaded.relay_profiles_enabled);
+        assert_eq!(loaded.relay_base_url, "https://example.test/v1");
+        assert_eq!(loaded.relay_profiles.len(), 1);
+        assert_eq!(loaded.relay_profiles[0].id, "my-relay");
+        assert!(!loaded.relay_profiles.iter().any(|p| p.id == "chimerahub"));
+    }
+
+    #[test]
+    fn chimera_first_run_settings_does_not_change_serde_default() {
+        let defaults = BackendSettings::default();
+        assert_eq!(defaults.active_relay_id, "default");
+        assert_eq!(defaults.relay_profiles[0].id, "default");
+        assert_eq!(defaults.relay_profiles[0].relay_mode, RelayMode::Official);
+
+        let first_run = chimera_first_run_settings();
+        assert_ne!(first_run.active_relay_id, defaults.active_relay_id);
+        assert_eq!(first_run.active_relay_id, "chimerahub");
     }
 
     #[test]

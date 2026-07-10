@@ -38,10 +38,10 @@
 
 ## P1 — Key-first 中转与覆盖升级
 
-- [ ] T13. 完整 ChimeraHub preset：`/v1`、responses、已验证默认模型
-- [ ] T14. 仅 settings 文件不存在时创建并选中 Chimera profile
-- [ ] T15. Key-first “保存并启用”原子命令；空 Key/失败不写 live config、不泄密
-- [ ] T16. 现有 settings/profile/active id 升级保持测试
+- [x] T13. 完整 ChimeraHub preset：`/v1`、responses、已验证默认模型
+- [x] T14. 仅 settings 文件不存在时创建并选中 Chimera profile
+- [x] T15. Key-first “保存并启用”原子命令；空 Key/失败不写 live config、不泄密
+- [x] T16. 现有 settings/profile/active id 升级保持测试
 - [ ] T17. `install/mod.rs/windows.rs/macos.rs` 显示名接 branding，保留 legacy 常量
 - [ ] T18. NSIS 原目录覆盖、旧快捷方式/乱码清理、新入口、卸载回归
 - [ ] T19. macOS 新 App/DMG 名、纯数字 plist 版本、legacy App 检测提示、release 验证路径

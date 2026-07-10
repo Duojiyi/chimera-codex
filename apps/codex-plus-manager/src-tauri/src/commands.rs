@@ -2737,6 +2737,181 @@ pub fn apply_pure_api_injection() -> CommandResult<RelayPayload> {
     }
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveAndEnableChimeraHubRequest {
+    pub api_key: String,
+}
+
+/// Key-first 原子保存并启用 ChimeraHub：Key 非空才写 settings 与 live config；失败不泄密。
+#[tauri::command]
+pub fn save_and_enable_chimera_hub(
+    request: SaveAndEnableChimeraHubRequest,
+) -> CommandResult<RelaySwitchPayload> {
+    let Ok(_guard) = relay_switch_mutex().lock() else {
+        let status = codex_plus_core::relay_config::default_relay_status();
+        return failed(
+            "供应商切换锁已损坏，请重启管理器后再试。",
+            relay_switch_payload(
+                SettingsStore::default().load().unwrap_or_else(|_| {
+                    codex_plus_core::settings::chimera_first_run_settings()
+                }),
+                status,
+                None,
+            ),
+        );
+    };
+
+    let api_key = request.api_key.trim();
+    let home = codex_plus_core::relay_config::default_codex_home_dir();
+    let store = SettingsStore::default();
+    let baseline = store
+        .load()
+        .unwrap_or_else(|_| codex_plus_core::settings::chimera_first_run_settings());
+    let status = codex_plus_core::relay_config::relay_status_from_home(&home);
+
+    if api_key.is_empty() {
+        log_manager_event(
+            "manager.save_and_enable_chimera_hub.rejected_empty_key",
+            json!({
+                "activeRelayId": baseline.active_relay_id,
+            }),
+        );
+        return failed(
+            "API Key 不能为空，未保存也未写入 Codex 配置。",
+            relay_switch_payload(baseline, status, None),
+        );
+    }
+
+    let base_url = codex_plus_core::branding::DEFAULT_RELAY_BASE_URL;
+    let model = codex_plus_core::branding::DEFAULT_RELAY_MODEL;
+    let (config_contents, auth_contents) =
+        build_chimera_hub_pure_api_files(base_url, model, api_key);
+
+    let mut settings = baseline;
+    settings.relay_profiles_enabled = true;
+    settings.active_relay_id = "chimerahub".to_string();
+    settings.launch_mode = codex_plus_core::settings::LaunchMode::Patch;
+    settings.relay_base_url = base_url.to_string();
+
+    let chimera_profile = RelayProfile {
+        id: "chimerahub".to_string(),
+        name: "ChimeraHub".to_string(),
+        model: model.to_string(),
+        base_url: base_url.to_string(),
+        upstream_base_url: base_url.to_string(),
+        api_key: api_key.to_string(),
+        protocol: codex_plus_core::settings::RelayProtocol::Responses,
+        relay_mode: codex_plus_core::settings::RelayMode::PureApi,
+        config_contents: config_contents.clone(),
+        auth_contents: auth_contents.clone(),
+        model_list: model.to_string(),
+        ..RelayProfile::default()
+    };
+
+    if let Some(existing) = settings
+        .relay_profiles
+        .iter_mut()
+        .find(|profile| profile.id == "chimerahub")
+    {
+        *existing = chimera_profile;
+    } else {
+        settings.relay_profiles.insert(0, chimera_profile);
+    }
+
+    let settings = normalize_settings_before_save(settings);
+    log_manager_event(
+        "manager.save_and_enable_chimera_hub.start",
+        json!({
+            "activeRelayId": settings.active_relay_id,
+            "baseUrl": base_url,
+            "hasApiKey": true,
+        }),
+    );
+
+    if let Err(error) = store.save(&settings) {
+        let status = codex_plus_core::relay_config::relay_status_from_home(&home);
+        log_manager_event(
+            "manager.save_and_enable_chimera_hub.save_failed",
+            json!({ "error": error.to_string() }),
+        );
+        return failed(
+            &format!("保存 ChimeraHub 配置失败：{error}"),
+            relay_switch_payload(
+                store
+                    .load()
+                    .unwrap_or_else(|_| codex_plus_core::settings::chimera_first_run_settings()),
+                status,
+                None,
+            ),
+        );
+    }
+
+    let relay = settings.active_relay_profile();
+    match codex_plus_core::relay_config::apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard(
+        &home,
+        &relay,
+        &relay_combined_common_config(&settings),
+        settings.computer_use_guard_enabled,
+    ) {
+        Ok(result) => {
+            let status = codex_plus_core::relay_config::relay_status_from_home(&home);
+            log_relay_apply_result(
+                "manager.save_and_enable_chimera_hub.ok",
+                &relay,
+                &status,
+                result.backup_path.as_ref(),
+                None,
+            );
+            if !status.configured {
+                return failed(
+                    "ChimeraHub 已保存，但 live 配置未完整写入；请检查 Base URL 与 API Key。",
+                    relay_switch_payload(settings, status, result.backup_path),
+                );
+            }
+            ok(
+                "ChimeraHub 已保存并启用。",
+                relay_switch_payload(settings, status, result.backup_path),
+            )
+        }
+        Err(error) => {
+            let status = codex_plus_core::relay_config::relay_status_from_home(&home);
+            let safe_error = error.to_string();
+            log_relay_apply_result(
+                "manager.save_and_enable_chimera_hub.failed",
+                &relay,
+                &status,
+                None,
+                Some(safe_error.clone()),
+            );
+            failed(
+                &format!("启用 ChimeraHub 失败：{safe_error}"),
+                relay_switch_payload(settings, status, None),
+            )
+        }
+    }
+}
+
+fn build_chimera_hub_pure_api_files(base_url: &str, model: &str, api_key: &str) -> (String, String) {
+    let config_contents = format!(
+        "model = \"{model}\"\n\
+model_provider = \"custom\"\n\
+\n\
+[model_providers.custom]\n\
+name = \"custom\"\n\
+wire_api = \"responses\"\n\
+requires_openai_auth = true\n\
+base_url = \"{base_url}\"\n"
+    );
+    let auth_contents = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&json!({ "OPENAI_API_KEY": api_key })).unwrap_or_else(|_| {
+            "{\"OPENAI_API_KEY\":\"\"}".to_string()
+        })
+    );
+    (config_contents, auth_contents)
+}
+
 #[tauri::command]
 pub fn clear_relay_injection() -> CommandResult<RelayPayload> {
     let home = codex_plus_core::relay_config::default_codex_home_dir();
@@ -3987,5 +4162,143 @@ model_reasoning_effort = "high"
 
         assert_eq!(result.status, "failed");
         assert!(result.message.contains("只允许打开 http 或 https 链接"));
+    }
+
+    #[test]
+    fn save_and_enable_chimera_hub_rejects_empty_key_without_touching_live_files() {
+        let _lock = CHIMERA_ENABLE_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("codex-home");
+        let settings_path = temp.path().join("settings.json");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("config.toml"), "model = \"keep-me\"\n").unwrap();
+        std::fs::write(home.join("auth.json"), "{\"keep\":true}\n").unwrap();
+        let previous_settings =
+            codex_plus_core::paths::set_settings_path_for_tests(Some(settings_path.clone()));
+        let previous_home = std::env::var_os("CODEX_HOME");
+        unsafe {
+            std::env::set_var("CODEX_HOME", &home);
+        }
+
+        let result = save_and_enable_chimera_hub(SaveAndEnableChimeraHubRequest {
+            api_key: "   ".to_string(),
+        });
+
+        restore_codex_home_env(previous_home);
+        codex_plus_core::paths::set_settings_path_for_tests(previous_settings);
+
+        assert_eq!(result.status, "failed");
+        assert!(result.message.contains("API Key 不能为空"));
+        assert!(!result.message.contains("sk-"));
+        assert!(!settings_path.exists());
+        assert_eq!(
+            std::fs::read_to_string(home.join("config.toml")).unwrap(),
+            "model = \"keep-me\"\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join("auth.json")).unwrap(),
+            "{\"keep\":true}\n"
+        );
+    }
+
+    #[test]
+    fn save_and_enable_chimera_hub_writes_profile_and_live_files_for_valid_key() {
+        let _lock = CHIMERA_ENABLE_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("codex-home");
+        let settings_path = temp.path().join("settings.json");
+        std::fs::create_dir_all(&home).unwrap();
+        let previous_settings =
+            codex_plus_core::paths::set_settings_path_for_tests(Some(settings_path.clone()));
+        let previous_home = std::env::var_os("CODEX_HOME");
+        unsafe {
+            std::env::set_var("CODEX_HOME", &home);
+        }
+
+        let api_key = "sk-chimera-test-key-do-not-leak";
+        let result = save_and_enable_chimera_hub(SaveAndEnableChimeraHubRequest {
+            api_key: api_key.to_string(),
+        });
+
+        let stored = SettingsStore::default().load().unwrap();
+        let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+        let auth = std::fs::read_to_string(home.join("auth.json")).unwrap();
+        restore_codex_home_env(previous_home);
+        codex_plus_core::paths::set_settings_path_for_tests(previous_settings);
+
+        assert_eq!(result.status, "ok");
+        assert!(!result.message.contains(api_key));
+        assert_eq!(stored.active_relay_id, "chimerahub");
+        assert!(stored.relay_profiles_enabled);
+        let profile = stored
+            .relay_profiles
+            .iter()
+            .find(|profile| profile.id == "chimerahub")
+            .expect("chimera profile");
+        assert_eq!(
+            profile.base_url,
+            codex_plus_core::branding::DEFAULT_RELAY_BASE_URL
+        );
+        assert!(profile.base_url.contains("/v1"));
+        assert_eq!(
+            profile.relay_mode,
+            codex_plus_core::settings::RelayMode::PureApi
+        );
+        assert!(profile.auth_contents.contains("OPENAI_API_KEY"));
+        assert!(config.contains("model_provider"));
+        assert!(config.contains(codex_plus_core::branding::DEFAULT_RELAY_BASE_URL));
+        assert!(auth.contains("OPENAI_API_KEY"));
+        assert!(auth.contains(api_key));
+        assert!(result.payload.relay.configured);
+    }
+
+    #[test]
+    fn save_and_enable_chimera_hub_preserves_existing_non_chimera_active_on_upgrade_path() {
+        let _lock = CHIMERA_ENABLE_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let settings_path = temp.path().join("settings.json");
+        let previous_settings =
+            codex_plus_core::paths::set_settings_path_for_tests(Some(settings_path));
+        let store = SettingsStore::default();
+        let existing = BackendSettings {
+            active_relay_id: "legacy".to_string(),
+            relay_profiles: vec![RelayProfile {
+                id: "legacy".to_string(),
+                name: "Legacy".to_string(),
+                base_url: "https://legacy.example/v1".to_string(),
+                relay_mode: codex_plus_core::settings::RelayMode::PureApi,
+                auth_contents: "{\"OPENAI_API_KEY\":\"sk-legacy\"}\n".to_string(),
+                config_contents: "model_provider = \"custom\"\n".to_string(),
+                ..RelayProfile::default()
+            }],
+            ..BackendSettings::default()
+        };
+        store.save(&existing).unwrap();
+        let loaded = store.load().unwrap();
+        codex_plus_core::paths::set_settings_path_for_tests(previous_settings);
+
+        assert_eq!(loaded.active_relay_id, "legacy");
+        assert_eq!(loaded.relay_profiles[0].id, "legacy");
+        assert!(!loaded.relay_profiles.iter().any(|p| p.id == "chimerahub"));
+    }
+
+    static CHIMERA_ENABLE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn restore_codex_home_env(previous: Option<std::ffi::OsString>) {
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("CODEX_HOME", value),
+                None => std::env::remove_var("CODEX_HOME"),
+            }
+        }
     }
 }

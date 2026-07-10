@@ -108,6 +108,7 @@ pub fn run() {
             commands::test_stepwise_settings,
             commands::fetch_relay_profile_models,
             commands::switch_relay_profile,
+            commands::save_and_enable_chimera_hub,
             commands::apply_relay_injection,
             commands::apply_pure_api_injection,
             commands::clear_relay_injection,

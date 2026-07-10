@@ -309,6 +309,22 @@ fn relay_preview_deduplicates_root_keys_when_merging_common_config() {
 }
 
 #[test]
+fn provider_presets_include_chimerahub_and_drop_jojo_promo() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let presets = manifest_dir.parent().unwrap().join("src/presets.ts");
+    let presets = std::fs::read_to_string(&presets).expect("read manager presets.ts");
+
+    assert!(presets.contains("id: \"chimerahub\""));
+    assert!(presets.contains("name: \"ChimeraHub\""));
+    assert!(presets.contains("DEFAULT_RELAY_BASE_URL"));
+    assert!(presets.contains("protocol: \"responses\""));
+    assert!(!presets.contains("jojocode"));
+    assert!(!presets.contains("jojocode.com"));
+    assert!(!presets.contains("/i/drGuwc9k"));
+    assert!(!presets.contains("ic=RRVJPB5SII"));
+}
+
+#[test]
 fn provider_presets_include_runapi() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let presets = manifest_dir.parent().unwrap().join("src/presets.ts");

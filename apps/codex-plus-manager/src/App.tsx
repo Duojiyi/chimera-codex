@@ -70,6 +70,8 @@ import {
 } from "./model-windows";
 import { getLanguage, t, tf, toggleLanguage } from "@/i18n";
 import {
+  API_KEY_URL,
+  DEFAULT_RELAY_BASE_URL,
   DISPLAY_MANAGER_NAME,
   DISPLAY_SILENT_NAME,
   REPOSITORY,
@@ -1638,6 +1640,32 @@ export function App() {
     if (result) showNotice(t("纯 API 模式"), t("已切换到纯 API；Codex增强已设为完整增强。"), result.status);
   };
 
+  const saveAndEnableChimeraHub = async (apiKey: string) => {
+    const result = await run(() =>
+      call<RelaySwitchResult>("save_and_enable_chimera_hub", {
+        request: { apiKey },
+      }),
+    );
+    if (!result) return false;
+    const selectedSettings = normalizeSettings(result.settings);
+    setSettings({
+      status: result.status,
+      message: result.message,
+      settings: selectedSettings,
+      settings_path: result.settingsPath,
+      user_scripts: result.user_scripts as UserScriptInventory,
+    });
+    setSettingsForm(selectedSettings);
+    setRelay({
+      status: result.status,
+      message: result.message,
+      ...result.relay,
+    });
+    await refreshRelayFiles(true);
+    showNotice(t("ChimeraHub"), result.message, result.status);
+    return isSuccessStatus(result.status) && result.relay.configured;
+  };
+
   const switchRelayProfile = async (next: BackendSettings, previousActiveRelayId = settingsForm.activeRelayId) => {
     if (relaySwitching) {
       showNotice(t("供应商切换中"), t("上一次切换还没有完成，请稍后再试。"), "failed");
@@ -1970,6 +1998,7 @@ export function App() {
       testStepwiseSettings,
       fetchRelayProfileModels,
       switchRelayProfile,
+      saveAndEnableChimeraHub,
       relaySwitching,
       switchOfficialMode,
       switchPureApiMode,
@@ -2246,6 +2275,7 @@ type Actions = {
   testStepwiseSettings: (settings: BackendSettings) => Promise<void>;
   fetchRelayProfileModels: (profile: RelayProfile) => Promise<string[] | null>;
   switchRelayProfile: (settings: BackendSettings, previousActiveRelayId?: string) => Promise<void>;
+  saveAndEnableChimeraHub: (apiKey: string) => Promise<boolean>;
   relaySwitching: boolean;
   switchOfficialMode: () => Promise<void>;
   switchPureApiMode: () => Promise<void>;
@@ -2354,6 +2384,9 @@ function RelayScreen({
   const [detailProfileId, setDetailProfileId] = useState<string | null>(null);
   const [newProfileDraft, setNewProfileDraft] = useState<RelayProfile | null>(null);
   const [thirdPartyImportOpen, setThirdPartyImportOpen] = useState(false);
+  const [chimeraKeyDraft, setChimeraKeyDraft] = useState("");
+  const [chimeraEnabling, setChimeraEnabling] = useState(false);
+  const showChimeraKeyFirst = isChimeraKeyFirstState(normalized);
   const detailProfile = newProfileDraft || (detailProfileId
     ? normalized.relayProfiles.find((profile) => profile.id === detailProfileId) || null
     : null);
@@ -2361,6 +2394,16 @@ function RelayScreen({
   const saveRelaySettings = async (next: BackendSettings) => {
     onFormChange(next);
     await actions.saveSettingsValue(next, true);
+  };
+  const enableChimeraHub = async () => {
+    if (!chimeraKeyDraft.trim() || chimeraEnabling) return;
+    setChimeraEnabling(true);
+    try {
+      const ok = await actions.saveAndEnableChimeraHub(chimeraKeyDraft);
+      if (ok) setChimeraKeyDraft("");
+    } finally {
+      setChimeraEnabling(false);
+    }
   };
   const createNewAggregateProfile = () => {
     const draft = createAggregateRelayProfile(normalized);
@@ -2418,6 +2461,44 @@ function RelayScreen({
 
   return (
     <>
+      {showChimeraKeyFirst ? (
+        <Panel>
+          <CardHead
+            title={t("启用 ChimeraHub")}
+            detail={t("全新安装只需填写 API Key，保存后才会写入 Codex 配置。")}
+          />
+          <CardContent>
+            <p>
+              {t("默认中转")}：{DEFAULT_RELAY_BASE_URL}
+            </p>
+            <Field label="API Key">
+              <Input
+                type="password"
+                value={chimeraKeyDraft}
+                onChange={(event) => setChimeraKeyDraft(event.currentTarget.value)}
+                placeholder={t("输入 ChimeraHub API Key")}
+                autoComplete="off"
+              />
+            </Field>
+            <Toolbar>
+              <Button
+                disabled={!chimeraKeyDraft.trim() || chimeraEnabling}
+                onClick={() => void enableChimeraHub()}
+              >
+                <Save className="h-4 w-4" />
+                {chimeraEnabling ? t("正在启用…") : t("保存并启用")}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => void actions.openExternalUrl(API_KEY_URL)}
+              >
+                <ExternalLink className="h-4 w-4" />
+                {t("获取 API Key")}
+              </Button>
+            </Toolbar>
+          </CardContent>
+        </Panel>
+      ) : null}
       <Panel>
         <CardHead title={t("供应商列表")} detail={tf("{0} 个供应商配置；可拖动排序，点编辑进入详情", [normalized.relayProfiles.length])} />
         <CardContent>
@@ -5801,6 +5882,16 @@ function healthItems(overview: OverviewResult | null) {
       detail: overview?.management_shortcut.path || t("缺少管理工具快捷方式时可在安装维护页修复。"),
     },
   ];
+}
+
+function isChimeraKeyFirstState(settings: BackendSettings): boolean {
+  if (settings.activeRelayId !== "chimerahub") return false;
+  const profile = settings.relayProfiles.find((item) => item.id === "chimerahub");
+  if (!profile || profile.relayMode !== "pureApi") return false;
+  const hasKey =
+    Boolean(profile.apiKey.trim()) ||
+    Boolean(codexApiKeyFromAuth(profile.authContents || "").trim());
+  return !hasKey;
 }
 
 function normalizeSettings(settings: BackendSettings): BackendSettings {
