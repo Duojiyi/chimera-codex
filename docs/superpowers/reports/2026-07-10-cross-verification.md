@@ -55,7 +55,7 @@ TODO 中 D1–D9 是用户已确认或授权按最佳实践确定的方案；D10
 
 ## 复验结论
 
-**PASS（文档与初始化层面）→ 可以进入等待产品代码开工状态。**
+**PASS（文档与仓库初始化层面）→ 可以进入等待产品代码开工状态。**
 
 未发现仍会阻断文档初始化的内部矛盾。公开仓库真实地址、完整历史和 remote 安全门已核验；剩余外部决策只有用户是否批准产品代码开工，且 branch protection、品牌真相源和 CI 权限仍属于后续实现任务。本文档结论不代表产品代码已经实现或构建通过。
 
@@ -70,5 +70,5 @@ TODO 中 D1–D9 是用户已确认或授权按最佳实践确定的方案；D10
 - 用户可见遗漏：manager `index.html:6`、`assets/inject/stepwise-inject.js:1141,1193`
 - Windows legacy 安装：NSIS `InstallDir`/registry/shortcut 在 L9-80，且 L39-40 存在历史乱码
 - macOS 新旧 App 文件名迁移：`package-dmg.sh:120-132`、release workflow bundle check L131-145
-- 当前 Git 状态：`origin=Duojiyi/chimera-codex`、`upstream=BigPizzaV3/CodexPlusPlus`，仓库已非 shallow；首次基线推送仍需在审计通过后执行
+- 当前 Git 状态：`origin=Duojiyi/chimera-codex`、`upstream=BigPizzaV3/CodexPlusPlus`，仓库已非 shallow；`main` 基线已推送并跟踪 `origin/main`，`upstream` push 已阻断，`main` protection 与 Actions read-only 已核验
 - 文档跟踪：`.gitignore` 原规则忽略整个 `docs/superpowers/`，现仅放行 Active 文档与索引

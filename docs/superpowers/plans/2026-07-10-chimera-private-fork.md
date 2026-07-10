@@ -127,7 +127,7 @@ Task 完成时再做聚合双盲审计：审计者复核所有子任务证据、
 
 只有真实地址确定后才写 `brand/product.toml`；任何 `TBD`、`example`、`chimera-org` 占位值都必须使 `-Check` 失败。
 
-- [ ] **Step 5: Task 0 aggregate audit**
+- [x] **Step 5: Task 0 aggregate audit**
 
 复核公开可见性、匿名访问、remote fetch/push URL、full history、branch protection、token 最小权限和审计证据。Task 0 的审计记录必须在任何产品代码任务开始前通过。
 
