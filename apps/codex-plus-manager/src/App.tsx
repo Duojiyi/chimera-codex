@@ -541,6 +541,8 @@ type UpdateResult = CommandResult<{
   releaseSummary?: string;
   assetName?: string | null;
   assetUrl?: string | null;
+  assetSha256?: string | null;
+  assetSize?: number | null;
   updateAvailable?: boolean;
   installedPath?: string;
   progress?: number;
@@ -1323,13 +1325,19 @@ export function App() {
   const performUpdate = async () => {
     if (updateInstallProgress.active) return;
     const release =
-      update?.latestVersion && update.assetName && update.assetUrl
+      update?.latestVersion &&
+      update.assetName &&
+      update.assetUrl &&
+      update.assetSha256 &&
+      typeof update.assetSize === "number"
         ? {
             version: update.latestVersion,
             url: "",
             body: update.releaseSummary ?? "",
             asset_name: update.assetName,
             asset_url: update.assetUrl,
+            asset_sha256: update.assetSha256,
+            asset_size: update.assetSize,
           }
         : null;
     setUpdateInstallProgress({

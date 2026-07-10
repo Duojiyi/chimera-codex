@@ -103,6 +103,98 @@ function Assert-NoPlaceholders {
     }
 }
 
+function Get-WorkspaceCargoVersion {
+    param([Parameter(Mandatory)][string]$Root)
+
+    $cargoToml = Join-Path $Root 'Cargo.toml'
+    $inWorkspacePackage = $false
+    foreach ($raw in Get-Content -LiteralPath $cargoToml -Encoding UTF8) {
+        $line = $raw.Trim()
+        if ($line -eq '[workspace.package]') {
+            $inWorkspacePackage = $true
+            continue
+        }
+        if ($inWorkspacePackage -and $line.StartsWith('[')) {
+            break
+        }
+        if ($inWorkspacePackage -and $line -match '^version\s*=\s*"(.*)"\s*$') {
+            return $Matches[1]
+        }
+    }
+    throw 'Unable to read [workspace.package].version from Cargo.toml'
+}
+
+function Get-JsonVersion {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $json = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not $json.version) {
+        throw "Missing version in $Path"
+    }
+    return [string]$json.version
+}
+
+function Assert-VersionSync {
+    param([Parameter(Mandatory)][string]$Root)
+
+    $cargoVersion = Get-WorkspaceCargoVersion -Root $Root
+    $packageVersion = Get-JsonVersion -Path (Join-Path $Root 'apps\codex-plus-manager\package.json')
+    $tauriVersion = Get-JsonVersion -Path (Join-Path $Root 'apps\codex-plus-manager\src-tauri\tauri.conf.json')
+
+    if ($cargoVersion -ne $packageVersion) {
+        throw "Version drift: Cargo.toml ($cargoVersion) != package.json ($packageVersion)"
+    }
+    if ($cargoVersion -ne $tauriVersion) {
+        throw "Version drift: Cargo.toml ($cargoVersion) != tauri.conf.json ($tauriVersion)"
+    }
+    if ($cargoVersion -notmatch '^\d+\.\d+\.\d+-chimera\.\d+$') {
+        throw "Cargo workspace version must match X.Y.Z-chimera.N, got: $cargoVersion"
+    }
+}
+
+function Get-PreviousMacosBuildNumber {
+    param([Parameter(Mandatory)][string]$Root)
+
+    Push-Location $Root
+    try {
+        $tags = @(git tag -l 'v*-chimera.*' --sort=-v:refname 2>$null)
+        if (-not $tags -or $tags.Count -eq 0) {
+            return $null
+        }
+        foreach ($tag in $tags) {
+            $content = git show "${tag}:brand/product.toml" 2>$null
+            if (-not $content) { continue }
+            foreach ($raw in ($content -split "`n")) {
+                $line = $raw.Trim()
+                if ($line -match '^macos_build_number\s*=\s*(\d+)\s*$') {
+                    return [int]$Matches[1]
+                }
+            }
+        }
+        return $null
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Assert-MacosBuildNumberProgress {
+    param(
+        [Parameter(Mandatory)]$Map,
+        [Parameter(Mandatory)][string]$Root
+    )
+
+    $current = [int]$Map['macos_build_number']
+    if ($current -lt 1) {
+        throw 'macos_build_number must be a positive integer'
+    }
+
+    $previous = Get-PreviousMacosBuildNumber -Root $Root
+    if ($null -ne $previous -and $current -le [int]$previous) {
+        throw "macos_build_number ($current) must be greater than previous release tag value ($previous)"
+    }
+}
+
 function Escape-RustString([string]$Value) {
     return ($Value -replace '\\', '\\' -replace '"', '\"')
 }
@@ -206,6 +298,8 @@ Require-Keys -Map $map -Keys @(
     'artifact_prefix', 'macos_build_number', 'website_url', 'api_key_url'
 )
 Assert-NoPlaceholders -Map $map
+Assert-VersionSync -Root $root
+Assert-MacosBuildNumberProgress -Map $map -Root $root
 
 $rustContent = New-RustBranding -Map $map
 $tsContent = New-TsBranding -Map $map

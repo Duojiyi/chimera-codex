@@ -403,7 +403,7 @@ git commit -m "feat: add ChimeraHub preset with key-first first-run enablement"
 - Modify: `crates/codex-plus-core/src/update.rs`
 - Modify: `crates/codex-plus-core/tests/updater.rs`
 
-- [ ] **Step 1: Write failing SemVer tests**
+- [x] **Step 1: Write failing SemVer tests**
 
 新增以下更新顺序断言：
 
@@ -416,17 +416,17 @@ assert!(!is_newer_version("1.2.34-chimera.1", "1.2.34-chimera.2")?);
 
 同时拒绝非法版本、其它发行通道和缺少 `chimera` 标识的 manifest，避免公开上游资产被误装。
 
-- [ ] **Step 2: Use standard SemVer and synchronize build versions**
+- [x] **Step 2: Use standard SemVer and synchronize build versions**
 
 引入 `semver` crate，替换当前遇到 `-` 即截断的解析逻辑。版本格式固定为 `X.Y.Z-chimera.N`。Cargo workspace version 是构建源；`scripts/generate-branding.ps1 -Check` 同时验证前端 package 与 Tauri version 一致，并验证 `macos_build_number` 为正整数且高于上一发布 tag 中的值。
 
 原版覆盖升级通过用户手工运行 Chimera 安装包完成；安装后的第一个 Chimera 版本已经嵌入完整后缀，后续自动更新均按标准 SemVer 比较。
 
-- [ ] **Step 3: Point updater to public branding URL**
+- [x] **Step 3: Point updater to public branding URL**
 
 `DEFAULT_REPOSITORY` / `DEFAULT_LATEST_JSON_URL` 读取生成的 branding 值。请求不携带 GitHub token，测试通过本地 HTTP fixture 验证 JSON；真实公开 Release 冒烟验证匿名 200。
 
-- [ ] **Step 4: Strict platform and arch selection**
+- [x] **Step 4: Strict platform and arch selection**
 
 只接受以下形状：
 
@@ -436,13 +436,13 @@ assert!(!is_newer_version("1.2.34-chimera.1", "1.2.34-chimera.2")?);
 
 保留并更新现有 `is_macos_native_arch_asset` 排序，禁止退化为“文件名包含 chimera 即接受”。同时拒绝 zip、source archive、其它架构和近似前缀。
 
-- [ ] **Step 5: Extend latest.json and verify downloads**
+- [x] **Step 5: Extend latest.json and verify downloads**
 
 `ReleaseAsset` 增加 `sha256` 与 `size`。`perform_update` 下载到临时文件，检查实际大小与 SHA-256，验证成功后原子重命名并启动；失败时删除该单个临时文件并返回错误，绝不启动。
 
 测试覆盖正确哈希、错误哈希、大小不符、路径穿越、缺字段、下载中断和当前平台双架构选择。
 
-- [ ] **Step 6: Test + commit**
+- [x] **Step 6: Test + commit**
 
 Run: `cargo test -p codex-plus-core --test updater`
 Expected: PASS；`update.rs` 无上游 Release URL，`.1 → .2` 更新成立

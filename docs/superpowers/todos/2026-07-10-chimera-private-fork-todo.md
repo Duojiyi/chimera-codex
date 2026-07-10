@@ -31,10 +31,10 @@
 - [x] T6. 禁用远端 ScriptMarket，保留本地脚本管理
 - [x] T7. 删除 App JOJO/推荐 UI、CSS、i18n 与生成键
 - [x] T8. 品牌化 About、HTML title、Tauri 窗口/托盘、Stepwise 用户文案
-- [ ] T9. 引入标准 SemVer，统一 Cargo/package/Tauri 版本
-- [ ] T10. updater 改公开 latest.json，严格 Win/macOS+arch matcher
-- [ ] T11. latest.json 增加 size/SHA-256，下载验证后才启动安装器
-- [ ] T12. updater 覆盖 `.1→.2`、跨上游版本、错误哈希/大小/通道测试
+- [x] T9. 引入标准 SemVer，统一 Cargo/package/Tauri 版本
+- [x] T10. updater 改公开 latest.json，严格 Win/macOS+arch matcher
+- [x] T11. latest.json 增加 size/SHA-256，下载验证后才启动安装器
+- [x] T12. updater 覆盖 `.1→.2`、跨上游版本、错误哈希/大小/通道测试
 
 ## P1 — Key-first 中转与覆盖升级
 
