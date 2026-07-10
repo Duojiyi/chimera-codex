@@ -3,19 +3,17 @@ use std::net::TcpListener;
 use std::thread;
 
 use codex_plus_core::ads::{
-    DEFAULT_AD_LIST_URLS, cache_busted_ad_url, fetch_ad_list_from_urls, normalize_ad_payload,
+    DEFAULT_AD_LIST_URLS, cache_busted_ad_url, fetch_ad_list, fetch_ad_list_from_urls,
+    normalize_ad_payload,
 };
 use serde_json::json;
 
 #[test]
-fn default_ad_urls_match_legacy_helper_sources() {
-    assert_eq!(
-        DEFAULT_AD_LIST_URLS,
-        [
-            "https://raw.githubusercontent.com/BigPizzaV3/Ad-List/main/ads.json",
-            "https://cdn.jsdelivr.net/gh/BigPizzaV3/Ad-List@main/ads.json",
-        ]
-    );
+fn production_ad_list_urls_are_empty() {
+    assert!(DEFAULT_AD_LIST_URLS.is_empty());
+    assert!(!DEFAULT_AD_LIST_URLS
+        .iter()
+        .any(|url| url.contains("BigPizzaV3/Ad-List")));
 }
 
 #[test]
@@ -34,8 +32,16 @@ fn cache_busted_ad_url_preserves_existing_query() {
     );
 }
 
+#[tokio::test]
+async fn ads_disabled_returns_empty_list_without_network() {
+    assert!(!codex_plus_core::branding::ADS_ENABLED);
+    let payload = fetch_ad_list().await.unwrap();
+    assert_eq!(payload["version"], json!(1));
+    assert_eq!(payload["ads"].as_array().unwrap().len(), 0);
+}
+
 #[test]
-fn normalizes_remote_ads_for_plugin_and_manager_rendering() {
+fn normalizes_remote_ads_without_appending_builtins() {
     let payload = normalize_ad_payload(json!({
         "version": 1,
         "ads": [
@@ -65,17 +71,16 @@ fn normalizes_remote_ads_for_plugin_and_manager_rendering() {
     }));
 
     assert_eq!(payload["version"], json!(1));
-    assert_eq!(payload["ads"].as_array().unwrap().len(), 4);
-    assert_eq!(payload["ads"][0]["type"], json!("sponsor"));
-    assert_eq!(payload["ads"][1]["id"], json!("cubence"));
-    assert_eq!(payload["ads"][1]["type"], json!("sponsor"));
-    assert_eq!(payload["ads"][2]["id"], json!("ergou-api"));
-    assert_eq!(payload["ads"][2]["type"], json!("sponsor"));
-    assert_eq!(payload["ads"][3]["type"], json!("normal"));
+    let ads = payload["ads"].as_array().unwrap();
+    assert_eq!(ads.len(), 2);
+    assert_eq!(ads[0]["type"], json!("sponsor"));
+    assert_eq!(ads[1]["type"], json!("normal"));
+    assert!(!ads.iter().any(|ad| ad["id"] == json!("cubence")));
+    assert!(!ads.iter().any(|ad| ad["id"] == json!("ergou-api")));
 }
 
 #[test]
-fn builtin_sponsors_are_appended_after_remote_sponsors_with_ergou_last() {
+fn normalize_does_not_append_builtin_sponsors_after_remote_sponsors() {
     let payload = normalize_ad_payload(json!({
         "version": 1,
         "ads": [
@@ -97,34 +102,9 @@ fn builtin_sponsors_are_appended_after_remote_sponsors_with_ergou_last() {
     }));
     let ads = payload["ads"].as_array().unwrap();
 
+    assert_eq!(ads.len(), 2);
     assert_eq!(ads[0]["id"], json!("remote-sponsor"));
-    assert_eq!(ads[1]["id"], json!("cubence"));
-    assert_eq!(ads[1]["title"], json!("Cubence"));
-    assert_eq!(
-        ads[1]["url"],
-        json!("https://cubence.com?source=codexplusplus")
-    );
-    assert_eq!(ads[1]["expires_at"], json!("2026-08-02T23:59:59+08:00"));
-    assert!(
-        ads[1]["image"]
-            .as_str()
-            .unwrap()
-            .starts_with("data:image/png;base64,")
-    );
-    assert_eq!(ads[2]["id"], json!("ergou-api"));
-    assert_eq!(ads[2]["title"], json!("二狗 API"));
-    assert_eq!(
-        ads[2]["url"],
-        json!("https://ergouapi.com/r/gh-codexplusplus")
-    );
-    assert_eq!(ads[2]["expires_at"], json!("2026-08-02T23:59:59+08:00"));
-    assert!(
-        ads[2]["image"]
-            .as_str()
-            .unwrap()
-            .starts_with("data:image/png;base64,")
-    );
-    assert_eq!(ads[3]["id"], json!("remote-normal"));
+    assert_eq!(ads[1]["id"], json!("remote-normal"));
 }
 
 #[test]
@@ -265,6 +245,7 @@ async fn fetch_ad_list_tries_backup_url_when_primary_fails() {
     thread.join().unwrap();
 
     let ads = payload["ads"].as_array().unwrap();
-    assert!(ads.iter().any(|ad| ad["id"] == json!("ergou-api")));
     assert!(ads.iter().any(|ad| ad["id"] == json!("backup-ad")));
+    assert!(!ads.iter().any(|ad| ad["id"] == json!("ergou-api")));
+    assert!(!ads.iter().any(|ad| ad["id"] == json!("cubence")));
 }

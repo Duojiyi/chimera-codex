@@ -1,4 +1,4 @@
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const VOLCENGINE_IMAGE: &[u8] = include_bytes!("../../../docs/images/sponsor-volcengine.png");
@@ -7,14 +7,8 @@ const TOKEN_BRIDGE_IMAGE: &[u8] = include_bytes!("../../../docs/images/sponsor-0
 const APIKEY_FUN_IMAGE: &[u8] = include_bytes!("../../../docs/images/sponsor-apikey-fun.png");
 const RAWCHAT_IMAGE: &[u8] = include_bytes!("../../../docs/images/sponsor-rawchat.svg");
 const RUNAPI_IMAGE: &[u8] = include_bytes!("../../../docs/images/sponsor-runapi.png");
-const CUBENCE_IMAGE: &[u8] = include_bytes!("../../../docs/images/sponsor-cubence.png");
-const ERGOU_API_IMAGE: &[u8] = include_bytes!("../../../docs/images/sponsor-ergou-api.png");
-const BUILTIN_SPONSOR_EXPIRES_AT: &str = "2026-08-02T23:59:59+08:00";
 
-pub const DEFAULT_AD_LIST_URLS: [&str; 2] = [
-    "https://raw.githubusercontent.com/BigPizzaV3/Ad-List/main/ads.json",
-    "https://cdn.jsdelivr.net/gh/BigPizzaV3/Ad-List@main/ads.json",
-];
+pub const DEFAULT_AD_LIST_URLS: [&str; 0] = [];
 
 pub fn normalize_ad_payload(payload: Value) -> Value {
     let version = payload.get("version").and_then(Value::as_u64).unwrap_or(1);
@@ -36,7 +30,6 @@ pub fn normalize_ad_payload(payload: Value) -> Value {
         .cloned()
         .collect::<Vec<_>>();
     fill_known_remote_logos(&mut ads);
-    append_builtin_sponsors(&mut ads);
     json!({ "version": version, "ads": ads })
 }
 
@@ -74,64 +67,6 @@ fn known_remote_logo(id: &str) -> Option<(&'static str, &'static [u8])> {
     }
 }
 
-fn append_builtin_sponsors(ads: &mut Vec<Value>) {
-    let insert_at = ads
-        .iter()
-        .rposition(|ad| ad.get("type").and_then(Value::as_str) == Some("sponsor"))
-        .map(|index| index + 1)
-        .unwrap_or(0);
-    let builtins = [
-        builtin_sponsor(
-            "cubence",
-            "Cubence",
-            "感谢 Cubence 对本项目的支持。Cubence 是一家致力为客户提供稳定、高效的 API 中转服务商。从 25 年 9 月运营至今，提供了 Claude Code、Codex、Gemini 等多种模型支持。Cubence 为本开源项目多用户提供了特别的专属优惠 CODEXPLUSPLUS，在首次购买时享受 8.8 折优惠！",
-            "https://cubence.com?source=codexplusplus",
-            CUBENCE_IMAGE,
-            &["Claude Code", "Codex / Gemini", "CODEXPLUSPLUS 8.8 折"],
-        ),
-        builtin_sponsor(
-            "ergou-api",
-            "二狗 API",
-            "二狗，稳如老狗的 AI API 中转站。全站 0.1x~0.2x 超低倍率，提供 Claude/GPT/Gemini 等多个国内外 100% 纯血大模型接口，顶级 IPLC 线路 + 住宅双 ISP 冗余，确保全国范围稳定低延迟访问。欢迎各位开发者、工作室注册使用。",
-            "https://ergouapi.com/r/gh-codexplusplus",
-            ERGOU_API_IMAGE,
-            &["0.1x~0.2x", "Claude / GPT / Gemini", "IPLC + 双 ISP"],
-        ),
-    ];
-    let mut cursor = insert_at;
-    for sponsor in builtins {
-        let id = sponsor.get("id").and_then(Value::as_str);
-        if id.is_some_and(|id| {
-            ads.iter()
-                .any(|ad| ad.get("id").and_then(Value::as_str) == Some(id))
-        }) {
-            continue;
-        }
-        ads.insert(cursor, sponsor);
-        cursor += 1;
-    }
-}
-
-fn builtin_sponsor(
-    id: &str,
-    title: &str,
-    description: &str,
-    url: &str,
-    image: &[u8],
-    highlights: &[&str],
-) -> Value {
-    let mut sponsor = Map::new();
-    sponsor.insert("id".to_string(), json!(id));
-    sponsor.insert("type".to_string(), json!("sponsor"));
-    sponsor.insert("title".to_string(), json!(title));
-    sponsor.insert("description".to_string(), json!(description));
-    sponsor.insert("url".to_string(), json!(url));
-    sponsor.insert("expires_at".to_string(), json!(BUILTIN_SPONSOR_EXPIRES_AT));
-    sponsor.insert("image".to_string(), json!(data_uri("image/png", image)));
-    sponsor.insert("highlights".to_string(), json!(highlights));
-    Value::Object(sponsor)
-}
-
 fn data_uri(mime: &str, bytes: &[u8]) -> String {
     format!("data:{mime};base64,{}", base64_encode(bytes))
 }
@@ -160,6 +95,9 @@ fn base64_encode(bytes: &[u8]) -> String {
 }
 
 pub async fn fetch_ad_list() -> anyhow::Result<Value> {
+    if !crate::branding::ADS_ENABLED {
+        return Ok(json!({ "version": 1, "ads": [] }));
+    }
     fetch_ad_list_from_urls(&DEFAULT_AD_LIST_URLS).await
 }
 
