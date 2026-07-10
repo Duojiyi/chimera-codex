@@ -18,7 +18,7 @@
 - [x] D8. 全新安装默认选中 ChimeraHub；Key 为空不应用；升级不覆盖已有配置
 - [x] D9. Windows x64、macOS x64/arm64 都构建；macOS 仅 ad-hoc sign，不 notarize
 - [ ] D10. 用户明确授权开工
-- [ ] D11. 写入真实 repository，配置 branch protection 和最小权限自动化 token（仓库已创建，策略配置仍待初始化任务完成）
+- [ ] D11. 写入真实 repository，配置 branch protection 和最小权限自动化 token（仓库与 branch protection 已完成；自动化 token/Actions 最小权限仍待实施）
 - [x] D12. 每个 checkbox 坚持 Red → Green → 双盲审计；每个大任务另做聚合双盲审计
 
 ## P0 — 仓库、品牌、去推广与安全更新

@@ -1,6 +1,6 @@
 # Task 0.2 Audit — Remote Migration And Baseline Safety
 
-> Status: passed with first-push gate
+> Status: passed
 > Date: 2026-07-10
 > Scope: local Git remotes, history completeness, push safety and tracking before the first baseline push
 
@@ -23,8 +23,8 @@
 
 ## Independent Audit B — Push And Tracking Boundary
 
-首次推送必须使用显式 `git push -u origin main`，成功后验证 `branch.main.remote=origin`、`branch.main.merge=refs/heads/main` 和 `origin/main` SHA。未完成该动作前，不得使用无参数 `git push`，也不得配置 branch protection。
+首次推送已使用显式 `git push -u origin main`；随后验证 `branch.main.remote=origin`、`branch.main.merge=refs/heads/main` 和 `origin/main` SHA 一致。`upstream` push 防护仍保持 `no_push://upstream`。
 
 ## Decision
 
-Task 0.2 通过其本地迁移门。首个基线 push 与随后 branch protection 属于 Task 0.3/Task 0 aggregate 的剩余门禁。
+Task 0.2 通过。branch protection 单独记录在 Task 0.3 审计中。

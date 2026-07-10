@@ -114,12 +114,14 @@ Task 完成时再做聚合双盲审计：审计者复核所有子任务证据、
 4. 为 `upstream` 写入明确不可用的 `pushurl`，让误推上游在本地直接失败；首次基线只允许显式 `git push -u origin main`，随后验证 `main` 跟踪 `origin/main`。
 5. 禁止脚本在 remote URL 不符合预期、工作树不干净或当前存在 merge/rebase 时继续。
 
-- [ ] **Step 3: Configure repository policy**
+- [x] **Step 3: Configure repository policy**
 
 - `main` 禁止 force-push，要求 PR 与核心检查通过。
 - Actions 默认只读，具体 workflow 显式声明最小权限。
 - 自动同步优先使用 GitHub App；fallback token 使用 fine-grained PAT，保存在 `CHIMERA_AUTOMATION_TOKEN`，不写入仓库或客户端。
 - 设置 `sync-upstream` concurrency group，禁止两个同步并行。
+
+当前已启用 PR、1 次批准、dismiss stale review、last-push approval、线性历史、禁止强推/删除和 conversation resolution；CI 尚未落地，因此 required status checks 留待真实 check 名产生后追加。
 
 - [ ] **Step 4: Record repository in brand config**
 
