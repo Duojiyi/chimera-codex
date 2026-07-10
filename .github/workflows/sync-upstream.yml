@@ -1,0 +1,192 @@
+name: Sync upstream
+
+# Watches BigPizzaV3/CodexPlusPlus formal Releases and opens a sync PR.
+# Does NOT create GitHub Releases; main publishes via release-assets.yml after merge.
+#
+# Secret (configure in repo Settings → Secrets; never commit the value):
+#   CHIMERA_AUTOMATION_TOKEN — fine-grained PAT or GitHub App token with minimal
+#   Contents / Pull requests / Issues / Actions scope on Duojiyi/chimera-codex.
+#   Prefer a GitHub App when available. Required so opened PRs can trigger checks
+#   (default GITHUB_TOKEN cannot).
+
+on:
+  schedule:
+    # Twice daily (UTC)
+    - cron: "0 6 * * *"
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  sync:
+    name: Sync latest formal upstream Release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Use automation token so subsequent PR events trigger required checks.
+          # Secret name is a placeholder reference only — value lives in GitHub Secrets.
+          token: ${{ secrets.CHIMERA_AUTOMATION_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Ensure remotes
+        shell: pwsh
+        run: |
+          $originExpected = "https://github.com/Duojiyi/chimera-codex.git"
+          $upstreamExpected = "https://github.com/BigPizzaV3/CodexPlusPlus.git"
+          git remote set-url origin $originExpected
+          if (-not (git remote | Select-String -Pattern '^upstream$')) {
+            git remote add upstream $upstreamExpected
+          } else {
+            git remote set-url upstream $upstreamExpected
+          }
+          git remote set-url --push upstream "no_push://upstream"
+          git remote -v
+          git fetch origin --tags --force
+          git fetch upstream --tags --force
+
+      - name: Run sync script
+        id: sync
+        shell: pwsh
+        env:
+          # Prefer CHIMERA_AUTOMATION_TOKEN; fall back only for read-only API if unset.
+          CHIMERA_AUTOMATION_TOKEN: ${{ secrets.CHIMERA_AUTOMATION_TOKEN }}
+          GH_TOKEN: ${{ secrets.CHIMERA_AUTOMATION_TOKEN }}
+        run: |
+          $resultPath = Join-Path $env:RUNNER_TEMP "sync-result.json"
+          $exitFile = Join-Path $env:RUNNER_TEMP "sync-exit.txt"
+          pwsh -NoProfile -File scripts/sync-upstream.ps1 -ResultPath $resultPath
+          $code = $LASTEXITCODE
+          Set-Content -LiteralPath $exitFile -Value $code -Encoding ascii
+          Write-Host "sync-upstream.ps1 exit=$code"
+          if (Test-Path -LiteralPath $resultPath) {
+            Get-Content -LiteralPath $resultPath -Raw
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "result_path=$resultPath"
+            $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "action=$($json.action)"
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "upstream_tag=$($json.upstream_tag)"
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "sync_branch=$($json.sync_branch)"
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "chimera_version=$($json.chimera_version)"
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "message=$($json.message)"
+          }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "exit_code=$code"
+          # Defer failure handling to later steps (Issue / summary).
+          if ($code -notin 0, 2, 3) {
+            exit $code
+          }
+          exit 0
+
+      - name: Push sync branch and open PR
+        if: steps.sync.outputs.action == 'prepared' && steps.sync.outputs.exit_code == '0'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.CHIMERA_AUTOMATION_TOKEN }}
+        run: |
+          $branch = "${{ steps.sync.outputs.sync_branch }}"
+          $tag = "${{ steps.sync.outputs.upstream_tag }}"
+          $ver = "${{ steps.sync.outputs.chimera_version }}"
+          if (-not $branch) { throw "missing sync_branch output" }
+
+          git push -u origin "refs/heads/$branch:$branch"
+
+          $existing = gh pr list --head $branch --state open --json number --jq '.[0].number'
+          $body = @"
+          ## Upstream sync
+
+          - Upstream tag: ``$tag``
+          - Chimera version: ``$ver``
+          - Sync branch: ``$branch``
+          - Script gates: branding generate/check, no-promo scan, ``cargo fmt --check``, ``cargo test``
+          - PR required checks (Task 8) must pass before auto-merge
+
+          This PR was opened by ``sync-upstream.yml``. It does **not** create a Release;
+          publishing happens from ``main`` via ``release-assets.yml`` after merge.
+          "@
+
+          if ($existing) {
+            Write-Host "Updating PR #$existing"
+            gh pr edit $existing --title "sync: $tag -> $ver" --body $body
+            $pr = $existing
+          } else {
+            $url = gh pr create --base main --head $branch --title "sync: $tag -> $ver" --body $body
+            Write-Host "Created PR: $url"
+            $pr = gh pr list --head $branch --state open --json number --jq '.[0].number'
+          }
+
+          # Enable auto-merge once checks are green (branch protection enforces required checks).
+          gh pr merge $pr --auto --squash
+          Write-Host "Auto-merge enabled for PR #$pr"
+
+          # Close any prior blocked Issue for this upstream version on success path.
+          $version = ($tag -replace '^v','')
+          $title = "[sync:v$version] upstream sync blocked"
+          $issues = gh issue list --state open --search "$title in:title" --json number,title
+          $issues | ConvertFrom-Json | ForEach-Object {
+            if ($_.title -eq $title) {
+              gh issue close $_.number --comment "Sync PR prepared and auto-merge enabled; closing blocked Issue."
+            }
+          }
+
+      - name: Upsert blocked Issue (conflict or gate failure)
+        if: steps.sync.outputs.exit_code == '2' || steps.sync.outputs.exit_code == '3'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.CHIMERA_AUTOMATION_TOKEN }}
+        run: |
+          $tag = "${{ steps.sync.outputs.upstream_tag }}"
+          $ver = "${{ steps.sync.outputs.chimera_version }}"
+          $msg = "${{ steps.sync.outputs.message }}"
+          $code = "${{ steps.sync.outputs.exit_code }}"
+          $version = ($tag -replace '^v','')
+          $title = "[sync:v$version] upstream sync blocked"
+
+          $kind = if ($code -eq '2') { 'merge conflict' } else { 'gate failure' }
+          $body = @"
+          ## Upstream sync blocked ($kind)
+
+          - Upstream tag: ``$tag``
+          - Intended Chimera version: ``$ver``
+          - Exit code: ``$code`` (2=conflict, 3=gates)
+          - Detail: $msg
+
+          Manual resolution required. Do not force-push ``main``.
+          After fixing, re-run **Sync upstream** (workflow_dispatch) or wait for the next schedule.
+
+          This Issue is deduplicated by exact title; the body must never contain secrets or tokens.
+          "@
+
+          $open = gh issue list --state open --search "$title in:title" --json number,title
+          $hit = ($open | ConvertFrom-Json) | Where-Object { $_.title -eq $title } | Select-Object -First 1
+          if ($hit) {
+            gh issue edit $hit.number --body $body
+            Write-Host "Updated Issue #$($hit.number)"
+          } else {
+            gh issue create --title $title --body $body
+          }
+
+      - name: Fail job on conflict or gate failure
+        if: steps.sync.outputs.exit_code == '2' || steps.sync.outputs.exit_code == '3'
+        shell: pwsh
+        run: |
+          throw "sync-upstream blocked with exit $($env:EXIT) — see Issue"
+        env:
+          EXIT: ${{ steps.sync.outputs.exit_code }}

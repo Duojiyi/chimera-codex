@@ -608,7 +608,7 @@ git commit -m "ci: build and publish verified Chimera releases"
 - Create: `scripts/sync-upstream.ps1`
 - Create: `.github/workflows/sync-upstream.yml`
 
-- [ ] **Step 1: sync script behavior**
+- [x] **Step 1: sync script behavior**
 
 ```powershell
 # scripts/sync-upstream.ps1（行为规格）
@@ -623,7 +623,7 @@ git commit -m "ci: build and publish verified Chimera releases"
 
 `-DryRun` 只使用 `git remote get-url`、`git status`、`git ls-remote`/GitHub API 输出计划，不 fetch、不创建 branch/worktree、不写文件。退出码：0 无变更或可同步，2 merge 冲突，3 门禁失败，4 配置/权限错误。
 
-- [ ] **Step 2: workflow**
+- [x] **Step 2: workflow**
 
 `sync-upstream.yml`：
 - `schedule: cron` 每天 2 次 + `workflow_dispatch`
@@ -636,12 +636,12 @@ git commit -m "ci: build and publish verified Chimera releases"
 
 版本策略：上游新版本第一次同步为 `X.Y.Z-chimera.1`；同一上游版本的 Chimera 修复由人工或发布准备 PR 递增 `N`。每个发布准备 PR 同时把 `macos_build_number` 加一。
 
-- [ ] **Step 3: Dry-run on a branch**
+- [x] **Step 3: Dry-run on a branch**
 
 Run: `pwsh -File scripts/sync-upstream.ps1 -DryRun`
 Expected: 打印目标 upstream tag、分支、版本与 gates；`git status`、refs 和文件哈希前后不变
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/sync-upstream.ps1 .github/workflows/sync-upstream.yml

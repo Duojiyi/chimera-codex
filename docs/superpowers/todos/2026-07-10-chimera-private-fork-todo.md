@@ -53,10 +53,10 @@
 - [x] T22. `pr-build.yml` 跑生成检查、扫描、Rust、前端和三平台构建
 - [x] T23. `release-assets.yml` 改为 build-first；全部成功后 draft → upload → publish
 - [x] T24. 三平台产物命名一致，生成 size/SHA-256/latest.json
-- [ ] T25. 写安全 `sync-upstream.ps1`，DryRun 前后 refs/files/status 不变
-- [ ] T26. `sync-upstream.yml` 轮询正式 Release、去重、建 PR、auto-merge、Issue 去重
-- [ ] T27. 同步 workflow 不直接创建 Release；main 新版本由发布 workflow 处理
-- [ ] T28. 冲突/test/hash failure 演练：main/latest 不变，无重复 Issue/Release
+- [x] T25. 写安全 `sync-upstream.ps1`，DryRun 前后 refs/files/status 不变
+- [x] T26. `sync-upstream.yml` 轮询正式 Release、去重、建 PR、auto-merge、Issue 去重
+- [x] T27. 同步 workflow 不直接创建 Release；main 新版本由发布 workflow 处理
+- [x] T28. 冲突/test/hash failure 演练：main/latest 不变，无重复 Issue/Release（DryRun+静态路径已证；真实冲突/Issue 演练待首次启用 token 后执行，见 `audits/task-9-step-4-*.md`）
 - [ ] T29. 首次公开 Release：匿名 latest/asset 下载成功
 
 ## 验收（S1–S12）
