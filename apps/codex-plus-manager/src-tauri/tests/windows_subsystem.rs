@@ -351,8 +351,13 @@ fn github_release_archives_corresponding_source_from_resolved_target() {
         "git archive --format=tar --prefix=\"ChimeraPlusPlus-${VERSION}-source/\" \"$TARGET_SHA\""
     ));
     assert!(workflow.contains("gzip -n"));
-    assert!(workflow.contains("git ls-tree -r --name-only \"$TARGET_SHA\""));
-    assert!(workflow.contains("tar -tzf \"$source_asset\""));
+    assert!(workflow.contains(
+        "git ls-tree -rz --name-only \"$TARGET_SHA\" | LC_ALL=C sort -z > /tmp/source-tree-expected.z"
+    ));
+    assert!(workflow.contains("tar -xzf \"$source_asset\" -C /tmp/source-tree-root"));
+    assert!(workflow.contains("find . -mindepth 1 ! -type d -print0"));
+    assert!(workflow.contains("| LC_ALL=C sort -z > /tmp/source-tree-actual.z"));
+    assert!(workflow.contains("cmp /tmp/source-tree-expected.z /tmp/source-tree-actual.z"));
     assert!(generator.contains("License: AGPL-3.0-only; third-party notices: NOTICE"));
     assert!(generator.contains(
         "Corresponding source: ${baseUrl}/ChimeraPlusPlus-${resolved.version}-source.tar.gz"
@@ -415,9 +420,12 @@ fn license_self_test_breaks_each_source_archive_integrity_gate() {
     let verifier = std::fs::read_to_string(verifier).expect("read license verifier");
 
     for case_name in [
-        "source tree listing integrity",
-        "source archive listing integrity",
-        "source tree diff integrity",
+        "source tree expected NUL sorting integrity",
+        "source archive extraction integrity",
+        "source tree NUL traversal integrity",
+        "source tree NUL normalization integrity",
+        "source tree NUL sorting integrity",
+        "source tree comparison integrity",
         "source required-file integrity",
         "commented draft asset content gate",
     ] {

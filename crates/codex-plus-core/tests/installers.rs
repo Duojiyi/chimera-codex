@@ -1317,6 +1317,113 @@ fn pr_and_release_workflows_verify_original_brand_icons() {
 }
 
 #[test]
+fn release_source_tree_checks_preserve_unicode_paths() {
+    fn job<'a>(workflow: &'a str, name: &str, next: Option<&str>) -> Option<&'a str> {
+        let start = format!("\n  {name}:\n");
+        let (_, rest) = workflow.split_once(&start)?;
+        match next {
+            Some(next) => rest
+                .split_once(&format!("\n  {next}:\n"))
+                .map(|(job, _)| job),
+            None => Some(rest),
+        }
+    }
+
+    fn active_lines(job: &str) -> String {
+        job.lines()
+            .filter(|line| !line.trim_start().starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn step<'a>(job: &'a str, name: &str) -> Option<&'a str> {
+        let start = format!("\n      - name: {name}\n");
+        let (_, rest) = job.split_once(&start)?;
+        Some(
+            rest.split_once("\n      - name: ")
+                .map(|(step, _)| step)
+                .unwrap_or(rest),
+        )
+    }
+
+    fn has_nul_safe_source_checks(workflow: &str) -> bool {
+        let Some(published) = job(
+            workflow,
+            "verify-published-release",
+            Some("windows-installer"),
+        ) else {
+            return false;
+        };
+        let Some(publish) = job(workflow, "publish-release", None) else {
+            return false;
+        };
+        let Some(published) = step(published, "Verify existing corresponding source") else {
+            return false;
+        };
+        let Some(publish) = step(publish, "Create draft, upload assets, publish") else {
+            return false;
+        };
+        let published = active_lines(published);
+        let publish = active_lines(publish);
+        let nul_listing = "git ls-tree -rz --name-only \"$TARGET_SHA\" | LC_ALL=C sort -z";
+        let nul_find = "find . -mindepth 1 ! -type d -print0";
+        let nul_strip = "sed -z 's#^\\./##'";
+
+        [published.as_str(), publish.as_str()].iter().all(|step| {
+            step.matches(nul_listing).count() == 1
+                && step.matches(nul_find).count() == 1
+                && step.matches(nul_strip).count() == 1
+        }) && published.contains("mkdir -p /tmp/published-source-root")
+            && published
+                .contains("tar -xzf /tmp/published-source.tar.gz -C /tmp/published-source-root")
+            && published.contains("cd \"/tmp/published-source-root/${prefix}\"")
+            && published.contains("| LC_ALL=C sort -z > /tmp/published-source-actual.z")
+            && published
+                .contains("cmp /tmp/published-source-expected.z /tmp/published-source-actual.z")
+            && publish.contains("mkdir -p /tmp/source-tree-root")
+            && publish.contains("tar -xzf \"$source_asset\" -C /tmp/source-tree-root")
+            && publish.contains("cd \"/tmp/source-tree-root/${archive_prefix}\"")
+            && publish.contains("| LC_ALL=C sort -z > /tmp/source-tree-actual.z")
+            && publish.contains("cmp /tmp/source-tree-expected.z /tmp/source-tree-actual.z")
+    }
+
+    let workflow = std::fs::read_to_string("../../.github/workflows/release-assets.yml")
+        .expect("read release workflow");
+    assert!(
+        has_nul_safe_source_checks(&workflow),
+        "both source-tree checks must use NUL-delimited, unquoted path comparisons"
+    );
+
+    let missing_nul = workflow.replacen(
+        "git ls-tree -rz --name-only",
+        "git ls-tree -r --name-only",
+        1,
+    );
+    assert!(!has_nul_safe_source_checks(&missing_nul));
+
+    let missing_sort = workflow.replacen(
+        "| LC_ALL=C sort -z > /tmp/source-tree-actual.z",
+        "| LC_ALL=C sort > /tmp/source-tree-actual.z",
+        1,
+    );
+    assert!(!has_nul_safe_source_checks(&missing_sort));
+
+    let commented = workflow.replacen(
+        "          find . -mindepth 1 ! -type d -print0",
+        "          # find . -mindepth 1 ! -type d -print0",
+        1,
+    );
+    assert!(!has_nul_safe_source_checks(&commented));
+
+    let active_decoy = commented.replacen(
+        "\n      - name: Anonymous smoke for existing Release",
+        "\n      - name: Decoy source check\n        run: |\n          git ls-tree -rz --name-only \"$TARGET_SHA\" | LC_ALL=C sort -z\n          find . -mindepth 1 ! -type d -print0 | sed -z 's#^\\./##' | LC_ALL=C sort -z\n\n      - name: Anonymous smoke for existing Release",
+        1,
+    );
+    assert!(!has_nul_safe_source_checks(&active_decoy));
+}
+
+#[test]
 fn brand_icon_gate_self_test_is_fail_closed_and_runs_in_ci() {
     let output = std::process::Command::new("pwsh")
         .args([

@@ -242,11 +242,16 @@ jobs:
             "https://github.com/${REPO}/releases/download/${TAG}/${source_name}" \
             -o /tmp/published-source.tar.gz
           cmp /tmp/expected-source.tar.gz /tmp/published-source.tar.gz
-          git ls-tree -r --name-only "$TARGET_SHA" | LC_ALL=C sort > /tmp/published-source-expected.txt
-          tar -tzf /tmp/published-source.tar.gz \
-            | sed -e "s#^${prefix}/##" -e '/^$/d' -e '/\/$/d' \
-            | LC_ALL=C sort > /tmp/published-source-actual.txt
-          diff -u /tmp/published-source-expected.txt /tmp/published-source-actual.txt
+          mkdir -p /tmp/published-source-root
+          tar -xzf /tmp/published-source.tar.gz -C /tmp/published-source-root
+          git ls-tree -rz --name-only "$TARGET_SHA" | LC_ALL=C sort -z > /tmp/published-source-expected.z
+          (
+            cd "/tmp/published-source-root/${prefix}"
+            find . -mindepth 1 ! -type d -print0 \
+              | sed -z 's#^\./##' \
+              | LC_ALL=C sort -z > /tmp/published-source-actual.z
+          )
+          cmp /tmp/published-source-expected.z /tmp/published-source-actual.z
 
       - name: Anonymous smoke for existing Release
         env:
@@ -738,11 +743,16 @@ jobs:
           archive_prefix="ChimeraPlusPlus-${VERSION}-source"
           git archive --format=tar --prefix="ChimeraPlusPlus-${VERSION}-source/" "$TARGET_SHA" \
             | gzip -n > "$source_asset"
-          git ls-tree -r --name-only "$TARGET_SHA" | LC_ALL=C sort > /tmp/source-tree-expected.txt
-          tar -tzf "$source_asset" \
-            | sed -e "s#^${archive_prefix}/##" -e '/^$/d' -e '/\/$/d' \
-            | LC_ALL=C sort > /tmp/source-tree-actual.txt
-          diff -u /tmp/source-tree-expected.txt /tmp/source-tree-actual.txt
+          mkdir -p /tmp/source-tree-root
+          tar -xzf "$source_asset" -C /tmp/source-tree-root
+          git ls-tree -rz --name-only "$TARGET_SHA" | LC_ALL=C sort -z > /tmp/source-tree-expected.z
+          (
+            cd "/tmp/source-tree-root/${archive_prefix}"
+            find . -mindepth 1 ! -type d -print0 \
+              | sed -z 's#^\./##' \
+              | LC_ALL=C sort -z > /tmp/source-tree-actual.z
+          )
+          cmp /tmp/source-tree-expected.z /tmp/source-tree-actual.z
           archive_entries="$(tar -tzf "$source_asset")"
           for required in \
             Cargo.toml \
