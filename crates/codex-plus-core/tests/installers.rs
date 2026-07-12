@@ -813,6 +813,75 @@ fn release_assets_workflow_verifies_chimera_bundle_paths() {
 }
 
 #[test]
+fn release_gate_builds_frontend_before_rust_tests() {
+    fn has_frontend_build_before_rust_tests(workflow: &str) -> bool {
+        let Some((_, gates_and_rest)) = workflow.split_once("\n  gates:") else {
+            return false;
+        };
+        let gates = gates_and_rest
+            .split_once("\n  resolve-version:")
+            .map(|(gates, _)| gates)
+            .unwrap_or(gates_and_rest);
+        let Some(build_index) = gates.find("\n      - name: Build frontend\n") else {
+            return false;
+        };
+        let Some(rust_index) = gates.find("\n      - name: Rust tests\n") else {
+            return false;
+        };
+        let build_rest = &gates[build_index + 1..];
+        let build_end = build_rest[1..]
+            .find("\n      - name: ")
+            .map(|index| index + 1)
+            .unwrap_or(build_rest.len());
+        let build_step = &build_rest[..build_end];
+        build_index < rust_index
+            && build_step.contains("        working-directory: apps/codex-plus-manager\n")
+            && build_step.contains("        run: npm run vite:build\n")
+    }
+
+    let workflow = std::fs::read_to_string("../../.github/workflows/release-assets.yml")
+        .expect("read release-assets workflow");
+    assert!(
+        has_frontend_build_before_rust_tests(&workflow),
+        "release gates must create the Tauri frontendDist before cargo test"
+    );
+
+    let commented = workflow.replacen(
+        "      - name: Build frontend",
+        "      # - name: Build frontend",
+        1,
+    );
+    assert!(!has_frontend_build_before_rust_tests(&commented));
+
+    let build_block = "\n      - name: Build frontend\n        working-directory: apps/codex-plus-manager\n        run: npm run vite:build\n";
+    let missing = workflow.replacen(build_block, "", 1);
+    assert!(!has_frontend_build_before_rust_tests(&missing));
+
+    let wrong_command = workflow.replacen(
+        "        run: npm run vite:build",
+        "        run: npm run build",
+        1,
+    );
+    assert!(!has_frontend_build_before_rust_tests(&wrong_command));
+
+    let after_rust = workflow.replacen(build_block, "", 1).replacen(
+        "\n      - name: Rust tests\n        run: cargo test --workspace --locked\n",
+        &format!(
+            "\n      - name: Rust tests\n        run: cargo test --workspace --locked\n{build_block}"
+        ),
+        1,
+    );
+    assert!(!has_frontend_build_before_rust_tests(&after_rust));
+
+    let decoy = wrong_command.replacen(
+        "\n      - name: Rust formatting\n",
+        "\n      - name: Decoy frontend command\n        working-directory: apps/codex-plus-manager\n        run: npm run vite:build\n\n      - name: Rust formatting\n",
+        1,
+    );
+    assert!(!has_frontend_build_before_rust_tests(&decoy));
+}
+
+#[test]
 fn first_release_publish_job_is_build_first_and_environment_gated() {
     let workflow = std::fs::read_to_string("../../.github/workflows/release-assets.yml")
         .expect("read release-assets workflow");
