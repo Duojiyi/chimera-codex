@@ -70,6 +70,10 @@ jobs:
         working-directory: apps/codex-plus-manager
         run: npm run check
 
+      - name: Build frontend
+        working-directory: apps/codex-plus-manager
+        run: npm run vite:build
+
       - name: Rust formatting
         run: cargo fmt --all -- --check
 
