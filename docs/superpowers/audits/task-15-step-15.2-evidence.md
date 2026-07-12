@@ -27,3 +27,10 @@ The remediation must be committed and pushed. Step 15.2 remains open until the r
 - Workspace Rust then failed `windows_legal_files_share_the_binary_transaction_and_uninstall_mutex`: its negative mutation used an LF-only multi-line replacement, so the Windows CRLF checkout was unchanged.
 - Green replaces only the first exact `IfErrors uninstall_failed` line. That first occurrence is inside `UninstallFile`; LF and CRLF probes both change exactly one line, make the helper fail, and leave the later uninstall section unchanged.
 - Targeted test, formatting and diff gates pass. Independent fixture-remediation audits A and B both pass.
+
+## Third Remote Red
+
+- Run `29199987420` passed the previous installer mutation and reached the manager library tests.
+- `manager_diagnostics_do_not_submit_raw_errors_or_write_logs_in_unit_tests` failed because an LF-only `#[cfg(test)]` split did not cut the CRLF source; the test counted its own assertion as a production diagnostic call (`3` instead of `2`).
+- Green normalizes CRLF and CR to LF before source inspection and requires synthetic CRLF and CR inputs to normalize identically. Removing CR-only normalization is a failing mutation.
+- The fully qualified targeted test runs 1/1 and passes; formatting and diff checks pass. Independent manager line-ending remediation audits A and B pass.

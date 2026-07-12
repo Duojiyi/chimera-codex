@@ -4178,7 +4178,16 @@ mod tests {
 
     #[test]
     fn manager_diagnostics_do_not_submit_raw_errors_or_write_logs_in_unit_tests() {
-        let source = include_str!("commands.rs");
+        let raw_source = include_str!("commands.rs");
+        let normalize_line_endings = |value: &str| value.replace("\r\n", "\n").replace('\r', "\n");
+        let source = normalize_line_endings(raw_source);
+        for synthetic in [source.replace('\n', "\r\n"), source.replace('\n', "\r")] {
+            assert_eq!(
+                normalize_line_endings(&synthetic),
+                source,
+                "diagnostic source contract must be independent of checkout line endings"
+            );
+        }
         let production = source
             .split("\n#[cfg(test)]\nmod tests")
             .next()
