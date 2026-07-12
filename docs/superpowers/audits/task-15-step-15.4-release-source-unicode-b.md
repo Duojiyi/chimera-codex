@@ -132,3 +132,72 @@ wrong-step-active-decoy=False
 | scoped `git diff --check` | PASS；仅现有 LF/CRLF checkout 提示，无 whitespace error |
 
 最终 remediation 同时关闭 B1 和 B2，未发现剩余阻断项。本审计 B 的最终状态由 **FAIL** 更新为 **PASS AFTER REMEDIATION**。
+
+---
+
+## License Contract 同步复审（2026-07-13）
+
+> 范围：`scripts/verify-license.ps1`、`apps/codex-plus-manager/src-tauri/tests/windows_subsystem.rs` 及其对应 workflow token
+> 最终结论：**PASS AFTER REMEDIATION**
+
+### 中途 finding（已关闭）：sorting token 与实际 shell 行不一致
+
+本轮初始 diff 曾要求不存在的 token：
+
+```text
+| LC_ALL=C sort -z > /tmp/source-tree-actual.z
+```
+
+当时 workflow 将重定向放在 subshell 结束行 `) > /tmp/source-tree-actual.z`，生产守卫实际复跑失败。最终 remediation 将两个 actual-list 输出的重定向移动到各自 `sort -z` 行：
+
+```text
+| LC_ALL=C sort -z > /tmp/published-source-actual.z
+| LC_ALL=C sort -z > /tmp/source-tree-actual.z
+```
+
+这与 verifier、manager assertion 和 core helper 的 token 完全一致。重定向仍位于 subshell 内最后一个 pipeline；`set -euo pipefail` 及 subshell 的 pipeline exit status 保持有效，行为与原 subshell 整体重定向等价。
+
+### Token 与 mutation 复核
+
+- publish source 环的 archive、extract、actual sort output 和 final compare token 均使用 `$source_asset` / `/tmp/source-tree-*.z`，不会由已发布资产的 `/tmp/published-source-*` 环替代满足。
+- Git `-z` listing、`find -print0` 和 `sed -z` 在两个环各出现一次；`Assert-ReplacementFails` 使用全局 `.Replace`，对应 self-test 会同时真实改动两个 occurrence，而不是只改不存在的 fixture。
+- actual sorting token 精确且只命中 publish 环；sorting mutation 将 `sort -z` 改为 `sort` 后，生产 required token 消失并产生 finding。
+- `Assert-ReplacementFails` 在 replacement 未改变 fixture 时会记录 `negative case did not mutate fixture`；改变后若 verifier 无 finding，则记录 `negative case passed unexpectedly`。因此 self-test PASS 同时证明每个 case 确实发生 mutation 且被 gate 拒绝。
+- 新 case names 已同步：NUL listing、archive extraction、NUL traversal、NUL normalization、NUL sorting、comparison、required file 和 commented content gate。
+- 旧 case names，以及旧 `.txt` tree-list / `diff -u` contract token 已从 verifier 与 manager test 移除。workflow 中仍存在的 `tar -tzf "$source_asset"` 用于后续 required-file 检查，不是旧 whole-tree comparison 的残留。
+
+`verify-license.ps1` 与 manager test 的部分检查仍是全文 token 检查；comment/decoy/job 边界由同一回归面的 core `release_source_tree_checks_preserve_unicode_paths` 测试补强。该测试限定两个具体 active step，绑定各自 unique actual output，并包含 `missing_sort`、commented find 和 wrong-step active decoy mutations，因此没有剩余可观察伪绿路径。
+
+### 最终验证
+
+| 验证 | 结果 |
+|---|---|
+| `pwsh -NoProfile -File scripts/verify-license.ps1` | PASS |
+| `pwsh -NoProfile -File scripts/verify-license.ps1 -SelfTest` | PASS |
+| manager `github_release_archives_corresponding_source_from_resolved_target` | PASS，1/1 |
+| manager `license_self_test_breaks_each_source_archive_integrity_gate` | PASS，1/1 |
+| core `release_source_tree_checks_preserve_unicode_paths` | PASS，1/1，含 `missing_sort` |
+| scoped `git diff --check` | PASS；仅现有 LF/CRLF checkout 提示，无 whitespace error |
+
+本轮 token mismatch、sorting 环覆盖和 case-name 同步均已关闭；未发现剩余阻断项。
+
+### Expected Sort 最终收紧复核
+
+最终 verifier 不再只要求 `git ls-tree -rz` 前缀，而是精确要求 publish source 环的完整 expected-list 命令：
+
+```text
+git ls-tree -rz --name-only "$TARGET_SHA" | LC_ALL=C sort -z > /tmp/source-tree-expected.z
+```
+
+该 token 同时绑定目标 commit、NUL listing、NUL sort 和 publish 环唯一 expected 输出，不能由 `/tmp/published-source-expected.z` 环或只保留 `git -z` 的 decoy 满足。对应 `Assert-ReplacementFails` 只把该完整行的 `sort -z` 改为 `sort`；fixture 必然实际变化，且 required token 随即消失。actual-list sorting 仍由独立 `/tmp/source-tree-actual.z` token 和 mutation 保护，因此 expected 与 actual 两侧的 NUL sort 各有独立守卫。
+
+manager assertion 已同步完整 expected token，case list同时包含 `source tree expected NUL sorting integrity` 和 `source tree NUL sorting integrity`。core helper继续限定两个具体 active step，并分别绑定 published/publish 的 unique actual outputs。
+
+最终复跑：
+
+- `verify-license.ps1`：PASS；
+- `verify-license.ps1 -SelfTest`：PASS；
+- manager `license_self_test_breaks_each_source_archive_integrity_gate`：PASS，1/1；
+- scoped `git diff --check`：PASS，仅现有 LF/CRLF checkout 提示。
+
+Expected sort 的独立覆盖已关闭，最终结论保持 **PASS AFTER REMEDIATION**。

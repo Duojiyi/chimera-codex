@@ -111,3 +111,61 @@ The focused contract scopes its checks independently to `verify-published-releas
 | `git diff --check` | PASS, exit 0; line-ending conversion warnings only |
 
 No requirement, fail-closed, mutation, or observable release-semantics issue remains in the final candidate. **Second-round independent Audit A: PASS.** A hosted rerun remains necessary for real CI Green before the first release proceeds.
+
+## License Guard Migration - Independent Audit A
+
+> Date: 2026-07-13
+> Hosted Red: PR run `29208950543`
+> Final conclusion: PASS after closing two audit findings
+
+### Hosted Failure And Requirement
+
+Run `29208950543` at commit `a1dc6acca9feeb6af3bac1698e9a26b771aae891` failed only in `Verify license and corresponding source contract`. The hosted log reported that `verify-license.ps1` still required the removed text-path commands:
+
+- `git ls-tree -r --name-only "$TARGET_SHA"`
+- `diff -u /tmp/source-tree-expected.txt /tmp/source-tree-actual.txt`
+
+The separate license self-test and all following build checks were skipped. This establishes that the NUL-safe release implementation was blocked by a stale compliance guard; it does not justify deleting the corresponding-source integrity requirement.
+
+### Final Guard Semantics
+
+`Test-LicenseSnapshot` now replaces the stale text-listing requirements with exact tokens for the pre-publish NUL-safe chain:
+
+1. The complete expected stream command: `git ls-tree -rz --name-only ... | LC_ALL=C sort -z > /tmp/source-tree-expected.z`.
+2. Source archive extraction into `/tmp/source-tree-root`.
+3. NUL traversal with `find ... -print0`.
+4. NUL normalization with `sed -z`.
+5. The unique actual stream command: `LC_ALL=C sort -z > /tmp/source-tree-actual.z`.
+6. Byte comparison of the two `.z` streams with `cmp`.
+
+The existing requirements that bind `git archive` to `TARGET_SHA`, require specific source files, generate the release manifest, upload the exact source archive, and run the draft content gate remain intact. The guard has migrated to the stronger representation; it has not been removed or reduced to a generic substring.
+
+`windows_subsystem.rs` now asserts the same production chain and the updated self-test case names. It no longer treats the obsolete line-oriented listing as the required behavior.
+
+### Mutation Coverage
+
+The self-test has one active negative mutation for every required command boundary:
+
+- Expected NUL listing/sort/output is degraded from `sort -z` to text `sort`.
+- Archive extraction is disabled.
+- `find -print0` is degraded to line-delimited `find -print`.
+- `sed -z` is degraded to line-delimited `sed`.
+- Actual `sort -z` is independently degraded to text `sort`.
+- Final `.z` comparison is disabled.
+
+Each mutation changes a token that the baseline validator requires exactly, and `Assert-ReplacementFails` verifies both that the fixture changed and that validation produced a finding. The Windows integration test requires all corresponding self-test case names, preventing silent removal of a mutation.
+
+During this audit, two gaps were found and closed before PASS: the initial candidate omitted the `sort -z` guard entirely, and the first remediation used a token that did not match the workflow's subshell redirection. The final workflow gives the expected and actual NUL streams unique same-line output commands, and the guard plus mutations bind both.
+
+### Final Verification
+
+| Check | Result |
+| --- | --- |
+| `pwsh -File scripts/verify-license.ps1` | PASS |
+| `pwsh -File scripts/verify-license.ps1 -SelfTest` | PASS |
+| `cargo test -p codex-plus-core --test installers` | PASS, 30/30 |
+| `cargo test -p codex-plus-manager --test windows_subsystem` | PASS, 43/43 |
+| `cargo fmt --all -- --check` | PASS, exit 0 |
+| `git diff --check` | PASS, exit 0; line-ending conversion warnings only |
+
+No license, corresponding-source, mutation, or observable release-semantics issue remains. The stale hosted guard is migrated to the full NUL-safe chain while retaining fail-closed enforcement. **License guard independent Audit A: PASS.**

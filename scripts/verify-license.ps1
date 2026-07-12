@@ -185,9 +185,12 @@ function Test-LicenseSnapshot {
         'test -f "dist/macos/stage/NOTICE"',
         'test -f "dist/macos/stage/SOURCE_CODE.txt"',
         'git archive --format=tar --prefix="ChimeraPlusPlus-${VERSION}-source/" "$TARGET_SHA"',
-        'git ls-tree -r --name-only "$TARGET_SHA"',
-        'tar -tzf "$source_asset"',
-        'diff -u /tmp/source-tree-expected.txt /tmp/source-tree-actual.txt',
+        'git ls-tree -rz --name-only "$TARGET_SHA" | LC_ALL=C sort -z > /tmp/source-tree-expected.z',
+        'tar -xzf "$source_asset" -C /tmp/source-tree-root',
+        'find . -mindepth 1 ! -type d -print0',
+        "sed -z 's#^\./##'",
+        '| LC_ALL=C sort -z > /tmp/source-tree-actual.z',
+        'cmp /tmp/source-tree-expected.z /tmp/source-tree-actual.z',
         'apps/codex-plus-manager/package-lock.json',
         'scripts/installer/windows/CodexPlusPlus.nsi',
         'scripts/installer/macos/package-dmg.sh',
@@ -307,9 +310,12 @@ function Invoke-SelfTests([hashtable]$Snapshot) {
     Assert-ReplacementFails 'English README license mismatch' 'README_EN.md' 'AGPL-3.0-only' 'MIT'
     Assert-ReplacementFails 'source URL leaves origin' '.github/workflows/release-assets.yml' 'https://github.com/Duojiyi/chimera-codex/releases/download/${TAG}/${source_asset}' 'https://example.invalid/source.tar.gz'
     Assert-ReplacementFails 'source archive not bound to TARGET_SHA' '.github/workflows/release-assets.yml' 'git archive --format=tar --prefix="ChimeraPlusPlus-${VERSION}-source/" "$TARGET_SHA"' 'git archive --format=tar HEAD'
-    Assert-ReplacementFails 'source tree listing integrity' '.github/workflows/release-assets.yml' 'git ls-tree -r --name-only "$TARGET_SHA"' 'printf tree-listing-disabled'
-    Assert-ReplacementFails 'source archive listing integrity' '.github/workflows/release-assets.yml' 'tar -tzf "$source_asset"' 'printf archive-listing-disabled'
-    Assert-ReplacementFails 'source tree diff integrity' '.github/workflows/release-assets.yml' 'diff -u /tmp/source-tree-expected.txt /tmp/source-tree-actual.txt' 'printf tree-diff-disabled'
+    Assert-ReplacementFails 'source tree expected NUL sorting integrity' '.github/workflows/release-assets.yml' 'git ls-tree -rz --name-only "$TARGET_SHA" | LC_ALL=C sort -z > /tmp/source-tree-expected.z' 'git ls-tree -rz --name-only "$TARGET_SHA" | LC_ALL=C sort > /tmp/source-tree-expected.z'
+    Assert-ReplacementFails 'source archive extraction integrity' '.github/workflows/release-assets.yml' 'tar -xzf "$source_asset" -C /tmp/source-tree-root' 'printf archive-extraction-disabled'
+    Assert-ReplacementFails 'source tree NUL traversal integrity' '.github/workflows/release-assets.yml' 'find . -mindepth 1 ! -type d -print0' 'find . -mindepth 1 ! -type d -print'
+    Assert-ReplacementFails 'source tree NUL normalization integrity' '.github/workflows/release-assets.yml' "sed -z 's#^\./##'" "sed 's#^\./##'"
+    Assert-ReplacementFails 'source tree NUL sorting integrity' '.github/workflows/release-assets.yml' '| LC_ALL=C sort -z > /tmp/source-tree-actual.z' '| LC_ALL=C sort > /tmp/source-tree-actual.z'
+    Assert-ReplacementFails 'source tree comparison integrity' '.github/workflows/release-assets.yml' 'cmp /tmp/source-tree-expected.z /tmp/source-tree-actual.z' 'printf tree-comparison-disabled'
     Assert-ReplacementFails 'source required-file integrity' '.github/workflows/release-assets.yml' 'apps/codex-plus-manager/package-lock.json' 'required-file-check-disabled'
     Assert-RegexReplacementFails 'commented draft asset content gate' '.github/workflows/release-assets.yml' '(?m)^(\s*)verify_draft_assets_content\s*$' '$1# verify_draft_assets_content'
 

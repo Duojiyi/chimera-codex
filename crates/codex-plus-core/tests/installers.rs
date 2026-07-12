@@ -1373,16 +1373,17 @@ fn release_source_tree_checks_preserve_unicode_paths() {
             step.matches(nul_listing).count() == 1
                 && step.matches(nul_find).count() == 1
                 && step.matches(nul_strip).count() == 1
-                && step.matches("LC_ALL=C sort -z").count() >= 2
         }) && published.contains("mkdir -p /tmp/published-source-root")
             && published
                 .contains("tar -xzf /tmp/published-source.tar.gz -C /tmp/published-source-root")
             && published.contains("cd \"/tmp/published-source-root/${prefix}\"")
+            && published.contains("| LC_ALL=C sort -z > /tmp/published-source-actual.z")
             && published
                 .contains("cmp /tmp/published-source-expected.z /tmp/published-source-actual.z")
             && publish.contains("mkdir -p /tmp/source-tree-root")
             && publish.contains("tar -xzf \"$source_asset\" -C /tmp/source-tree-root")
             && publish.contains("cd \"/tmp/source-tree-root/${archive_prefix}\"")
+            && publish.contains("| LC_ALL=C sort -z > /tmp/source-tree-actual.z")
             && publish.contains("cmp /tmp/source-tree-expected.z /tmp/source-tree-actual.z")
     }
 
@@ -1399,6 +1400,13 @@ fn release_source_tree_checks_preserve_unicode_paths() {
         1,
     );
     assert!(!has_nul_safe_source_checks(&missing_nul));
+
+    let missing_sort = workflow.replacen(
+        "| LC_ALL=C sort -z > /tmp/source-tree-actual.z",
+        "| LC_ALL=C sort > /tmp/source-tree-actual.z",
+        1,
+    );
+    assert!(!has_nul_safe_source_checks(&missing_sort));
 
     let commented = workflow.replacen(
         "          find . -mindepth 1 ! -type d -print0",

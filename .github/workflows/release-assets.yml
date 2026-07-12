@@ -249,8 +249,8 @@ jobs:
             cd "/tmp/published-source-root/${prefix}"
             find . -mindepth 1 ! -type d -print0 \
               | sed -z 's#^\./##' \
-              | LC_ALL=C sort -z
-          ) > /tmp/published-source-actual.z
+              | LC_ALL=C sort -z > /tmp/published-source-actual.z
+          )
           cmp /tmp/published-source-expected.z /tmp/published-source-actual.z
 
       - name: Anonymous smoke for existing Release
@@ -750,8 +750,8 @@ jobs:
             cd "/tmp/source-tree-root/${archive_prefix}"
             find . -mindepth 1 ! -type d -print0 \
               | sed -z 's#^\./##' \
-              | LC_ALL=C sort -z
-          ) > /tmp/source-tree-actual.z
+              | LC_ALL=C sort -z > /tmp/source-tree-actual.z
+          )
           cmp /tmp/source-tree-expected.z /tmp/source-tree-actual.z
           archive_entries="$(tar -tzf "$source_asset")"
           for required in \
