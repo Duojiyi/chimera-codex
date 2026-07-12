@@ -266,10 +266,10 @@ jobs:
           # Close any prior blocked Issue for this upstream version on success path.
           $version = ($tag -replace '^v','')
           $title = "[sync:v$version] upstream sync blocked"
-          $issues = gh issue list --state open --search "$title in:title" --json number,title
+          $issues = gh issue list --repo "$env:GITHUB_REPOSITORY" --state open --search "$title in:title" --json number,title
           $issues | ConvertFrom-Json | ForEach-Object {
             if ($_.title -eq $title) {
-              gh issue close $_.number --comment "Sync PR prepared and auto-merge enabled; closing blocked Issue."
+              gh issue close $_.number --repo "$env:GITHUB_REPOSITORY" --comment "Sync PR prepared and auto-merge enabled; closing blocked Issue."
             }
           }
 
@@ -322,13 +322,13 @@ jobs:
           This Issue is deduplicated by exact title; the body must never contain secrets or tokens.
           "@
 
-          $open = gh issue list --state open --search "$title in:title" --json number,title
+          $open = gh issue list --repo "$env:GITHUB_REPOSITORY" --state open --search "$title in:title" --json number,title
           $hit = ($open | ConvertFrom-Json) | Where-Object { $_.title -eq $title } | Select-Object -First 1
           if ($hit) {
-            gh issue edit $hit.number --body $body
+            gh issue edit $hit.number --repo "$env:GITHUB_REPOSITORY" --body $body
             Write-Host "Updated Issue #$($hit.number)"
           } else {
-            gh issue create --title $title --body $body
+            gh issue create --repo "$env:GITHUB_REPOSITORY" --title $title --body $body
           }
 
       - name: Fail job on conflict or gate failure

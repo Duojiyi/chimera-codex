@@ -860,6 +860,105 @@ fn release_baseline_docs_disclose_post_tag_source_snapshot() {
 }
 
 #[test]
+fn upstream_sync_issue_commands_bind_repository_explicitly() {
+    fn job<'a>(workflow: &'a str, name: &str, next: Option<&str>) -> Option<&'a str> {
+        let (_, rest) = workflow.split_once(&format!("\n  {name}:\n"))?;
+        match next {
+            Some(next) => rest
+                .split_once(&format!("\n  {next}:\n"))
+                .map(|(job, _)| job),
+            None => Some(rest),
+        }
+    }
+
+    fn step<'a>(job: &'a str, name: &str) -> Option<&'a str> {
+        let (_, rest) = job.split_once(&format!("\n      - name: {name}\n"))?;
+        Some(
+            rest.split_once("\n      - name: ")
+                .map(|(step, _)| step)
+                .unwrap_or(rest),
+        )
+    }
+
+    fn active_issue_commands(step: &str) -> Vec<&str> {
+        step.lines()
+            .map(str::trim_start)
+            .filter(|line| !line.starts_with('#') && line.contains("gh issue "))
+            .collect()
+    }
+
+    fn has_bound_issue_commands(workflow: &str) -> bool {
+        let Some(publish_job) = job(workflow, "publish-sync-pr", Some("report-blocked")) else {
+            return false;
+        };
+        let Some(report_job) = job(workflow, "report-blocked", None) else {
+            return false;
+        };
+        if report_job.contains("uses: actions/checkout") {
+            return false;
+        }
+        let Some(success_step) = step(publish_job, "Push sync branch and open PR") else {
+            return false;
+        };
+        let Some(blocked_step) = step(
+            report_job,
+            "Upsert blocked Issue (conflict or gate failure)",
+        ) else {
+            return false;
+        };
+        let success = active_issue_commands(success_step);
+        let blocked = active_issue_commands(blocked_step);
+        let repo = "--repo \"$env:GITHUB_REPOSITORY\"";
+
+        success.len() == 2
+            && success.iter().all(|line| line.contains(repo))
+            && success.iter().any(|line| line.contains("gh issue list "))
+            && success.iter().any(|line| line.contains("gh issue close "))
+            && blocked.len() == 3
+            && blocked.iter().all(|line| line.contains(repo))
+            && blocked.iter().any(|line| line.contains("gh issue list "))
+            && blocked.iter().any(|line| line.contains("gh issue edit "))
+            && blocked.iter().any(|line| line.contains("gh issue create "))
+    }
+
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .and_then(std::path::Path::parent)
+        .unwrap();
+    let workflow = std::fs::read_to_string(root.join(".github/workflows/sync-upstream.yml"))
+        .expect("read sync workflow")
+        .replace("\r\n", "\n");
+    assert!(has_bound_issue_commands(&workflow));
+
+    let missing_close =
+        workflow.replacen("gh issue close $_.number", "gh issue list --state open", 1);
+    assert!(!has_bound_issue_commands(&missing_close));
+
+    let checkout_in_report = workflow.replacen(
+        "  report-blocked:\n",
+        "  report-blocked:\n    steps:\n      - uses: actions/checkout@decoy\n",
+        1,
+    );
+    assert!(!has_bound_issue_commands(&checkout_in_report));
+
+    let commented_create = workflow.replacen(
+        "            gh issue create --repo",
+        "            # gh issue create --repo",
+        1,
+    );
+    assert!(!has_bound_issue_commands(&commented_create));
+
+    let wrong_step_decoy = commented_create.replacen(
+        "      - name: Fail job on conflict or gate failure",
+        "      - name: Decoy Issue command\n        run: gh issue create --repo \"$env:GITHUB_REPOSITORY\" --title decoy --body decoy\n\n      - name: Fail job on conflict or gate failure",
+        1,
+    );
+    assert!(!has_bound_issue_commands(&wrong_step_decoy));
+}
+
+#[test]
 fn relay_settings_keeps_profile_config_and_auth_files_isolated() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
