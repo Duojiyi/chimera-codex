@@ -20,3 +20,10 @@
 ## Pending Remote Gate
 
 The remediation must be committed and pushed. Step 15.2 remains open until the replacement PR run passes gates, Windows artifacts and macOS x64/arm64 builds at the pushed commit.
+
+## Second Remote Red
+
+- Replacement run `29199419608` passed license, branding, ads, icon, frontend and format gates.
+- Workspace Rust then failed `windows_legal_files_share_the_binary_transaction_and_uninstall_mutex`: its negative mutation used an LF-only multi-line replacement, so the Windows CRLF checkout was unchanged.
+- Green replaces only the first exact `IfErrors uninstall_failed` line. That first occurrence is inside `UninstallFile`; LF and CRLF probes both change exactly one line, make the helper fail, and leave the later uninstall section unchanged.
+- Targeted test, formatting and diff gates pass. Independent fixture-remediation audits A and B both pass.

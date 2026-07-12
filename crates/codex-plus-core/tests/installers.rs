@@ -747,9 +747,10 @@ fn windows_legal_files_share_the_binary_transaction_and_uninstall_mutex() {
     }
 
     assert!(uninstall_file_macro_is_fail_closed(&nsi));
-    let commented_error_jump = nsi.replace(
-        "  IfErrors uninstall_failed\nuninstall_file_${SLOT}_done:",
-        "  ; IfErrors uninstall_failed\nuninstall_file_${SLOT}_done:",
+    let commented_error_jump = nsi.replacen(
+        "  IfErrors uninstall_failed",
+        "  ; IfErrors uninstall_failed",
+        1,
     );
     assert_ne!(
         commented_error_jump, nsi,
