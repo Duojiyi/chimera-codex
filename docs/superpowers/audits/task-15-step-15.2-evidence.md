@@ -43,6 +43,13 @@ The remediation must be committed and pushed. Step 15.2 remains open until the r
 - The focused regression runs 1/1 and verifies both the outer context and inner error text. The complete core suite, including core unit `157/157`, launcher `66/66`, installer `28/28` and updater `53/53`, passes locally.
 - `cargo fmt --all -- --check` and `git diff --check` pass. Independent macOS FD-context remediation audits A and B both pass.
 
-## Fourth Remediation Pending Remote Gate
+## Replacement Remote Green
 
-The audited remediation must pass a replacement PR run on Windows x64 and both macOS architectures. Step 15.2 remains open until all four required checks are green at the new pushed SHA.
+- Commit `f23ab828499a25df77035d245577b6656adfbd79` triggered run `29201732498`.
+- `Branding / ads / Rust / frontend`: SUCCESS.
+- `Windows artifacts`: SUCCESS; Windows zip and installer artifacts uploaded.
+- `macOS DMG (x64)`: SUCCESS; the formerly failing macOS core test step passed and DMG/zip artifacts uploaded.
+- `macOS DMG (arm64)`: SUCCESS; the formerly failing macOS core test step passed and DMG/zip artifacts uploaded.
+- Run conclusion: SUCCESS. All four exact required checks passed at the same PR head SHA.
+
+Step 15.2 has complete Red/Green platform evidence. Its checkbox remains gated only on the final independent Step 15.2 audits.

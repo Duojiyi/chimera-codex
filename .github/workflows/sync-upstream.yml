@@ -3,12 +3,9 @@ name: Sync upstream
 # Watches BigPizzaV3/CodexPlusPlus formal Releases and opens a sync PR.
 # Does NOT create GitHub Releases; main publishes via release-assets.yml after merge.
 #
-# Secret (configure in the protected upstream-sync Environment; never commit the value):
-#   CHIMERA_AUTOMATION_TOKEN — fine-grained PAT or GitHub App token with minimal
-#   Contents, Pull requests, and Issues read/write scope on Duojiyi/chimera-codex.
-#   Prefer a GitHub App when available. Required so opened PRs can trigger checks
-#   (default GITHUB_TOKEN cannot).
-# The long-lived token is exposed only after merge/test gates pass, in the PR step.
+# The PR job uses its short-lived GITHUB_TOKEN with job-scoped permissions. PRs
+# created by GITHUB_TOKEN do not emit recursive pull_request runs, so the job
+# explicitly dispatches pr-build.yml for the gated branch before enabling merge.
 
 on:
   schedule:
@@ -153,7 +150,10 @@ jobs:
     runs-on: windows-latest
     environment: upstream-sync
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
+      actions: write
+      issues: write
     steps:
       - name: Checkout trusted main
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -170,25 +170,28 @@ jobs:
       - name: Push sync branch and open PR
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.CHIMERA_AUTOMATION_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           SYNC_BRANCH: ${{ needs.prepare.outputs.sync_branch }}
           UPSTREAM_TAG: ${{ needs.prepare.outputs.upstream_tag }}
           CHIMERA_VERSION: ${{ needs.prepare.outputs.chimera_version }}
           GATED_SHA: ${{ needs.prepare.outputs.gated_sha }}
           ACTION: ${{ needs.prepare.outputs.action }}
+          TRUSTED_MAIN_SHA: ${{ github.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          if (-not $env:GH_TOKEN) { throw "CHIMERA_AUTOMATION_TOKEN is not configured" }
+          if (-not $env:GH_TOKEN) { throw "GITHUB_TOKEN is not available" }
           $branch = $env:SYNC_BRANCH
           $tag = $env:UPSTREAM_TAG
           $ver = $env:CHIMERA_VERSION
           $gatedSha = $env:GATED_SHA
           $action = $env:ACTION
+          $trustedMainSha = $env:TRUSTED_MAIN_SHA
           if ($branch -notmatch '^sync/upstream-v\d+\.\d+\.\d+$') { throw "unsafe sync branch" }
           if ($tag -notmatch '^v?\d+\.\d+\.\d+$') { throw "unsafe upstream tag" }
           if ($ver -notmatch '^\d+\.\d+\.\d+-chimera\.\d+$') { throw "unsafe Chimera version" }
           if ($gatedSha -notmatch '^[0-9a-f]{40}$') { throw "unsafe gated SHA" }
+          if ($trustedMainSha -notmatch '^[0-9a-f]{40}$') { throw "unsafe trusted main SHA" }
           if ($action -notin @('prepared', 'resume')) { throw "unsafe sync action" }
 
           $resultPath = Join-Path $env:RUNNER_TEMP "sync-artifact/sync-result.json"
@@ -215,6 +218,12 @@ jobs:
             $actual = (git rev-parse "refs/heads/$branch").Trim()
             if ($actual -ne $gatedSha) { throw "remote sync branch changed after gates" }
           }
+
+          git cat-file -e "${trustedMainSha}^{commit}"
+          if ($LASTEXITCODE -ne 0) { throw "trusted main commit is unavailable" }
+          git diff --quiet $trustedMainSha "refs/heads/$branch" -- .github/workflows
+          if ($LASTEXITCODE -eq 1) { throw "candidate changes protected workflow tree" }
+          if ($LASTEXITCODE -ne 0) { throw "failed to verify protected workflow tree" }
 
           gh auth setup-git
           if ($LASTEXITCODE -ne 0) { throw "failed to configure Git authentication" }
@@ -246,6 +255,9 @@ jobs:
             Write-Host "Created PR: $url"
             $pr = gh pr list --head $branch --state open --json number --jq '.[0].number'
           }
+
+          gh workflow run pr-build.yml --ref $branch
+          if ($LASTEXITCODE -ne 0) { throw "failed to dispatch PR checks" }
 
           # Enable auto-merge once checks are green (branch protection enforces required checks).
           gh pr merge $pr --auto --squash

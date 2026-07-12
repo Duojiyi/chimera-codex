@@ -98,9 +98,9 @@ README 首页改为客户安装与使用说明，先讲下载、安装、输入 
 
 - 上游最新正式 Release：`v1.2.34`，tag commit `c1360294d43fce06116428555cbcf812902aced5`。
 - 本地 HEAD 与 `origin/main` 都包含该 tag；上游 `main` 另有 5 个未发布提交，因此不进入自动发行基线。
-- 本地 `codex/docs-initialization` 比其远端分支领先 11 个提交，且仍有大量未提交修复。
-- `Duojiyi/chimera-codex` 当前没有 Release；PR #1 阻塞，最近三次 Actions 失败。远端 Windows job 的两个 watcher 测试失败，本地修复尚未推送。
-- `CHIMERA_AUTOMATION_TOKEN` 尚未配置，远端只存在旧版 issue-triage、PR build 和 release workflows，sync workflow 尚未上线。
+- PR #1 的 `f23ab82` 已由 run `29201732498` 完成综合门、Windows、macOS x64 与 macOS arm64 全绿；治理补救仍在本地等待最终审计与推送。
+- `Duojiyi/chimera-codex` 当前仍没有 Release；首发必须等待 PR 合并和 `public-release` 审批。
+- 同步 workflow 改用 job-scoped `GITHUB_TOKEN`，恢复并复核可信 main workflow 树后显式 dispatch PR checks，不再需要长期 `CHIMERA_AUTOMATION_TOKEN`；该 workflow 尚待 PR 合入 `main` 后上线。
 
 ## 9. 首发与远端写入门
 

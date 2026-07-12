@@ -28,9 +28,9 @@
 
 ## 当前阻断事实
 
-- [ ] 本地大量改动尚未提交/推送；远端 PR #1 只到 `161c4f4`，本地 HEAD 为 `693893d` 且另有未提交修复
+- [ ] PR #1 的 `f23ab82` 已完成四项 required checks 全绿；本地仍有治理补救和审计证据待提交/推送
 - [ ] 本项目当前没有 GitHub Release 或 `latest.json`
-- [ ] 最近三次 Actions 都失败；最新 PR run 的 Windows watcher 两项测试失败
-- [ ] 远端尚无 `sync-upstream` workflow，`CHIMERA_AUTOMATION_TOKEN` 未配置
+- [ ] 最终治理提交尚需新的 PR run；此前全绿 run 为 `29201732498`
+- [ ] `sync-upstream` 尚待合入 `main`；最终方案使用短生命周期 `GITHUB_TOKEN` 显式 dispatch，不配置长期 automation secret
 - [ ] 未完成 Windows/macOS 实机安装、覆盖升级、Gatekeeper 和自动更新冒烟
 - [ ] 未确认并补齐本仓库最终发行许可证文件；不得继续声称未经证实的 MIT

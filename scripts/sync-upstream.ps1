@@ -564,6 +564,40 @@ function Invoke-Gates {
     }
 }
 
+function Assert-ProtectedWorkflowTree {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$TrustedRef,
+        [string]$CandidateRef = 'HEAD',
+        [switch]$Cached
+    )
+
+    $diffArgs = @('diff')
+    if ($Cached) { $diffArgs += '--cached' }
+    $diffArgs += @('--quiet', $TrustedRef)
+    if (-not $Cached) { $diffArgs += $CandidateRef }
+    $diffArgs += @('--', '.github/workflows')
+    $diff = Invoke-Git -WorkDir $Root -Args $diffArgs
+    if ($diff.Code -eq 1) {
+        throw "candidate changes protected workflow tree relative to $TrustedRef"
+    }
+    if ($diff.Code -ne 0) {
+        throw "failed to verify protected workflow tree (exit $($diff.Code)): $($diff.Text)"
+    }
+}
+
+function Restore-ProtectedWorkflowTree {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$TrustedRef
+    )
+
+    $restoreArgs = @('restore', "--source=$TrustedRef", '--staged', '--worktree', '--', '.github/workflows')
+    $restore = Invoke-Git -WorkDir $Root -Args $restoreArgs
+    Require-GitOk -Result $restore -Context 'restore protected workflow tree from trusted main'
+    Assert-ProtectedWorkflowTree -Root $Root -TrustedRef $TrustedRef -Cached
+}
+
 function Test-RemoteSyncBranch {
     param(
         [Parameter(Mandatory)][string]$Root,
@@ -595,6 +629,7 @@ function Test-RemoteSyncBranch {
     if ($tagAncestry.Code -ne 0) {
         throw "remote sync branch does not contain formal upstream tag $ExpectedUpstreamTag"
     }
+    Assert-ProtectedWorkflowTree -Root $Root -TrustedRef 'origin/main' -CandidateRef $remoteRef
     $worktreePath = Join-Path ([System.IO.Path]::GetTempPath()) ("chimera-resume-" + [guid]::NewGuid().ToString('N'))
     $worktree = Invoke-Git -Args @('worktree', 'add', '--detach', $worktreePath, $remoteRef)
     Require-GitOk -Result $worktree -Context "create resume worktree for $SyncBranch"
@@ -858,6 +893,8 @@ try {
         Set-ResultAndExit -Code 2 -Message "Merge conflict syncing $upstreamTag (aborted). Files: $($files -join ', ')" -Action 'conflict'
     }
 
+    Restore-ProtectedWorkflowTree -Root $worktreePath -TrustedRef $mainSha
+
     Write-Info "Setting version $chimeraVersion and bumping macos_build_number..."
     Set-WorkspaceChimeraVersion -Root $worktreePath -Version $chimeraVersion
 
@@ -925,6 +962,7 @@ Gates: branding, lock validation, no-promo scan, cargo fmt --check, cargo test -
         Invoke-Git -Args @('branch', '-D', $syncBranch) | Out-Null
         Set-ResultAndExit -Code 4 -Message "Sync candidate produced unsafe SHA: $candidateSha" -Action 'error'
     }
+    Assert-ProtectedWorkflowTree -Root $worktreePath -TrustedRef $mainSha -CandidateRef 'HEAD'
 
     if (-not $SkipGates) {
         try {
