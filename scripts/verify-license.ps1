@@ -85,7 +85,21 @@ function Test-LicenseSnapshot {
         'END OF TERMS AND CONDITIONS'
     )
     if ($CheckLicenseHash -and $license) {
-        $licenseHash = (Get-FileHash -LiteralPath (Join-Path $root 'LICENSE') -Algorithm SHA256).Hash
+        $canonicalLicense = $license
+        $bomMarker = [string]([char]0xFEFF)
+        if ($canonicalLicense.StartsWith($bomMarker, [StringComparison]::Ordinal)) {
+            $canonicalLicense = $canonicalLicense.Substring(1)
+        }
+        $canonicalLicense = $canonicalLicense.Replace("`r`n", "`n").Replace("`r", "`n")
+        $sha256 = [Security.Cryptography.SHA256]::Create()
+        try {
+            $licenseHash = [BitConverter]::ToString(
+                $sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($canonicalLicense))
+            ).Replace('-', '')
+        }
+        finally {
+            $sha256.Dispose()
+        }
         if ($licenseHash -ne '8486A10C4393CEE1C25392769DDD3B2D6C242D6EC7928E1414EFFF7DFB2F07EF') {
             Add-Finding "LICENSE SHA-256 mismatch: $licenseHash"
         }
@@ -204,6 +218,41 @@ function Invoke-SelfTests([hashtable]$Snapshot) {
     $baseline = Test-LicenseSnapshot -Files $Snapshot -CheckLicenseHash
     if ($baseline.Findings.Count -gt 0) {
         $selfTestFailures.Add("baseline fixture failed: $($baseline.Findings -join '; ')") | Out-Null
+    }
+
+    foreach ($lineEnding in @("`n", "`r`n", "`r")) {
+        $fixture = Copy-Snapshot $Snapshot
+        $fixture['LICENSE'] = ([string]$fixture['LICENSE']).Replace("`r`n", "`n").Replace("`r", "`n").Replace("`n", $lineEnding)
+        $result = Test-LicenseSnapshot -Files $fixture -CheckLicenseHash
+        if ($result.Findings.Count -gt 0) {
+            $selfTestFailures.Add("canonical LICENSE hash rejected a supported line ending: $($result.Findings -join '; ')") | Out-Null
+        }
+    }
+
+    $tamperedLicense = Copy-Snapshot $Snapshot
+    $tamperedLicense['LICENSE'] = ([string]$tamperedLicense['LICENSE']) + "`nlicense-hash-tamper-fixture"
+    $tamperedResult = Test-LicenseSnapshot -Files $tamperedLicense -CheckLicenseHash
+    if (-not ($tamperedResult.Findings -match 'LICENSE SHA-256 mismatch')) {
+        $selfTestFailures.Add('LICENSE content mutation did not fail the canonical hash') | Out-Null
+    }
+
+    $bomLicense = Copy-Snapshot $Snapshot
+    $bomLicense['LICENSE'] = ([char]0xFEFF) + [string]$bomLicense['LICENSE']
+    $bomResult = Test-LicenseSnapshot -Files $bomLicense -CheckLicenseHash
+    if ($bomResult.Findings.Count -gt 0) {
+        $selfTestFailures.Add("canonical LICENSE hash rejected a leading UTF-8 BOM: $($bomResult.Findings -join '; ')") | Out-Null
+    }
+
+    $embeddedBomLicense = Copy-Snapshot $Snapshot
+    $embeddedBomLicense['LICENSE'] = [regex]::Replace(
+        [string]$embeddedBomLicense['LICENSE'],
+        "`n",
+        "`n$([char]0xFEFF)",
+        1
+    )
+    $embeddedBomResult = Test-LicenseSnapshot -Files $embeddedBomLicense -CheckLicenseHash
+    if (-not ($embeddedBomResult.Findings -match 'LICENSE SHA-256 mismatch')) {
+        $selfTestFailures.Add('embedded LICENSE BOM did not fail the canonical hash') | Out-Null
     }
 
     function Assert-MissingFileFails([string]$Name, [string]$Path) {
