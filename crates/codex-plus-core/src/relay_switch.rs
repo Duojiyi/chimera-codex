@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
@@ -25,24 +25,137 @@ pub fn switch_relay_profile_in_home(
         anyhow::bail!("供应商配置总开关已关闭，未写入 config.toml / auth.json。");
     }
 
-    let original_settings = store.load().unwrap_or_default();
+    let original_settings_snapshot = store.snapshot_bytes()?;
+    let selected_profile = selected_settings.active_relay_profile();
+    let live_snapshot = LiveFilesSnapshot::capture(home, &selected_profile)?;
     if !previous_active_relay_id.trim().is_empty()
         && previous_active_relay_id != selected_settings.active_relay_id
     {
         backfill_profile_before_switch(home, &mut selected_settings, previous_active_relay_id)?;
     }
 
-    store
-        .save(&selected_settings)
-        .context("保存供应商设置失败")?;
-    let selected_settings = store.load().context("读取供应商设置失败")?;
+    let switch_result = (|| {
+        let selected_settings = store
+            .save_normalized(&selected_settings)
+            .context("保存供应商设置失败")?;
+        apply_selected_relay_profile(home, &selected_settings)
+    })();
 
-    match apply_selected_relay_profile(home, &selected_settings) {
+    match switch_result {
         Ok(result) => Ok(result),
         Err(error) => {
-            let _ = store.save(&original_settings);
-            Err(error)
+            let settings_rollback = store.restore_snapshot(original_settings_snapshot.as_deref());
+            let live_rollback = live_snapshot.restore();
+            match (settings_rollback, live_rollback) {
+                (Ok(()), Ok(())) => Err(error),
+                (settings_result, live_result) => {
+                    let mut failures = Vec::new();
+                    if let Err(rollback_error) = settings_result {
+                        failures.push(format!("settings.json: {rollback_error}"));
+                    }
+                    if let Err(rollback_error) = live_result {
+                        failures.push(format!("live files: {rollback_error}"));
+                    }
+                    Err(error.context(format!(
+                        "供应商切换失败，且回滚未完整完成：{}",
+                        failures.join("; ")
+                    )))
+                }
+            }
         }
+    }
+}
+
+#[derive(Debug)]
+struct FileSnapshot {
+    path: PathBuf,
+    bytes: Option<Vec<u8>>,
+}
+
+impl FileSnapshot {
+    fn capture(path: PathBuf) -> anyhow::Result<Self> {
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(error).with_context(|| format!("读取事务快照失败：{}", path.display()));
+            }
+        };
+        Ok(Self { path, bytes })
+    }
+
+    fn restore(&self) -> anyhow::Result<()> {
+        match self.bytes.as_deref() {
+            Some(bytes) => crate::settings::atomic_write(&self.path, bytes),
+            None => match std::fs::remove_file(&self.path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error)
+                    .with_context(|| format!("删除事务中新建文件失败：{}", self.path.display())),
+            },
+        }
+    }
+}
+
+#[derive(Debug)]
+struct LiveFilesSnapshot {
+    config: FileSnapshot,
+    auth: FileSnapshot,
+    catalog: FileSnapshot,
+    catalog_parent_existed: bool,
+}
+
+impl LiveFilesSnapshot {
+    fn capture(home: &Path, profile: &crate::settings::RelayProfile) -> anyhow::Result<Self> {
+        let catalog_path = crate::relay_config::generated_model_catalog_path(home, profile);
+        let catalog_parent_existed = catalog_path.parent().is_some_and(Path::exists);
+        Ok(Self {
+            config: FileSnapshot::capture(home.join("config.toml"))?,
+            auth: FileSnapshot::capture(home.join("auth.json"))?,
+            catalog: FileSnapshot::capture(catalog_path)?,
+            catalog_parent_existed,
+        })
+    }
+
+    fn restore(&self) -> anyhow::Result<()> {
+        let config_result = self.config.restore();
+        let auth_result = self.auth.restore();
+        let catalog_result = self.catalog.restore();
+        let catalog_parent_result = self.remove_created_catalog_parent_if_empty();
+        let mut failures = Vec::new();
+        for (name, result) in [
+            ("config.toml", config_result),
+            ("auth.json", auth_result),
+            ("model catalog", catalog_result),
+            ("model catalog directory", catalog_parent_result),
+        ] {
+            if let Err(error) = result {
+                failures.push(format!("{name}: {error}"));
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            anyhow::bail!(failures.join("; "))
+        }
+    }
+
+    fn remove_created_catalog_parent_if_empty(&self) -> anyhow::Result<()> {
+        if self.catalog_parent_existed {
+            return Ok(());
+        }
+        let Some(parent) = self.catalog.path.parent() else {
+            return Ok(());
+        };
+        let mut entries = match std::fs::read_dir(parent) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error).context("读取新建 model-catalogs 目录失败"),
+        };
+        if entries.next().is_none() {
+            std::fs::remove_dir(parent).context("删除事务中新建的空 model-catalogs 目录")?;
+        }
+        Ok(())
     }
 }
 

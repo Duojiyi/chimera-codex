@@ -37,10 +37,17 @@ struct CodexConfig {
 pub async fn read_codex_model_catalog() -> Value {
     let home = codex_home_dir();
     let settings_path = crate::paths::default_settings_path();
+    read_codex_model_catalog_from_paths(&home, &settings_path).await
+}
+
+pub async fn read_codex_model_catalog_from_paths(home: &Path, settings_path: &Path) -> Value {
     if settings_path.exists() {
-        if let Ok(settings) = SettingsStore::new(settings_path).load() {
+        if let Ok(settings) =
+            SettingsStore::new_with_codex_home(settings_path.to_path_buf(), home.to_path_buf())
+                .load()
+        {
             let profile = settings.active_relay_profile();
-            let catalog = relay_profile_model_catalog_value(&home, &profile);
+            let catalog = relay_profile_model_catalog_value(home, &profile);
             if catalog
                 .get("models")
                 .and_then(Value::as_array)
@@ -51,7 +58,9 @@ pub async fn read_codex_model_catalog() -> Value {
         }
     }
     let env = std::env::vars().collect::<HashMap<_, _>>();
-    let client = match crate::http_client::proxied_client("CodexPlusPlus/1.0") {
+    let client = match crate::http_client::proxied_client(&crate::http_client::branded_user_agent(
+        "ModelCatalog",
+    )) {
         Ok(client) => client,
         Err(error) => {
             return json!({
@@ -68,7 +77,7 @@ pub async fn read_codex_model_catalog() -> Value {
             });
         }
     };
-    read_codex_model_catalog_from_home(&home, &env, client).await
+    read_codex_model_catalog_from_home(home, &env, client).await
 }
 
 fn relay_profile_model_catalog_value(home: &Path, profile: &RelayProfile) -> Value {

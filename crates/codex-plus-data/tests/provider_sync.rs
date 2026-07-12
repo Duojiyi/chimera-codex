@@ -376,7 +376,7 @@ fn provider_sync_backup_metadata_contains_reference_fields_and_managed_marker() 
     assert_eq!(metadata["codexHome"], home.to_string_lossy().to_string());
     assert_eq!(metadata["targetProvider"], "apigather");
     assert_eq!(metadata["changedSessionFiles"], 1);
-    assert_eq!(metadata["managedBy"], "Codex++ provider sync");
+    assert_eq!(metadata["managedBy"], "Chimera++ provider sync");
     assert!(metadata["createdAt"].as_str().unwrap().contains('T'));
     assert!(
         metadata["dbFiles"]

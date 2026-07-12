@@ -90,10 +90,6 @@ function Assert-NoPlaceholders {
         throw "latest_json_url must be $expectedLatest"
     }
 
-    if ($Map['ads_enabled'] -ne $false) {
-        throw 'ads_enabled must be false'
-    }
-
     if ([int]$Map['macos_build_number'] -lt 1) {
         throw 'macos_build_number must be a positive integer'
     }
@@ -152,6 +148,143 @@ function Assert-VersionSync {
     }
 }
 
+function Assert-TextContains {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string[]]$Expected
+    )
+
+    $text = [System.IO.File]::ReadAllText($Path)
+    foreach ($value in $Expected) {
+        if (-not $text.Contains($value)) {
+            throw "Brand touchpoint drift in ${Path}: missing '$value'"
+        }
+    }
+}
+
+function Assert-TextNotContains {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string[]]$Forbidden
+    )
+
+    $text = [System.IO.File]::ReadAllText($Path)
+    foreach ($value in $Forbidden) {
+        if ($text.Contains($value)) {
+            throw "Legacy brand touchpoint in ${Path}: found '$value'"
+        }
+    }
+}
+
+function Get-ActiveText {
+    param([Parameter(Mandatory)][string]$Path)
+
+    return ((Get-Content -LiteralPath $Path -Encoding UTF8 | Where-Object {
+                -not $_.TrimStart().StartsWith('#')
+            }) -join "`n")
+}
+
+function Assert-ActiveTextContains {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string[]]$Expected
+    )
+
+    $text = Get-ActiveText -Path $Path
+    foreach ($value in $Expected) {
+        if (-not $text.Contains($value)) {
+            throw "Active brand touchpoint drift in ${Path}: missing '$value'"
+        }
+    }
+}
+
+function Assert-ActiveTextNotContains {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string[]]$Forbidden
+    )
+
+    $text = Get-ActiveText -Path $Path
+    foreach ($value in $Forbidden) {
+        if ($text.Contains($value)) {
+            throw "Active legacy brand touchpoint in ${Path}: found '$value'"
+        }
+    }
+}
+
+function Assert-BrandTouchpoints {
+    param(
+        [Parameter(Mandatory)]$Map,
+        [Parameter(Mandatory)][string]$Root
+    )
+
+    $windowsInstaller = Join-Path $Root 'scripts\installer\windows\CodexPlusPlus.nsi'
+    Assert-TextContains -Path $windowsInstaller -Expected @(
+        ('Name "' + [string]$Map['display_silent_name'] + '"'),
+        ([string]$Map['artifact_prefix'] + '-${VERSION}-windows-x64-setup.exe'),
+        ('"Publisher" "' + [string]$Map['publisher'] + '"')
+    )
+
+    $macosPackager = Join-Path $Root 'scripts\installer\macos\package-dmg.sh'
+    Assert-TextContains -Path $macosPackager -Expected @(
+        ([string]$Map['artifact_prefix'] + '-${VERSION}-macos-${ARCH}.dmg'),
+        ('SILENT_APP_NAME="' + [string]$Map['display_silent_name'] + '"'),
+        ('MANAGER_APP_NAME="' + [string]$Map['display_manager_name'] + '"')
+    )
+
+    $tauriPath = Join-Path $Root 'apps\codex-plus-manager\src-tauri\tauri.conf.json'
+    $tauri = Get-Content -LiteralPath $tauriPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]$tauri.productName -ne [string]$Map['display_manager_name']) {
+        throw "Brand touchpoint drift in ${tauriPath}: productName"
+    }
+
+    $releaseWorkflow = Join-Path $Root '.github\workflows\release-assets.yml'
+    Assert-ActiveTextContains -Path $releaseWorkflow -Expected @(
+        ([string]$Map['artifact_prefix'] + '-${VERSION}-windows-x64-setup.exe'),
+        ([string]$Map['artifact_prefix'] + '-${VERSION}-windows-x64.zip'),
+        ([string]$Map['artifact_prefix'] + '-${VERSION}-macos-${{ matrix.arch }}.dmg'),
+        ([string]$Map['artifact_prefix'] + '-${VERSION}-macos-${{ matrix.arch }}.zip'),
+        ([string]$Map['artifact_prefix'] + '-*-windows-x64-setup.exe'),
+        ([string]$Map['artifact_prefix'] + '-*-macos-${{ matrix.arch }}.dmg'),
+        'REPO: ${{ github.repository }}'
+    )
+    Assert-ActiveTextNotContains -Path $releaseWorkflow -Forbidden @(
+        'CodexPlusPlus-${VERSION}-',
+        'CodexPlusPlus-${version}-',
+        'CodexPlusPlus-$version-',
+        'CodexPlusPlus-*'
+    )
+
+    $prWorkflow = Join-Path $Root '.github\workflows\pr-build.yml'
+    Assert-ActiveTextContains -Path $prWorkflow -Expected @(
+        ([string]$Map['artifact_prefix'] + '-$version-windows-x64-setup.exe'),
+        ([string]$Map['artifact_prefix'] + '-$version-windows-x64.zip'),
+        ([string]$Map['artifact_prefix'] + '-${VERSION}-macos-${{ matrix.arch }}.dmg'),
+        ([string]$Map['artifact_prefix'] + '-${VERSION}-macos-${{ matrix.arch }}.zip'),
+        ([string]$Map['artifact_prefix'] + '-*-windows-x64-setup.exe'),
+        ([string]$Map['artifact_prefix'] + '-*-macos-${{ matrix.arch }}.dmg')
+    )
+    Assert-ActiveTextNotContains -Path $prWorkflow -Forbidden @(
+        'CodexPlusPlus-${VERSION}-',
+        'CodexPlusPlus-$version-',
+        'CodexPlusPlus-*'
+    )
+
+    foreach ($readmeName in @('README.md', 'README_EN.md')) {
+        $readmePath = Join-Path $Root $readmeName
+        Assert-TextContains -Path $readmePath -Expected @(
+            ([string]$Map['artifact_prefix'] + '-*-windows-x64-setup.exe'),
+            ([string]$Map['artifact_prefix'] + '-*-macos-x64.dmg'),
+            ([string]$Map['artifact_prefix'] + '-*-macos-arm64.dmg')
+        )
+        Assert-TextNotContains -Path $readmePath -Forbidden @(
+            'CodexPlusPlus-*-windows-x64-setup.exe',
+            'CodexPlusPlus-*-macos-x64.dmg',
+            'CodexPlusPlus-*-macos-arm64.dmg'
+        )
+    }
+}
+
 function Get-PreviousMacosBuildNumber {
     param([Parameter(Mandatory)][string]$Root)
 
@@ -206,7 +339,6 @@ function Escape-TsString([string]$Value) {
 function New-RustBranding {
     param([Parameter(Mandatory)]$Map)
 
-    $ads = if ($Map['ads_enabled']) { 'true' } else { 'false' }
     $lines = @(
         '// @generated by scripts/generate-branding.ps1 — DO NOT EDIT BY HAND'
         '#![allow(dead_code)]'
@@ -215,8 +347,8 @@ function New-RustBranding {
         "pub const DISPLAY_MANAGER_NAME: &str = `"$(Escape-RustString $Map['display_manager_name'])`";"
         "pub const PUBLISHER: &str = `"$(Escape-RustString $Map['publisher'])`";"
         "pub const REPOSITORY: &str = `"$(Escape-RustString $Map['repository'])`";"
-        "pub const LATEST_JSON_URL: &str = `"$(Escape-RustString $Map['latest_json_url'])`";"
-        "pub const ADS_ENABLED: bool = $ads;"
+        'pub const LATEST_JSON_URL: &str ='
+        "    `"$(Escape-RustString $Map['latest_json_url'])`";"
         "pub const DEFAULT_RELAY_BASE_URL: &str = `"$(Escape-RustString $Map['default_relay_base_url'])`";"
         "pub const DEFAULT_RELAY_MODEL: &str = `"$(Escape-RustString $Map['default_relay_model'])`";"
         "pub const ARTIFACT_PREFIX: &str = `"$(Escape-RustString $Map['artifact_prefix'])`";"
@@ -231,7 +363,6 @@ function New-RustBranding {
 function New-TsBranding {
     param([Parameter(Mandatory)]$Map)
 
-    $ads = if ($Map['ads_enabled']) { 'true' } else { 'false' }
     $lines = @(
         '// @generated by scripts/generate-branding.ps1 — DO NOT EDIT BY HAND'
         ''
@@ -240,7 +371,6 @@ function New-TsBranding {
         "export const PUBLISHER = '$(Escape-TsString $Map['publisher'])';"
         "export const REPOSITORY = '$(Escape-TsString $Map['repository'])';"
         "export const LATEST_JSON_URL = '$(Escape-TsString $Map['latest_json_url'])';"
-        "export const ADS_ENABLED = $ads;"
         "export const DEFAULT_RELAY_BASE_URL = '$(Escape-TsString $Map['default_relay_base_url'])';"
         "export const DEFAULT_RELAY_MODEL = '$(Escape-TsString $Map['default_relay_model'])';"
         "export const ARTIFACT_PREFIX = '$(Escape-TsString $Map['artifact_prefix'])';"
@@ -290,11 +420,12 @@ if (-not (Test-Path -LiteralPath $tomlPath)) {
 $map = Read-FlatToml -Path $tomlPath
 Require-Keys -Map $map -Keys @(
     'display_silent_name', 'display_manager_name', 'publisher', 'repository',
-    'latest_json_url', 'ads_enabled', 'default_relay_base_url', 'default_relay_model',
+    'latest_json_url', 'default_relay_base_url', 'default_relay_model',
     'artifact_prefix', 'macos_build_number', 'website_url', 'api_key_url'
 )
 Assert-NoPlaceholders -Map $map
 Assert-VersionSync -Root $root
+Assert-BrandTouchpoints -Map $map -Root $root
 Assert-MacosBuildNumberProgress -Map $map -Root $root
 
 $rustContent = New-RustBranding -Map $map

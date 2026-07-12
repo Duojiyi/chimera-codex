@@ -12,7 +12,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
-use crate::settings::{BackendSettings, SettingsStore, normalize_codex_extra_args};
+use crate::settings::{BackendSettings, RelayMode, SettingsStore, normalize_codex_extra_args};
 use crate::status::{LaunchStatus, StatusStore};
 
 #[cfg(windows)]
@@ -49,6 +49,58 @@ pub enum MacosCleanupPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowsProcessControlStrategy {
     NativeWindowsApi,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchRoute {
+    ManagerUpdate,
+    ManagerRecovery,
+    LaunchCodex,
+    ManagerConfigureRelay,
+    ManagerKeyFirst,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaunchRouteInput {
+    pub mandatory_update: bool,
+    pub settings_valid: bool,
+    pub active_relay_live_ready: bool,
+    pub official_login_ready: bool,
+    pub active_profile_has_key: bool,
+}
+
+pub fn select_launch_route(input: LaunchRouteInput) -> LaunchRoute {
+    if input.mandatory_update {
+        return LaunchRoute::ManagerUpdate;
+    }
+    if !input.settings_valid {
+        return LaunchRoute::ManagerRecovery;
+    }
+    if input.active_relay_live_ready || input.official_login_ready {
+        return LaunchRoute::LaunchCodex;
+    }
+    if input.active_profile_has_key {
+        return LaunchRoute::ManagerConfigureRelay;
+    }
+    LaunchRoute::ManagerKeyFirst
+}
+
+pub fn official_login_can_launch(
+    relay_profiles_enabled: bool,
+    active_relay_mode: RelayMode,
+    official_mix_api_key: bool,
+    authenticated: bool,
+) -> bool {
+    authenticated
+        && (!relay_profiles_enabled
+            || (active_relay_mode == RelayMode::Official && !official_mix_api_key))
+}
+
+pub fn active_relay_has_launch_credentials(
+    active_aggregate_exists: bool,
+    active_profile_has_key: bool,
+) -> bool {
+    active_aggregate_exists || active_profile_has_key
 }
 
 #[cfg(windows)]
@@ -325,7 +377,7 @@ where
             } else {
                 let degraded = launch_status(
                     "running_degraded",
-                    "Codex launched; Codex++ enhancements are still waiting for the page bridge.",
+                    "Codex launched; Chimera++ enhancements are still waiting for the page bridge.",
                     debug_port,
                     helper_port,
                     &app_dir,
@@ -339,7 +391,7 @@ where
         if !settings.enhancements_enabled || !injection_degraded {
             let status = launch_status(
                 "running",
-                "Codex++ launcher ready",
+                "Chimera++ launcher ready",
                 debug_port,
                 helper_port,
                 &app_dir,
@@ -1478,7 +1530,7 @@ fn log_helper_response(
 
 #[cfg(test)]
 mod computer_use_tests {
-    use super::{header_value_from_request, overlay_image_content_type};
+    use super::{header_value_from_request, overlay_image_content_type, sanitize_diagnostic_event};
     use std::path::Path;
 
     #[test]
@@ -1505,6 +1557,19 @@ mod computer_use_tests {
         assert_eq!(
             header_value_from_request(request, "user-agent").as_deref(),
             Some("Codex/26.614")
+        );
+    }
+
+    #[test]
+    fn helper_diagnostic_event_rejects_untrusted_secret_text() {
+        assert_eq!(sanitize_diagnostic_event("script_loaded"), "script_loaded");
+        assert_eq!(
+            sanitize_diagnostic_event("sk-helper-event-sentinel"),
+            "event"
+        );
+        assert_eq!(
+            sanitize_diagnostic_event("https://secret.example/key"),
+            "event"
         );
     }
 }
@@ -1580,21 +1645,7 @@ fn header_value_from_request(request: &str, header_name: &str) -> Option<String>
 }
 
 fn sanitize_diagnostic_event(event: &str) -> String {
-    let sanitized = event
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if sanitized.is_empty() {
-        "event".to_string()
-    } else {
-        sanitized
-    }
+    crate::routes::sanitize_diagnostic_event(event)
 }
 
 pub fn build_codex_arguments(debug_port: u16, extra_args: &[String]) -> Vec<String> {

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Chimera Codex Manager",
+  "productName": "Chimera++ 管理工具",
   "version": "1.2.34-chimera.1",
   "identifier": "com.bigpizzav3.codexplusplus.manager",
   "build": {
@@ -14,7 +14,7 @@
       {
         "create": false,
         "label": "main",
-        "title": "Chimera Codex 管理工具",
+        "title": "Chimera++ 管理工具",
         "width": 1180,
         "height": 820,
         "minWidth": 960,

@@ -1,15 +1,14 @@
-# Chimera Codex product branding — single source of truth.
+# Chimera++ product branding - single source of truth.
 # Do not hand-edit generated Rust/TS files; run scripts/generate-branding.ps1.
 
-display_silent_name = "Chimera Codex"
-display_manager_name = "Chimera Codex 管理工具"
+display_silent_name = "Chimera++"
+display_manager_name = "Chimera++ 管理工具"
 publisher = "ChimeraHub"
 repository = "Duojiyi/chimera-codex"
 latest_json_url = "https://github.com/Duojiyi/chimera-codex/releases/latest/download/latest.json"
-ads_enabled = false
 default_relay_base_url = "https://api.chimerahub.org/v1"
 default_relay_model = "gpt-5.5"
-artifact_prefix = "ChimeraCodex"
+artifact_prefix = "ChimeraPlusPlus"
 macos_build_number = 1
 website_url = "https://api.chimerahub.org/"
 api_key_url = "https://api.chimerahub.org/"

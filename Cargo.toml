@@ -10,8 +10,8 @@ members = [
 [workspace.package]
 version = "1.2.34-chimera.1"
 edition = "2024"
-license = "MIT"
-repository = "https://github.com/BigPizzaV3/CodexPlusPlus"
+license = "AGPL-3.0-only"
+repository = "https://github.com/Duojiyi/chimera-codex"
 
 [workspace.dependencies]
 aes-gcm = "0.10"

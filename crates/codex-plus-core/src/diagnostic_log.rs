@@ -22,11 +22,12 @@ pub fn append_diagnostic_log(event: &str, detail: impl Serialize) -> std::io::Re
         std::fs::create_dir_all(parent)?;
     }
 
-    let detail = serde_json::to_value(detail).unwrap_or_else(|error| {
+    let mut detail = serde_json::to_value(detail).unwrap_or_else(|error| {
         json!({
             "serialization_error": error.to_string()
         })
     });
+    redact_diagnostic_strings(&mut detail);
     let record = DiagnosticRecord {
         timestamp_ms: now_ms(),
         pid: std::process::id(),
@@ -53,6 +54,23 @@ pub fn append_diagnostic_log(event: &str, detail: impl Serialize) -> std::io::Re
     Ok(())
 }
 
+fn redact_diagnostic_strings(value: &mut Value) {
+    match value {
+        Value::String(text) => *text = "[REDACTED]".to_string(),
+        Value::Array(values) => {
+            for value in values {
+                redact_diagnostic_strings(value);
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                redact_diagnostic_strings(value);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
 pub fn diagnostic_log_path() -> PathBuf {
     if let Some(lock) = TEST_LOG_PATH.get() {
         if let Ok(guard) = lock.lock() {
@@ -75,4 +93,38 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diagnostic_log_redacts_all_string_detail_values() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("diagnostic.log");
+        set_diagnostic_log_path_for_tests(Some(path.clone()));
+
+        append_diagnostic_log(
+            "diagnostic_log.redaction_test",
+            json!({
+                "error": "TOML line: experimental_bearer_token = \"diag-sentinel-key\"",
+                "baseUrl": "https://diag-sentinel-key@example.test",
+                "nested": {
+                    "freeform": "diag-sentinel-key"
+                },
+                "safeBoolean": true,
+                "safeNumber": 42
+            }),
+        )
+        .unwrap();
+        set_diagnostic_log_path_for_tests(None);
+
+        let contents = std::fs::read_to_string(path).unwrap();
+        assert!(!contents.contains("diag-sentinel-key"));
+        assert!(!contents.contains("experimental_bearer_token"));
+        assert!(contents.contains("\"safeBoolean\":true"));
+        assert!(contents.contains("\"safeNumber\":42"));
+        assert!(contents.contains("[REDACTED]"));
+    }
 }

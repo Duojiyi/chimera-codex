@@ -6,9 +6,15 @@
 
 | 主题 | Spec | Plan | Checklist | 状态 |
 |------|------|------|-----------|------|
-| Chimera Codex 公开发行版 | `specs/2026-07-10-chimera-private-fork-design.md` | `plans/2026-07-10-chimera-private-fork.md` | `todos/2026-07-10-chimera-private-fork-todo.md` | 文档与仓库初始化已完成；等待用户批准产品代码开工 |
+| Chimera++ 客户发行版刷新 | `specs/2026-07-11-chimera-plus-product-refresh-design.md` | `plans/2026-07-11-chimera-plus-product-refresh.md` | `todos/2026-07-11-chimera-plus-product-refresh-todo.md` | 需求与真实进度已核验；待按 TDD 实施 |
 
-对应交叉验证：`reports/2026-07-10-cross-verification.md`。
+## Baseline
+
+| 主题 | Spec | Plan | Checklist | 状态 |
+|------|------|------|-----------|------|
+| Chimera Codex 公开发行版 | `specs/2026-07-10-chimera-private-fork-design.md` | `plans/2026-07-10-chimera-private-fork.md` | `todos/2026-07-10-chimera-private-fork-todo.md` | 2026-07-10 本地基线已审计；仅未被 2026-07-11 规格覆盖的安全与兼容决策继续有效 |
+
+对应交叉验证：`reports/2026-07-10-cross-verification.md`。最终独立审计：`audits/remediation-final-hardening-a.md`、`audits/remediation-final-hardening-b.md`。
 
 ## Current Model-Catalog Documents
 

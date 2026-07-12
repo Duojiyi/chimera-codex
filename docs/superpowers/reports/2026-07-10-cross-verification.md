@@ -1,8 +1,9 @@
 # 交叉验证报告 — Chimera Codex 公开发行版文档
 
 **日期：** 2026-07-10
+**实现复验：** 2026-07-11
 
-**对照代码：** `D:\Desktop\codex plus plus`（初始化快照为上游 `main` / `a0506ae646172d32b72652794411b4891c90dade`；首发 release 基线为正式 tag `v1.2.34` / `c136029`）
+**对照代码：** `D:\Desktop\codex plus plus`（初始化源码快照为上游 `main` / `a0506ae646172d32b72652794411b4891c90dade`；`a0506ae` 是 `v1.2.34` 后 1 个未发布提交；`c136029` 仅作为最近正式上游 Release 参照，不作为首发源码 commit）
 
 **本轮依据：** 用户确认仓库公开、跟踪上游 Release、全新安装默认 ChimeraHub、支持原版覆盖升级、Windows/macOS 均构建且 macOS 暂无可信签名。
 **文档：**
@@ -32,7 +33,7 @@
 | 版本比较 | parser 会忽略 `-chimera.N` | Task 5 改标准 SemVer 并统一 Cargo/package/Tauri 版本 |
 | macOS 版本元数据 | DMG 脚本会把完整 prerelease 字符串同时写入两个 plist 版本字段 | Task 5/6 规定完整 app SemVer 与纯数字 plist 版本分离 |
 | Actions 触发 | `GITHUB_TOKEN` 创建 Release 后期待触发 release workflow | Task 8 改 build-first，同一 workflow 最后 publish，不依赖事件递归 |
-| 同步安全 | 初始化时 origin=upstream 且 shallow；main 默认跟踪上游可能误推 | 已完成 origin/upstream 分离、补全历史并阻断 upstream push；首次基线推送后修正 tracking；Task 9 仍需实现 remote guard、隔离分支、PR、并发与幂等 |
+| 同步安全 | 初始化时 origin=upstream 且 shallow；main 默认跟踪上游可能误推 | 已完成 origin/upstream 分离、补全历史并阻断 upstream push；同步脚本/workflow 已实现 remote guard、隔离分支、PR、并发、幂等与 gated SHA 绑定 |
 | 品牌真相源 | Rust 常量 + NSIS/TS/YAML 手工双写 | 改 `brand/product.toml` + 生成脚本 + `-Check` |
 | 首次配置 | “默认中转”未区分新装与升级 | 仅 settings 不存在时创建 active Chimera profile；Key 空不应用，旧设置不覆盖 |
 | 下载完整性 | 下载后直接启动，无哈希 | latest schema 增加 size/SHA-256，验证后才启动 |
@@ -51,15 +52,30 @@
 - S5/S10/S12 → Task 6/8/10 → T17–T19/T22–T24 → V5/V9/V10
 - S6/S7 → Task 0/9/10 → T1/T25–T29 → V6/V7
 
-TODO 中 D1–D9 是用户已确认或授权按最佳实践确定的方案；D10 保留为产品代码开工授权，D11 的仓库创建已完成但 branch protection、自动化凭据和品牌真相源仍待实施。
+TODO 中 D1–D10 与 D12 已落实；D11 的仓库、branch protection、Actions 默认只读与品牌真相源已完成，仅剩专用自动化 token。
+
+## 2026-07-11 实现复验
+
+- `cargo test --workspace --locked`：退出 0，747 tests / 0 failed。
+- `cargo fmt --all -- --check`、manager TypeScript check、Vite production build：通过。
+- `generate-branding.ps1 -Check`、严格 allowlist 合约测试、`verify-no-upstream-ads.ps1`：通过。
+- 两个注入 JavaScript 文件语法检查、`git diff --check`、`sync-upstream.ps1 -DryRun`：通过。
+- Key-first、去推广、CI、updater、installer 与测试基础设施均已有独立 A/B 补救审计记录；最终加固复核见 `../audits/remediation-final-hardening-a.md` 与 `../audits/remediation-final-hardening-b.md`。
+- 本地分支仍领先远端产品分支，补救改动尚未提交；远端尚无包含当前产品快照的 Actions/Release 证据。
+
+### 更新信任边界补记
+
+- updater 仅接受品牌仓库 `Duojiyi/chimera-codex` 的 HTTPS、无 userinfo、版本化 GitHub Release download 原始资产 URL；GitHub 后续 302/CDN 跳转仍由 HTTP 客户端处理。
+- `latest.json` 与其资产由同一 GitHub Release 信任根控制。SHA-256 用于完整性和损坏检测，不在发布账号或 manifest 同时失陷时提供独立真实性。
+- manifest/资产独立签名属于后续单独加固项；当前一期以 GitHub 权限保护、严格 URL 绑定和 SHA-256 为边界，未把签名列为当前发行阻断。
 
 ## 复验结论
 
-**PASS（文档与仓库初始化层面）→ 可以进入等待产品代码开工状态。**
+**PASS（本地产品代码、自动化门禁与双盲审计层面）→ 可以进入提交、推送与远端发行验收。**
 
-未发现仍会阻断文档初始化的内部矛盾。公开仓库真实地址、完整历史和 remote 安全门已核验；剩余外部决策只有用户是否批准产品代码开工，且 branch protection、品牌真相源和 CI 权限仍属于后续实现任务。本文档结论不代表产品代码已经实现或构建通过。
+当前无已知本地代码阻断项。尚未完成的外部门为：配置专用自动化 token、真实 GitHub Actions、Windows/macOS 安装冒烟、真实冲突/Issue 演练、首次公开 Release 与匿名资产下载。本文档结论不把这些远端/实机门伪装为已完成。
 
-## 证据摘录
+## 初始化阶段证据摘录（历史）
 
 - 版本后缀被截断：`crates/codex-plus-core/src/update.rs:42-67`
 - updater 匿名请求/直接启动：`update.rs:169-213`

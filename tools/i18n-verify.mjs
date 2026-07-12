@@ -105,6 +105,10 @@ function check(label, usedSet, dictSet) {
 check("plain", usedPlain, recordKeys("EN_PLAIN"));
 check("template", usedTemplate, recordKeys("EN_TEMPLATE"));
 
+const manifest = JSON.parse(readFileSync(path.join(repoRoot, "tools", "i18n-keys.json"), "utf8"));
+check("manifest plain", usedPlain, new Set(manifest.plain ?? []));
+check("manifest template", usedTemplate, new Set(manifest.template ?? []));
+
 if (!ok) {
   console.error("\nDictionary does not match t()/tf() usage in source.");
   process.exit(1);

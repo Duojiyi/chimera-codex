@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Chimera Codex macOS DMG packager.
+# Chimera++ macOS DMG packager.
 # Codesign is ad-hoc only (--sign -). There is no Developer ID signing and no notarization.
 
 VERSION="${1:-0.0.0}"
-ARCH="${2:-$(uname -m)}"
+ARCH_INPUT="${2:-$(uname -m)}"
+case "$ARCH_INPUT" in
+  x64|x86_64) ARCH="x64"; EXPECTED_LIPO_ARCH="x86_64" ;;
+  arm64|aarch64) ARCH="arm64"; EXPECTED_LIPO_ARCH="arm64" ;;
+  *) echo "error: unsupported macOS architecture: $ARCH_INPUT" >&2; exit 1 ;;
+esac
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 DIST="$ROOT/dist/macos"
 STAGE="$DIST/stage"
 BINARY_DIR="${BINARY_DIR:-$ROOT/target/release}"
-DMG="$DIST/ChimeraCodex-${VERSION}-macos-${ARCH}.dmg"
+DMG="$DIST/ChimeraPlusPlus-${VERSION}-macos-${ARCH}.dmg"
 ICON_SOURCE="$ROOT/apps/codex-plus-manager/src-tauri/icons/icon.png"
 ICON_NAME="codex-plus-plus.icns"
 ICON_ICNS="$DIST/$ICON_NAME"
@@ -32,15 +37,51 @@ if ! [[ "$MACOS_BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
-SILENT_APP_NAME="Chimera Codex"
-MANAGER_APP_NAME="Chimera Codex 管理工具"
+SILENT_APP_NAME="Chimera++"
+MANAGER_APP_NAME="Chimera++ 管理工具"
 
-rm -rf "$DIST"
+refuse_existing_path() {
+  local path="$1"
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    echo "error: refusing to overwrite existing path: $path" >&2
+    return 1
+  fi
+}
+
+refuse_symlink_parent() {
+  local path="$1"
+  if [ -L "$path" ]; then
+    echo "error: refusing symlinked output parent: $path" >&2
+    return 1
+  fi
+}
+
+verify_binary_arch() {
+  local binary_path="$1"
+  local archs
+  if [ ! -x "$binary_path" ]; then
+    echo "error: binary not found or not executable: $binary_path" >&2
+    return 1
+  fi
+  archs="$(lipo -archs "$binary_path")"
+  case " $archs " in
+    *" $EXPECTED_LIPO_ARCH "*) ;;
+    *)
+      echo "error: binary architecture mismatch for $binary_path: expected $EXPECTED_LIPO_ARCH, got $archs" >&2
+      return 1
+      ;;
+  esac
+}
+
+refuse_symlink_parent "$ROOT/dist"
+refuse_existing_path "$DIST"
+verify_binary_arch "$BINARY_DIR/codex-plus-plus"
+verify_binary_arch "$BINARY_DIR/codex-plus-plus-manager"
 mkdir -p "$STAGE"
 
 prepare_icon() {
   local iconset="$DIST/codex-plus-plus.iconset"
-  rm -rf "$iconset"
+  refuse_existing_path "$iconset"
   mkdir -p "$iconset"
 
   sips -z 16 16 "$ICON_SOURCE" --out "$iconset/icon_16x16.png" >/dev/null
@@ -70,7 +111,7 @@ create_app() {
     return 1
   fi
 
-  rm -rf "$app_dir"
+  refuse_existing_path "$app_dir"
   mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
   cp "$binary_path" "$app_dir/Contents/MacOS/$executable_name"
   cp "$ICON_ICNS" "$app_dir/Contents/Resources/$ICON_NAME"
@@ -146,7 +187,7 @@ verify_app() {
     echo "error: CFBundleVersion must be a positive integer, got: $build_ver" >&2
     return 1
   fi
-  codesign -dv "$app_dir" >/dev/null 2>&1 || {
+  codesign --verify --deep --strict "$app_dir" >/dev/null 2>&1 || {
     echo "error: codesign verification failed for $app_dir" >&2
     return 1
   }
@@ -154,7 +195,7 @@ verify_app() {
 
 write_migration_readme() {
   cat > "$STAGE/README.txt" <<EOF
-Chimera Codex — macOS install notes
+Chimera++ — macOS install notes
 ===================================
 
 This DMG is ad-hoc signed only. It is NOT Developer ID signed and NOT notarized.
@@ -162,7 +203,7 @@ If Gatekeeper blocks launch: right-click the app → Open, or clear quarantine.
 
 Upgrade from Codex++ (legacy):
 1. Quit Codex++ / Codex++ 管理工具 completely.
-2. Drag "Chimera Codex.app" and "Chimera Codex 管理工具.app" into Applications.
+2. Drag "Chimera++.app" and "Chimera++ 管理工具.app" into Applications.
 3. Manually delete old "Codex++.app" and "Codex++ 管理工具.app".
    Chimera does not delete legacy apps automatically.
 4. Open Applications and launch the new Chimera apps (right-click → Open if needed).
@@ -184,7 +225,10 @@ verify_app "$STAGE/$SILENT_APP_NAME.app"
 verify_app "$STAGE/$MANAGER_APP_NAME.app"
 
 write_migration_readme
+cp "$ROOT/LICENSE" "$STAGE/LICENSE"
+cp "$ROOT/NOTICE" "$STAGE/NOTICE"
+cp "$ROOT/SOURCE_CODE.txt" "$STAGE/SOURCE_CODE.txt"
 ln -s /Applications "$STAGE/Applications"
 
-hdiutil create -volname "Chimera Codex" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+hdiutil create -volname "Chimera++" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 echo "$DMG"

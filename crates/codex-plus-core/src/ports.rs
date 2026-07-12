@@ -206,7 +206,7 @@ fn acquire_resilient_loopback_port_guard_with(
     match bind(port) {
         Ok(listener) => Ok(LoopbackPortGuard::locked_listener(file, path, listener)),
         Err(error) if error.kind() == std::io::ErrorKind::AddrInUse && can_connect(port) => {
-            Err(error)
+            Ok(LoopbackPortGuard::fallback_lock(file, path))
         }
         Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
             Ok(LoopbackPortGuard::fallback_lock(file, path))
@@ -270,9 +270,9 @@ mod tests {
     }
 
     #[test]
-    fn resilient_guard_reports_conflict_when_requested_port_is_connectable() {
+    fn resilient_guard_uses_lock_fallback_when_unrelated_service_owns_port() {
         let temp = tempfile::tempdir().unwrap();
-        let error = acquire_resilient_loopback_port_guard_with(
+        let guard = acquire_resilient_loopback_port_guard_with(
             57319,
             temp.path(),
             |_| {
@@ -283,9 +283,9 @@ mod tests {
             },
             |_| true,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+        assert!(guard.fallback_path().is_some());
     }
 
     #[test]

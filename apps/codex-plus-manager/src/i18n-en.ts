@@ -1,4 +1,4 @@
-// English translations for the Codex++ manager UI, keyed by the original
+// English translations for the Chimera++ manager UI, keyed by the original
 // Chinese source text. Generated keys live in tools/i18n-keys.json; run
 // `node tools/i18n-verify.mjs` to confirm this dictionary covers exactly that
 // set (no missing or stale entries). See src/i18n.ts for how these are used.
@@ -16,19 +16,18 @@ export const EN_PLAIN: Record<string, string> = {
   "Codex 意外停止": "Codex stopped unexpectedly",
   "Codex 版本": "Codex version",
   "Codex 目标": "Codex goals",
-  "Codex++ 导入": "Codex++ import",
+  "Chimera++ 导入": "Chimera++ import",
   "Codex增强": "Codex enhancements",
   "Codex增强模式": "Codex enhancement mode",
   "Debug 端口": "Debug port",
   "Fast 按钮": "Fast button",
-  "GitHub Release 更新": "GitHub Release update",
-  "GitHub Release 检查": "GitHub Release check",
   "Helper 端口": "Helper port",
   "MCP、Skills、Plugins 作为全局配置独立管理，切换任意供应商都会合并。":
     "MCP, Skills and Plugins are managed independently as global config and merged in whenever you switch providers.",
   "Markdown 导出": "Markdown export",
   "Provider 同步目标": "Provider sync target",
   "Stepwise 直接发送": "Stepwise direct send",
+  "Stepwise 测试": "Stepwise test",
   "基于当前对话生成下一步建议，使用独立 API 配置。": "Generate next-step suggestions from the current conversation using a separate API configuration.",
   "插件与模型": "Plugins and models",
   "管理插件市场、模型列表和服务档位相关增强。": "Manage enhancements for the plugin marketplace, model list and service tier.",
@@ -48,7 +47,7 @@ export const EN_PLAIN: Record<string, string> = {
   "TOML 配置体": "TOML config body",
   "Watcher 操作": "Watcher action",
   "Watcher 状态": "Watcher status",
-  "Watcher 用于保持 Codex++ 接管状态": "The watcher keeps Codex++ in control",
+  "Watcher 用于保持 Chimera++ 接管状态": "The watcher keeps Chimera++ in control",
   "Watcher 自动接管": "Watcher auto-takeover",
   "Zed 远程打开": "Zed remote open",
   "Zed 远程项目": "Zed remote projects",
@@ -67,15 +66,13 @@ export const EN_PLAIN: Record<string, string> = {
   "上次修复结果": "Last repair result",
   "上次更新结果": "Last update result",
   "上游协议": "Upstream protocol",
-  "下载并运行安装包": "Download and run installer",
   "不写 API 文件": "Does not write API files",
 
   "个": "",
   "个会话": " session(s)",
   "中国官方": "China official",
-  "主页": "Homepage",
   "主题和启动参数": "Theme and launch arguments",
-  "从 GitHub 静态清单加载": "Loaded from the static GitHub manifest",
+  "从远程清单加载": "Loaded from the remote manifest",
   "从 Word 等富文本粘贴到 Codex composer 时只保留纯文本，避免被识别为图片/文件附件。需重启 Codex 才生效。":
     "Keeps only plain text when pasting rich text (e.g. from Word) into the Codex composer, avoiding it being treated as an image/file attachment. Requires restarting Codex.",
   "从上游获取": "Fetch from upstream",
@@ -117,7 +114,7 @@ export const EN_PLAIN: Record<string, string> = {
   "保存": "Save",
   "保存并启用": "Save and enable",
   "保存为默认路径": "Save as default path",
-  "保存到 Codex++ state，不改写 Zed settings。": "Saved to Codex++ state, does not modify Zed settings.",
+  "保存到 Chimera++ state，不改写 Zed settings。": "Saved to Chimera++ state, does not modify Zed settings.",
   "保存增强设置": "Save enhancement settings",
   "保存扩展项": "Save entry",
   "保存的应用路径": "Saved app path",
@@ -137,7 +134,6 @@ export const EN_PLAIN: Record<string, string> = {
   "入口安装、修复、Watcher 与手动启动": "Entrypoint install, repair, watcher and manual launch",
   "入口管理": "Entrypoint management",
   "全选当前列表": "Select all in current list",
-  "关于": "About",
 
   "关闭": "Off",
   "关闭后会停用删除、导出、项目移动、插件相关和菜单位置增强。":
@@ -181,14 +177,13 @@ export const EN_PLAIN: Record<string, string> = {
   "包含版本、路径、设置和平台信息": "Includes version, paths, settings and platform info",
   "协议": "Protocol",
   "卸载入口": "Uninstall entrypoints",
-  "卸载时移除 Codex++ 托管数据": "Remove Codex++ managed data on uninstall",
+  "卸载时移除 Chimera++ 托管数据": "Remove Chimera++ managed data on uninstall",
   "历史会话修复": "Historical session repair",
   "历史会话修复失败，请查看错误提示后重试。": "Historical session repair failed. Check the error message and retry.",
   "历史会话修复进度": "Historical session repair progress",
   "压缩上下文大小": "Compaction context size",
   "原生菜单栏位置": "Native menu bar placement",
   "原生菜单汉化": "Native menu localization",
-  "反馈问题": "Report an issue",
   "发现": "Discovered",
   "发送 hi 测试": "Send a 'hi' test",
   "取消": "Cancel",
@@ -205,7 +200,7 @@ export const EN_PLAIN: Record<string, string> = {
   "名称": "Name",
   "启动 Codex App 时追加到默认 CDP 参数后。留空则保持默认启动行为。":
     "Appended after the default CDP arguments when launching the Codex app. Leave empty to keep default launch behavior.",
-  "启动 Codex++": "Launch Codex++",
+  "启动 Chimera++": "Launch Chimera++",
   "启动任务": "Launch task",
   "启动前自动修复历史会话": "Auto-repair historical sessions before launch",
   "启动时通过本地主进程调试端口汉化 Codex 原生菜单；不修改安装包。需重启 Codex 才生效。":
@@ -254,11 +249,10 @@ export const EN_PLAIN: Record<string, string> = {
   "官方登录": "Official login",
   "官方登录模式": "Official login mode",
   "对话居中宽度": "Centered conversation width",
-  "导入 Codex++ 供应商": "Import Codex++ provider",
+  "导入 Chimera++ 供应商": "Import Chimera++ provider",
   "尚未刷新": "Not refreshed yet",
 
   "尚未检查 Codex 应用路径。": "Codex app path not checked yet.",
-  "尚未检查 GitHub Release；更新会下载并启动安装包。": "GitHub Release not checked yet; updating downloads and launches the installer.",
   "尚未生成诊断报告。": "No diagnostic report generated yet.",
   "尚未运行安装包更新。": "Installer update has not run yet.",
   "尚未运行历史会话修复。": "Historical session repair hasn't run yet.",
@@ -298,8 +292,8 @@ export const EN_PLAIN: Record<string, string> = {
   "应用路径留空时使用已保存路径；没有保存路径时使用自动探测": "When the app path is empty, the saved path is used; with no saved path, auto-detection is used",
   "应用路径覆盖": "App path override",
   "开启": "On",
-  "开启后，通过 Codex++ 启动 Codex 前自动整理一次旧对话的归属标记。":
-    "When on, tidies up ownership tags of old conversations once before launching Codex through Codex++.",
+  "开启后，通过 Chimera++ 启动 Codex 前自动整理一次旧对话的归属标记。":
+    "When on, tidies up ownership tags of old conversations once before launching Codex through Chimera++.",
   "强制中文界面": "Force Chinese UI",
   "强制启用 Codex App 内置 zh-CN 语言包，避免 Statsig/VPN 不通时回退英文。需重启 Codex 才能完整生效。":
     "Forces the Codex app's built-in zh-CN language pack to avoid falling back to English when Statsig/VPN is unreachable. Requires restarting Codex to fully apply.",
@@ -336,12 +330,12 @@ export const EN_PLAIN: Record<string, string> = {
   "或": " or ",
   "手动": "Manual",
   "手动启动": "Manual launch",
-  "打开关于": "Open About",
+  "打开 Applications": "Open Applications",
   "打开链接": "Open link",
-  "打开项目主页": "Open project homepage",
+  "打开维护": "Open maintenance",
   "扩展项": "entry",
   "批量删除会话": "Bulk delete sessions",
-  "把 Codex++ 菜单插入 Codex 顶部原生菜单栏。": "Insert the Codex++ menu into Codex's top native menu bar.",
+  "把 Chimera++ 菜单插入 Codex 顶部原生菜单栏。": "Insert the Chimera++ menu into Codex's top native menu bar.",
   "把主对话和输入框限制到固定最大宽度，适合大屏阅读。": "Constrain the main conversation and input box to a fixed max width, good for large-screen reading.",
   "把会话移动到普通对话或其他本地项目。": "Move a session to a regular conversation or another local project.",
   "拖动排序": "Drag to reorder",
@@ -366,8 +360,8 @@ export const EN_PLAIN: Record<string, string> = {
   "官方远端插件缓存": "Official remote plugin cache",
   "官方远端插件缓存进度": "Official remote plugin cache progress",
   "官方远端插件缓存修复失败，请查看错误提示后重试。": "Official remote plugin cache repair failed. Check the error message and retry.",
-  "使用 Codex++ 内置快照补齐远端插件，API 模式也可显示和安装 Product Design 插件。":
-    "Use the embedded Codex++ snapshot to add remote plugins, so API mode can also show and install the Product Design plugin.",
+  "使用 Chimera++ 内置快照补齐远端插件，API 模式也可显示和安装 Product Design 插件。":
+    "Use the embedded Chimera++ snapshot to add remote plugins, so API mode can also show and install the Product Design plugin.",
   "搜索供应商…": "Search providers…",
   "数据库": "Database",
   "新增": "Add ",
@@ -393,7 +387,6 @@ export const EN_PLAIN: Record<string, string> = {
   "更多选项": "More options",
   "更新": "Update",
   "更新安装": "Update install",
-  "最新版本": "Latest version",
   "最近启动": "Recent launches",
   "最近打开": "Recently opened",
   "最近日志": "Recent logs",
@@ -408,11 +401,10 @@ export const EN_PLAIN: Record<string, string> = {
   "未实现": "Not implemented",
   "未归档": "Not archived",
   "未检查": "Not checked",
-  "未检测到": "Not detected",
   "未检测到 Codex 应用版本。": "Codex app version not detected.",
   "未发现缓存": "Cache not found",
-  "未发现本地缓存；点击按钮会从 Codex++ 内置快照释放并注册，无需官方账号预缓存。":
-    "Local cache not found. Click the button to extract and register the embedded Codex++ snapshot; no official-account pre-cache is required.",
+  "未发现本地缓存；点击按钮会从 Chimera++ 内置快照释放并注册，无需官方账号预缓存。":
+    "Local cache not found. Click the button to extract and register the embedded Chimera++ snapshot; no official-account pre-cache is required.",
   "未知": "Unknown",
   "未知作者": "Unknown author",
   "未知来源": "Unknown source",
@@ -420,7 +412,6 @@ export const EN_PLAIN: Record<string, string> = {
   "未记录路径": "No path recorded",
   "未记录项目路径": "No project path recorded",
   "未读取到本地会话，或当前 SQLite 会话库不存在。": "No local sessions read, or the current SQLite session database doesn't exist.",
-  "本地 Codex 增强、管理工具和安装包维护": "Local Codex enhancements, management tools and install package maintenance",
   "本地会话": "Local sessions",
   "本地整体": "Local overall",
   "本地脚本": "Local scripts",
@@ -434,13 +425,12 @@ export const EN_PLAIN: Record<string, string> = {
   "检查入口、Codex 应用和 Watcher 状态": "Check entrypoint, Codex app and watcher status",
   "检查配置、模型列表和一次真实请求，定位供应商不可用原因。": "Check configuration, model list and one real request to find why a provider is unavailable.",
   "检查完成": "Check complete",
-  "检查更新": "Check for updates",
   "检查问题、启动与快速修复": "Check issues, launch and quick fixes",
   "诊断供应商": "Diagnose provider",
   "检测": "Detect",
   "检测到 OPENAI 环境变量": "OPENAI environment variables detected",
-  "检测到来自网页的供应商配置导入请求，确认后会写入本机 Chimera Codex 管理工具。":
-    "A provider config import request from the web was detected; confirming writes it to this machine's Chimera Codex manager.",
+  "检测到来自网页的供应商配置导入请求，确认后会写入本机 Chimera++ 管理工具。":
+    "A provider config import request from the web was detected; confirming writes it to this machine's Chimera++ manager.",
   "概览": "Overview",
   "概览只展示关键问题，具体配置在对应页面处理": "The overview shows only key issues; specific configuration is handled on the relevant pages",
   "概览已检查": "Overview checked",
@@ -454,6 +444,7 @@ export const EN_PLAIN: Record<string, string> = {
   "正在修复…": "Repairing…",
   "正在修复历史会话": "Repairing historical sessions",
   "正在准备安装包下载…": "Preparing installer download…",
+  "正在准备更新…": "Preparing update…",
   "正在启动安装包…": "Launching installer…",
   "正在写入 Codex 配置…": "Writing Codex config…",
   "正在写入修复与备份…": "Writing repairs and backups…",
@@ -461,12 +452,12 @@ export const EN_PLAIN: Record<string, string> = {
   "正在扫描历史会话与索引…": "Scanning historical sessions and indexes…",
   "正在检查会话 provider 标记…": "Checking session provider tags…",
   "正在检查本地插件市场…": "Checking local plugin marketplace…",
-  "正在获取 GitHub Release 信息…": "Fetching GitHub Release information…",
+  "正在获取版本更新信息…": "Fetching version update information…",
   "正在解压并校验插件文件…": "Extracting and verifying plugin files…",
   "正在连接 openai/plugins…": "Connecting to openai/plugins…",
   "正常": "OK",
-  "此上游会通过本地 127.0.0.1:57321 转成 Responses API，需要从 Codex++ 启动 Codex。":
-    "This upstream is converted to the Responses API via local 127.0.0.1:57321, which requires launching Codex from Codex++.",
+  "此上游会通过本地 127.0.0.1:57321 转成 Responses API，需要从 Chimera++ 启动 Codex。":
+    "This upstream is converted to the Responses API via local 127.0.0.1:57321, which requires launching Codex from Chimera++.",
   "此供应商会保留官方登录模式，并把请求混入当前 API Key；Codex增强仍使用兼容模式。":
     "This provider keeps official login mode and mixes the current API Key into requests; Codex enhancements stay in compatible mode.",
   "此供应商会切回官方登录模式，使用 ChatGPT 官方账号，不写入 API Key。":
@@ -492,7 +483,13 @@ export const EN_PLAIN: Record<string, string> = {
   "清除保存路径": "Clear saved path",
   "点击刷新会话读取本地数据库": "Click Refresh Sessions to read the local database",
   "点击刷新市场加载远程脚本。": "Click Refresh Marketplace to load remote scripts.",
-  "版本信息、项目链接、GitHub Release 更新、日志与诊断": "Version info, project links, GitHub Release updates, logs and diagnostics",
+  "版本更新检查": "Version update check",
+  "版本更新服务暂时不可用，请稍后重试。": "The version update service is temporarily unavailable. Try again later.",
+  "需要完成更新": "Update required",
+  "重试": "Retry",
+  "：": ": ",
+  "发现可用更新。": "Update available.",
+  "当前已是最新版本。": "Already on the latest version.",
   "状态": "Status",
   "独立管理 Codex 的 MCP、Skills、Plugins；切换任意供应商都会带上。":
     "Manage Codex's MCP, Skills and Plugins independently; they carry over whenever you switch providers.",
@@ -529,12 +526,12 @@ export const EN_PLAIN: Record<string, string> = {
   "纯 API 模式": "Pure API mode",
   "纯 API 配置未完整写入：请检查此供应商是否有 OPENAI_API_KEY，且 config.toml 是否包含 model_provider / provider / base_url。":
     "Pure API config is incomplete: check whether this provider has OPENAI_API_KEY and whether config.toml includes model_provider / provider / base_url.",
-  "维护 Codex++ 自己的远程项目最近列表。": "Maintain Codex++'s own recent list of remote projects.",
+  "维护 Chimera++ 自己的远程项目最近列表。": "Maintain Chimera++'s own recent list of remote projects.",
   "编辑": "Edit",
   "编辑后保存列表，再切换模式时会使用新配置": "After editing, save the list; the new config is used the next time you switch modes",
   "编辑扩展项": "Edit entry",
   "缺失": "Missing",
-  "缺少 Codex++ 静默启动快捷方式时可在安装维护页修复。": "When the Codex++ silent launch shortcut is missing, repair it on the Install & Maintenance page.",
+  "缺少 Chimera++ 静默启动快捷方式时可在安装维护页修复。": "When the Chimera++ silent launch shortcut is missing, repair it on the Install & Maintenance page.",
   "缺少管理工具快捷方式时可在安装维护页修复。": "When the manager shortcut is missing, repair it on the Install & Maintenance page.",
   "聚合": "Aggregate",
   "聚合/中转": "Aggregate/relay",
@@ -586,7 +583,6 @@ export const EN_PLAIN: Record<string, string> = {
   "读取 cc-switch 供应商失败。": "Failed to read cc-switch providers.",
   "读取 ~/.cc-switch/cc-switch.db": "Reading ~/.cc-switch/cc-switch.db",
   "调用失败": "Call failed",
-  "资源": "Asset",
 
 
   "全新安装只需填写 API Key，保存后才会写入 Codex 配置。":
@@ -602,7 +598,6 @@ export const EN_PLAIN: Record<string, string> = {
     "These variables may override the config.toml / auth.json written by the current provider; CODEX_HOME won't be cleaned up.",
   "进入插件页后自动连续展开“更多”，尽量一次显示完整插件列表。":
     "Automatically keep expanding 'More' on the plugins page to show the full plugin list at once.",
-  "进度": "Progress",
   "远程 SSH 文件引用可直接用 Zed Remote Development 打开。": "Remote SSH file references can be opened directly with Zed Remote Development.",
   "远程脚本": "Remote scripts",
   "适合官方登录或官方混入 API Key；保留会话删除、导出、项目移动和用户脚本，关闭插件市场相关增强。":
@@ -623,12 +618,11 @@ export const EN_PLAIN: Record<string, string> = {
   "配置": "Config",
   "配置文件": "Config file",
   "配置模型": "Config model",
-  "重启 Codex++": "Restart Codex++",
+  "重启 Chimera++": "Restart Chimera++",
   "重新安装": "Reinstall",
   "重新生成": "Regenerate",
   "重置背景": "Reset background",
   "静默启动入口": "Silent launch entrypoint",
-  "项目地址": "Project URL",
   "额外参数": "Extra arguments",
   "高级选项，默认关闭；当前实现不主动改写 Zed settings。": "Advanced option, off by default; the current implementation doesn't actively modify Zed settings.",
   "默认中转": "Default relay",
@@ -649,12 +643,10 @@ export const EN_PLAIN: Record<string, string> = {
 
 // Interpolated strings: tf("前缀 {0}", [x]) -> EN_TEMPLATE["前缀 {0}"] with {0} filled.
 export const EN_TEMPLATE: Record<string, string> = {
-  "关于 {0}": "About {0}",
-  "{0} 版本": "{0} version",
   "\n...以及另外 {0} 个会话": "\n...and {0} more session(s)",
   "{0} · {1} 个成员": "{0} · {1} member(s)",
   "{0} 个": "{0}",
-  "{0} 个 Codex++ 可识别项目，默认策略：{1}": "{0} project(s) recognized by Codex++, default strategy: {1}",
+  "{0} 个 Chimera++ 可识别项目，默认策略：{1}": "{0} project(s) recognized by Chimera++, default strategy: {1}",
   "{0} 个供应商": "{0} provider(s)",
   "{0} 个供应商配置；可拖动排序，点编辑进入详情": "{0} provider configuration(s); drag to reorder, click edit for details",
   "{0} 个市场脚本，已安装 {1} 个，本地整体 {2}": "{0} marketplace script(s), {1} installed, local overall {2}",
@@ -670,7 +662,6 @@ export const EN_TEMPLATE: Record<string, string> = {
   "删除选中的 {0} 个会话？此操作会删除本地数据库记录和 rollout 文件，并为每个会话创建备份。\n\n{1}{2}":
     "Delete the {0} selected session(s)? This deletes the local database records and rollout files, and creates a backup for each session.\n\n{1}{2}",
   "发现 {0} 个 Codex 供应商": "Found {0} Codex provider(s)",
-  "发现新版本 {0}": "New version {0} available",
   "官方登录已就绪：{0}，会混入当前 API Key。": "Official login ready: {0}, the current API Key will be mixed in.",
   "官方账号已登录：{0}。": "Official account logged in: {0}.",
   "已删除 {0} 个会话。": "Deleted {0} session(s).",
@@ -683,7 +674,6 @@ export const EN_TEMPLATE: Record<string, string> = {
   "已运行 {0} 分钟": "Running for {0} minute(s)",
   "已运行 {0} 小时 {1} 分钟": "Running for {0} hour(s) {1} minute(s)",
   "市场 · {0}": "Marketplace · {0}",
-  "当前版本 {0}": "Current version {0}",
   "打开选择器失败：{0}": "Failed to open the picker: {0}",
   "正在同步到 {0}…": "Syncing to {0}…",
   "清单更新时间：{0}": "Manifest updated at: {0}",
@@ -701,6 +691,15 @@ export const EN_TEMPLATE: Record<string, string> = {
 // at the display layer (showNotice wraps message with t()). Exact-match first,
 // then pattern-based for messages that embed dynamic values.
 export const EN_BACKEND: Record<string, string> = {
+  "更新状态暂时不可用，请稍后重试。": "Update state is temporarily unavailable. Try again later.",
+  "暂时无法确认当前版本是否受支持。": "Unable to confirm whether the current version is supported.",
+  "当前版本需要先完成更新。": "This version must be updated before continuing.",
+  "更新稍后重试，正在继续启动当前版本。": "The update will retry later. Continuing with the current version.",
+  "暂时没有可安装的更新。": "No installable update is currently available.",
+  "更新信息暂时不可用，请稍后重试。": "Update information is temporarily unavailable. Try again later.",
+  "更新已下载，请在打开的窗口中确认安装。": "The update is downloaded. Confirm installation in the opened window.",
+  "正在安装更新，应用即将退出。": "Installing the update. The app will exit shortly.",
+  "更新安装失败，请稍后重试。": "Update installation failed. Try again later.",
   "后端版本已读取。": "Backend version loaded.",
   "启动参数已读取。": "Launch arguments loaded.",
   "概览后台任务失败。": "Overview background task failed.",

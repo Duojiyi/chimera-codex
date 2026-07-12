@@ -8,21 +8,168 @@ use codex_plus_core::app_paths::{
     resolve_codex_app_dir_with_saved, user_data_candidates_from,
 };
 use codex_plus_core::launcher::{
-    CodexLaunch, DefaultLaunchHooks, LaunchHooks, LaunchOptions, MacosCleanupPolicy,
-    build_codex_arguments, build_codex_arguments_for_settings,
-    build_codex_arguments_with_native_menu_inspector, build_codex_command,
-    build_codex_command_with_native_menu_inspector, build_macos_cleanup_command,
-    build_macos_open_command, build_macos_open_command_with_native_menu_inspector,
-    build_packaged_activation, build_packaged_activation_with_native_menu_inspector,
-    launch_and_inject_with_hooks,
+    CodexLaunch, DefaultLaunchHooks, LaunchHooks, LaunchOptions, LaunchRoute, LaunchRouteInput,
+    MacosCleanupPolicy, active_relay_has_launch_credentials, build_codex_arguments,
+    build_codex_arguments_for_settings, build_codex_arguments_with_native_menu_inspector,
+    build_codex_command, build_codex_command_with_native_menu_inspector,
+    build_macos_cleanup_command, build_macos_open_command,
+    build_macos_open_command_with_native_menu_inspector, build_packaged_activation,
+    build_packaged_activation_with_native_menu_inspector, launch_and_inject_with_hooks,
+    official_login_can_launch, select_launch_route,
 };
 #[cfg(windows)]
 use codex_plus_core::launcher::{WindowsProcessControlStrategy, windows_process_control_strategy};
 use codex_plus_core::ports::{
     select_packaged_codex_debug_port_with, select_platform_loopback_port_with,
 };
-use codex_plus_core::settings::{BackendSettings, RelayProfile, RelayProtocol};
+use codex_plus_core::settings::{
+    BackendSettings, RelayMode, RelayProfile, RelayProtocol, relay_profile_has_usable_key,
+};
 use codex_plus_core::status::StatusStore;
+
+#[test]
+fn single_entry_launch_route_obeys_update_recovery_and_configuration_priority() {
+    let base = LaunchRouteInput {
+        mandatory_update: false,
+        settings_valid: true,
+        active_relay_live_ready: false,
+        official_login_ready: false,
+        active_profile_has_key: false,
+    };
+
+    assert_eq!(
+        select_launch_route(LaunchRouteInput {
+            mandatory_update: true,
+            settings_valid: false,
+            active_relay_live_ready: true,
+            official_login_ready: true,
+            active_profile_has_key: true,
+        }),
+        LaunchRoute::ManagerUpdate
+    );
+    assert_eq!(
+        select_launch_route(LaunchRouteInput {
+            settings_valid: false,
+            active_relay_live_ready: true,
+            official_login_ready: true,
+            active_profile_has_key: true,
+            ..base
+        }),
+        LaunchRoute::ManagerRecovery
+    );
+    assert_eq!(
+        select_launch_route(LaunchRouteInput {
+            active_relay_live_ready: true,
+            ..base
+        }),
+        LaunchRoute::LaunchCodex
+    );
+    assert_eq!(
+        select_launch_route(LaunchRouteInput {
+            official_login_ready: true,
+            ..base
+        }),
+        LaunchRoute::LaunchCodex
+    );
+    assert_eq!(
+        select_launch_route(LaunchRouteInput {
+            active_profile_has_key: true,
+            ..base
+        }),
+        LaunchRoute::ManagerConfigureRelay
+    );
+    assert_eq!(select_launch_route(base), LaunchRoute::ManagerKeyFirst);
+}
+
+#[test]
+fn api_key_only_auth_json_is_not_an_official_login_or_applied_profile() {
+    assert_eq!(
+        select_launch_route(LaunchRouteInput {
+            mandatory_update: false,
+            settings_valid: true,
+            active_relay_live_ready: false,
+            official_login_ready: false,
+            active_profile_has_key: false,
+        }),
+        LaunchRoute::ManagerKeyFirst
+    );
+}
+
+#[test]
+fn official_login_only_bypasses_setup_when_official_mode_is_active() {
+    assert!(official_login_can_launch(
+        false,
+        RelayMode::PureApi,
+        false,
+        true
+    ));
+    assert!(official_login_can_launch(
+        true,
+        RelayMode::Official,
+        false,
+        true
+    ));
+    assert!(!official_login_can_launch(
+        true,
+        RelayMode::PureApi,
+        false,
+        true
+    ));
+    assert!(!official_login_can_launch(
+        true,
+        RelayMode::Official,
+        true,
+        true
+    ));
+    assert!(!official_login_can_launch(
+        false,
+        RelayMode::Official,
+        false,
+        false
+    ));
+}
+
+#[test]
+fn aggregate_credentials_require_a_resolved_active_aggregate() {
+    assert!(active_relay_has_launch_credentials(true, false));
+    assert!(active_relay_has_launch_credentials(false, true));
+    assert!(!active_relay_has_launch_credentials(false, false));
+}
+
+#[test]
+fn relay_profile_key_detection_accepts_supported_sources_only() {
+    for profile in [
+        RelayProfile {
+            api_key: " sk-direct ".to_string(),
+            ..RelayProfile::default()
+        },
+        RelayProfile {
+            auth_contents: r#"{"OPENAI_API_KEY":"sk-auth"}"#.to_string(),
+            ..RelayProfile::default()
+        },
+        RelayProfile {
+            config_contents: r#"
+model_provider = "custom"
+[model_providers.custom]
+experimental_bearer_token = "sk-config"
+"#
+            .to_string(),
+            ..RelayProfile::default()
+        },
+    ] {
+        assert!(relay_profile_has_usable_key(&profile));
+    }
+
+    assert!(!relay_profile_has_usable_key(&RelayProfile {
+        auth_contents: r#"{"auth_mode":"chatgpt","tokens":{"access_token":"account-token"}}"#
+            .to_string(),
+        ..RelayProfile::default()
+    }));
+    assert!(!relay_profile_has_usable_key(&RelayProfile {
+        auth_contents: r#"{"OPENAI_API_KEY":"   "}"#.to_string(),
+        ..RelayProfile::default()
+    }));
+}
 
 #[test]
 fn app_paths_find_latest_windows_package_prefers_highest_version_app_dir() {
@@ -701,7 +848,7 @@ async fn default_helper_accepts_diagnostic_log_events_over_http() {
         .post(format!("http://127.0.0.1:{port}/diagnostics/log"))
         .json(&serde_json::json!({
             "event": "backend_check_failed",
-            "message": "fetch failed",
+            "message": "fetch failed: diag-http-sentinel-key",
             "helperBase": format!("http://127.0.0.1:{port}")
         }))
         .send()
@@ -715,7 +862,9 @@ async fn default_helper_accepts_diagnostic_log_events_over_http() {
 
     let contents = std::fs::read_to_string(&log_path).unwrap();
     assert!(contents.contains("renderer.backend_check_failed"));
-    assert!(contents.contains("fetch failed"));
+    assert!(!contents.contains("fetch failed"));
+    assert!(!contents.contains("diag-http-sentinel-key"));
+    assert!(contents.contains("[REDACTED]"));
     codex_plus_core::diagnostic_log::set_diagnostic_log_path_for_tests(None);
 }
 

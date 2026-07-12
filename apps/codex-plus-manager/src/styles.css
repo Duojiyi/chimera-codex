@@ -178,23 +178,61 @@ body {
   line-height: 1.2;
 }
 
-.update-dot {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border: 1px solid hsl(var(--brand-accent) / 0.42);
-  border-radius: 999px;
-  background: hsl(var(--brand-accent) / 0.16);
-  color: hsl(var(--brand-accent));
-  cursor: pointer;
-  padding: 0;
+.mandatory-update-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 0.72);
 }
 
-.update-dot:hover {
-  background: hsl(var(--brand-accent) / 0.26);
-  transform: translateY(-1px);
+.mandatory-update-panel {
+  display: flex;
+  width: min(440px, 100%);
+  min-height: 260px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 32px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--background));
+  box-shadow: 0 24px 64px rgb(0 0 0 / 0.42);
+  text-align: center;
+}
+
+.mandatory-update-panel h2,
+.mandatory-update-panel p {
+  margin: 0;
+}
+
+.mandatory-update-panel p {
+  color: hsl(var(--muted-foreground));
+}
+
+.mandatory-update-icon {
+  width: 32px;
+  height: 32px;
+  color: hsl(var(--brand-accent));
+}
+
+.mandatory-update-progress {
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: hsl(var(--muted));
+}
+
+.mandatory-update-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: hsl(var(--brand-accent));
+  transition: width 180ms ease;
 }
 
 .brand-subtitle {

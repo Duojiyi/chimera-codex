@@ -1,19 +1,135 @@
 use codex_plus_core::codex_sqlite::codex_session_db_path_from_home;
 use codex_plus_core::relay_config::{
-    apply_pure_api_config_to_home, apply_relay_config_file_to_home, apply_relay_config_to_home,
-    apply_relay_files_to_home, apply_relay_files_to_home_with_common,
-    apply_relay_profile_files_to_home_with_context, apply_relay_profile_to_home_with_switch_rules,
+    aggregate_relay_matches_live_config_from_home, apply_pure_api_config_to_home,
+    apply_relay_config_file_to_home, apply_relay_config_to_home, apply_relay_files_to_home,
+    apply_relay_files_to_home_with_common, apply_relay_profile_files_to_home_with_context,
+    apply_relay_profile_to_home_with_switch_rules,
     apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard,
     backfill_relay_profile_from_home, backfill_relay_profile_from_home_with_common,
     chatgpt_auth_status_from_home, clear_relay_config_to_home,
     clear_relay_config_to_home_with_auth, delete_context_entry_from_common_config,
     extract_common_config_from_config, filter_common_config_for_selection,
     list_context_entries_from_common_config, normalize_relay_profile_for_storage,
-    relay_config_status_from_home, sanitize_common_config_contents,
-    set_codex_goals_feature_in_home, strip_common_config_from_config,
-    sync_live_config_context_entries, upsert_context_entry_in_common_config,
+    relay_config_status_from_home, relay_profile_matches_live_config_from_home,
+    sanitize_common_config_contents, set_codex_goals_feature_in_home,
+    strip_common_config_from_config, sync_live_config_context_entries,
+    upsert_context_entry_in_common_config,
 };
 use codex_plus_core::settings::{RelayContextSelection, RelayMode, RelayProfile, RelayProtocol};
+
+#[test]
+fn live_relay_match_requires_the_active_profile_provider_url_and_key() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let mut active = RelayProfile {
+        id: "relay-a".to_string(),
+        base_url: "https://relay-a.example/v1".to_string(),
+        api_key: "sk-relay-a".to_string(),
+        relay_mode: RelayMode::PureApi,
+        ..RelayProfile::default()
+    };
+    let mut different_url = RelayProfile {
+        id: "relay-b".to_string(),
+        base_url: "https://relay-b.example/v1".to_string(),
+        api_key: "sk-relay-a".to_string(),
+        relay_mode: RelayMode::PureApi,
+        ..RelayProfile::default()
+    };
+    let mut different_key = RelayProfile {
+        id: "relay-c".to_string(),
+        base_url: "https://relay-a.example/v1".to_string(),
+        api_key: "sk-relay-c".to_string(),
+        relay_mode: RelayMode::PureApi,
+        ..RelayProfile::default()
+    };
+
+    normalize_relay_profile_for_storage(&mut active).unwrap();
+    normalize_relay_profile_for_storage(&mut different_url).unwrap();
+    normalize_relay_profile_for_storage(&mut different_key).unwrap();
+
+    apply_relay_profile_to_home_with_switch_rules(home, &active, "").unwrap();
+
+    assert!(relay_profile_matches_live_config_from_home(home, &active));
+    assert!(!relay_profile_matches_live_config_from_home(
+        home,
+        &different_url
+    ));
+    assert!(!relay_profile_matches_live_config_from_home(
+        home,
+        &different_key
+    ));
+
+    let config_path = home.join("config.toml");
+    let config = std::fs::read_to_string(&config_path).unwrap();
+    std::fs::write(&config_path, format!("{config}\nbroken = [\n")).unwrap();
+    assert!(!relay_profile_matches_live_config_from_home(home, &active));
+
+    std::fs::write(
+        &config_path,
+        config.replace(
+            "requires_openai_auth = true",
+            "requires_openai_auth = false",
+        ),
+    )
+    .unwrap();
+    assert!(!relay_profile_matches_live_config_from_home(home, &active));
+}
+
+#[test]
+fn aggregate_live_match_requires_the_local_proxy_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+
+    codex_plus_core::relay_config::apply_relay_config_to_home_with_protocol(
+        home,
+        &codex_plus_core::protocol_proxy::local_responses_proxy_base_url(
+            codex_plus_core::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
+        ),
+        "codex-plus-aggregate",
+        RelayProtocol::Responses,
+        codex_plus_core::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
+    )
+    .unwrap();
+
+    assert!(aggregate_relay_matches_live_config_from_home(home));
+    let config_path = home.join("config.toml");
+    let config = std::fs::read_to_string(&config_path).unwrap();
+    std::fs::write(
+        &config_path,
+        config.replace("codex-plus-aggregate", "different-token"),
+    )
+    .unwrap();
+    assert!(!aggregate_relay_matches_live_config_from_home(home));
+
+    std::fs::write(
+        &config_path,
+        config.replace("http://127.0.0.1:57321/v1", "http://127.0.0.1:57322/v1"),
+    )
+    .unwrap();
+    assert!(!aggregate_relay_matches_live_config_from_home(home));
+
+    std::fs::write(
+        &config_path,
+        config.replace(
+            "requires_openai_auth = true",
+            "requires_openai_auth = false",
+        ),
+    )
+    .unwrap();
+    assert!(!aggregate_relay_matches_live_config_from_home(home));
+
+    let invalid_toml = config
+        .replace(
+            r#"base_url = "http://127.0.0.1:57321/v1""#,
+            "base_url = http://127.0.0.1:57321/v1",
+        )
+        .replace(
+            r#"experimental_bearer_token = "codex-plus-aggregate""#,
+            "experimental_bearer_token = codex-plus-aggregate",
+        );
+    std::fs::write(&config_path, invalid_toml).unwrap();
+    assert!(!aggregate_relay_matches_live_config_from_home(home));
+}
 
 fn write_remote_plugin_marketplace_snapshot(home: &std::path::Path) {
     let root = home.join(".tmp").join("plugins-remote");

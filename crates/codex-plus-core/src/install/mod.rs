@@ -82,16 +82,16 @@ impl ShortcutState {
     }
 }
 
-pub fn shortcut_names() -> (&'static str, &'static str) {
-    ("Chimera Codex.lnk", "Chimera Codex 管理工具.lnk")
+pub fn shortcut_names() -> (String, String) {
+    (format!("{SILENT_NAME}.lnk"), format!("{MANAGER_NAME}.lnk"))
 }
 
 pub fn legacy_shortcut_names() -> (&'static str, &'static str) {
     ("Codex++.lnk", "Codex++ 管理工具.lnk")
 }
 
-pub fn app_bundle_names() -> (&'static str, &'static str) {
-    ("Chimera Codex.app", "Chimera Codex 管理工具.app")
+pub fn app_bundle_names() -> (String, String) {
+    (format!("{SILENT_NAME}.app"), format!("{MANAGER_NAME}.app"))
 }
 
 pub fn legacy_app_bundle_names() -> (&'static str, &'static str) {
@@ -215,7 +215,7 @@ fn platform_install(options: &InstallOptions) -> anyhow::Result<()> {
     #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = options;
-        anyhow::bail!("当前平台暂不支持安装 Chimera Codex 入口")
+        anyhow::bail!("当前平台暂不支持安装 Chimera++ 入口")
     }
 }
 
@@ -233,7 +233,7 @@ fn platform_uninstall(options: &InstallOptions) -> anyhow::Result<()> {
     #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = options;
-        anyhow::bail!("当前平台暂不支持卸载 Chimera Codex 入口")
+        anyhow::bail!("当前平台暂不支持卸载 Chimera++ 入口")
     }
 }
 

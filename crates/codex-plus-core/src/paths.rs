@@ -4,6 +4,8 @@ use std::path::PathBuf;
 const APP_STATE_DIR: &str = ".codex-session-delete";
 const SETTINGS_FILE: &str = "settings.json";
 const LATEST_STATUS_FILE: &str = "latest-status.json";
+const UPDATE_STATE_FILE: &str = "update-state.json";
+const UPDATE_CONTINUATION_FILE: &str = "update-continuation.json";
 const DIAGNOSTIC_LOG_FILE: &str = "codex-plus.log";
 const PENDING_PROVIDER_IMPORT_FILE: &str = "pending-provider-import.json";
 
@@ -24,6 +26,14 @@ pub fn default_settings_path() -> PathBuf {
 
 pub fn default_latest_status_path() -> PathBuf {
     default_app_state_dir().join(LATEST_STATUS_FILE)
+}
+
+pub fn default_update_state_path() -> PathBuf {
+    default_app_state_dir().join(UPDATE_STATE_FILE)
+}
+
+pub fn default_update_continuation_path() -> PathBuf {
+    default_app_state_dir().join(UPDATE_CONTINUATION_FILE)
 }
 
 pub fn default_diagnostic_log_path() -> PathBuf {
@@ -62,6 +72,13 @@ mod tests {
         let path = default_latest_status_path();
 
         assert!(path.ends_with(".codex-session-delete/latest-status.json"));
+    }
+
+    #[test]
+    fn default_update_state_path_uses_app_state_directory() {
+        let path = default_update_state_path();
+
+        assert!(path.ends_with(".codex-session-delete/update-state.json"));
     }
 
     #[test]

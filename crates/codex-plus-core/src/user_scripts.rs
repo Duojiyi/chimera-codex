@@ -225,7 +225,6 @@ impl UserScriptManager {
                     "version": market.as_ref().map(|item| item.version.as_str()).unwrap_or(""),
                     "installed": market.is_some(),
                     "source_url": market.as_ref().map(|item| item.script_url.as_str()).unwrap_or(""),
-                    "homepage": market.as_ref().map(|item| item.homepage.as_str()).unwrap_or("")
                 })
             })
             .collect())

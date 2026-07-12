@@ -1,10 +1,12 @@
 # Chimera Codex 公开发行版 — TODO Checklist
 
+> **后续 TODO：** 2026-07-11 新增的 Chimera++、无 About/GitHub UI、自动更新和原创图标任务见 `2026-07-11-chimera-plus-product-refresh-todo.md`。本清单保留历史完成状态。
+
 > 对应：
 > - Spec: `docs/superpowers/specs/2026-07-10-chimera-private-fork-design.md`
 > - Plan: `docs/superpowers/plans/2026-07-10-chimera-private-fork.md`
 > 日期：2026-07-10
-> 状态：产品代码已开工（TDD + 双盲）；本地提交，待用户决定是否推送
+> 状态：本地产品实现与补救已通过全量自动化回归和双盲审计；待提交/推送、自动化 token、远端 Actions、安装冒烟与首次公开 Release
 
 ## 决策与开工门
 
@@ -18,7 +20,7 @@
 - [x] D8. 全新安装默认选中 ChimeraHub；Key 为空不应用；升级不覆盖已有配置
 - [x] D9. Windows x64、macOS x64/arm64 都构建；macOS 仅 ad-hoc sign，不 notarize
 - [x] D10. 用户明确授权开工
-- [ ] D11. 写入真实 repository，配置 branch protection 和最小权限自动化 token（仓库与 branch protection 已完成；自动化 token/Actions 最小权限仍待实施）
+- [ ] D11. 写入真实 repository，配置 branch protection 和最小权限自动化 token（仓库、branch protection 与 Actions 默认只读已完成；专用自动化 token 仍待配置）
 - [x] D12. 每个 checkbox 坚持 Red → Green → 双盲审计；每个大任务另做聚合双盲审计
 
 ## P0 — 仓库、品牌、去推广与安全更新
@@ -46,7 +48,7 @@
 - [x] T18. NSIS 原目录覆盖、旧快捷方式/乱码清理、新入口、卸载回归
 - [x] T19. macOS 新 App/DMG 名、纯数字 plist 版本、legacy App 检测提示、release 验证路径
 - [x] T20. README/README_EN 去推广，保留 MIT 归属，写双平台升级/Gatekeeper 指南
-- [x] T21. branding + no-promo 门禁通过，allowlist 仅覆盖明确 fixture/legacy 常量
+- [x] T21. branding + no-promo 门禁通过；allowlist 精确绑定 path/pattern/line number/full line，并拒绝重复或未使用豁免
 
 ## P2 — CI、上游同步与发布
 
@@ -56,7 +58,7 @@
 - [x] T25. 写安全 `sync-upstream.ps1`，DryRun 前后 refs/files/status 不变
 - [x] T26. `sync-upstream.yml` 轮询正式 Release、去重、建 PR、auto-merge、Issue 去重
 - [x] T27. 同步 workflow 不直接创建 Release；main 新版本由发布 workflow 处理
-- [x] T28. 冲突/test/hash failure 演练：main/latest 不变，无重复 Issue/Release（DryRun+静态路径已证；真实冲突/Issue 演练待首次启用 token 后执行，见 `audits/task-9-step-4-*.md`）
+- [ ] T28. 冲突/test/hash failure 演练：DryRun 与静态失败路径已证；真实 main/latest 不变、Issue 去重与 Release 不创建仍待首次启用 token 后演练
 - [ ] T29. 首次公开 Release：匿名 latest/asset 下载成功（**待用户推送并触发 release workflow 后**）
 
 ## 验收（S1–S12）
@@ -72,7 +74,7 @@
 - [ ] V9. Windows + macOS x64/arm64 资产齐全；macOS 未 notarize 说明清楚（S12）— README 已写；**资产待 Release**
 - [ ] V10. macOS 原版旧 App 被检测，完成迁移后只留新入口（S10）— 代码已有；**待 macOS 冒烟**
 - [x] V11. `generate-branding -Check` 与 `verify-no-upstream-ads.ps1` exit 0
-- [x] V12. `cargo fmt --check`、`cargo test`（core+manager）、manager typecheck 全绿
+- [x] V12. `cargo fmt --all -- --check`、`cargo test --workspace --locked`（747 tests）、manager typecheck 与 Vite production build 全绿
 - [x] V13. ScriptMarket 不访问上游，本地脚本仍可用
 - [x] V14. 错误哈希/大小时不启动安装器（S11）— updater 单测；远端 latest 回滚待 Release
 

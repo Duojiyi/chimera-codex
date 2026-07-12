@@ -1,20 +1,43 @@
 # verify-no-upstream-ads.ps1 allowlist
-# Format: relative/path:pattern:reason
-# One hit family per line. Do NOT allowlist whole directories.
-# Only fixture URLs and explicit legacy migration/cleanup constants.
+# Format: one JSON object per line with exact path, scanner pattern, source line number, full trimmed line, and reason.
+# Paths are repository-root-relative files. Wildcards, suffix matching, and partial-line matching are forbidden.
+# Only test fixtures and explicit legacy migration/cleanup constants belong here.
+
+# Background updater source; never rendered as a customer link
+{"path":"apps/codex-plus-manager/src/branding.generated.ts","pattern":"github","lineNumber":7,"line":"export const LATEST_JSON_URL = 'https://github.com/Duojiyi/chimera-codex/releases/latest/download/latest.json';","reason":"generated fixed background updater manifest URL; customer UI scan must allow only this exact line"}
 
 # Embedded #[cfg(test)] fixtures in provider import URL parser
-crates/codex-plus-core/src/provider_import.rs:jojocode.com:cfg(test) URL-parse fixture; not a production endpoint
+{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":652,"line":"let url = \"codexplusplus://v1/import/provider?resource=provider&name=JOJO%20Code&baseUrl=https%3A%2F%2Fjojocode.com%2Fv1&apiKey=sk-test&wireApi=responses&relayMode=pureApi&configContents=bW9kZWxfcHJvdmlkZXIgPSAiQ29kZXhQbHVzUGx1cyIK&authContents=eyJPUEVOQUlfQVBJX0tFWSI6InNrLXRlc3QifQo%3D\";","reason":"cfg(test) URL parser fixture; not a production endpoint"}
+{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":657,"line":"assert_eq!(request.base_url, \"https://jojocode.com/v1\");","reason":"cfg(test) URL parser assertion"}
+{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":678,"line":"base_url: \"https://jojocode.com/v1/\".to_string(),","reason":"cfg(test) provider import fixture"}
+{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":702,"line":"\"https://jojocode.com/v1\"","reason":"cfg(test) provider import assertion"}
+{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":757,"line":"base_url: \"https://jojocode.com/v1\".to_string(),","reason":"cfg(test) pending import fixture"}
+{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":813,"line":"assert_eq!(pending.base_url, \"https://jojocode.com/v1\");","reason":"cfg(test) pending import assertion"}
+{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":912,"line":"base_url: \"https://jojocode.com/v1\".to_string(),","reason":"cfg(test) confirm pending import fixture"}
 
 # Legacy display names used only for detection/cleanup (Task 6)
-crates/codex-plus-core/src/install/mod.rs:Codex++ 管理工具:LEGACY_MANAGER_NAME / legacy shortcut and app bundle constants
+{"path":"crates/codex-plus-core/src/install/mod.rs","pattern":"Codex++ 管理工具","lineNumber":16,"line":"pub const LEGACY_MANAGER_NAME: &str = \"Codex++ 管理工具\";","reason":"legacy display name used only for detection and cleanup"}
+{"path":"crates/codex-plus-core/src/install/mod.rs","pattern":"Codex++ 管理工具","lineNumber":90,"line":"(\"Codex++.lnk\", \"Codex++ 管理工具.lnk\")","reason":"legacy shortcut names used only for cleanup"}
+{"path":"crates/codex-plus-core/src/install/mod.rs","pattern":"Codex++ 管理工具","lineNumber":98,"line":"(\"Codex++.app\", \"Codex++ 管理工具.app\")","reason":"legacy app bundle names used only for detection"}
 
 # Root README migration guidance for users still on upstream app names
-README.md:Codex++ 管理工具:documents legacy macOS app cleanup; not a product display name
-README_EN.md:Codex++ Manager:documents legacy macOS app cleanup; not a product display name
+{"path":"README.md","pattern":"Codex++ 管理工具","lineNumber":67,"line":"1. 退出旧的 `Codex++.app` / `Codex++ 管理工具.app` 以及新的 Chimera 进程。","reason":"documents legacy macOS app cleanup"}
+{"path":"README_EN.md","pattern":"Codex++ 管理工具","lineNumber":67,"line":"1. Quit legacy `Codex++.app` / `Codex++ 管理工具.app` and any Chimera processes.","reason":"documents legacy macOS app cleanup"}
 
-# NSIS deletes legacy shortcuts before creating Chimera entries
-scripts/installer/windows/CodexPlusPlus.nsi:Codex++ 管理工具:legacy shortcut cleanup only; new CreateShortcut uses Chimera names
+# NSIS snapshots, removes, and restores legacy shortcuts transactionally
+{"path":"scripts/installer/windows/CodexPlusPlus.nsi","pattern":"Codex++ 管理工具","lineNumber":409,"line":"!insertmacro BackupShortcut \"$DESKTOP\\Codex++ 管理工具.lnk\" \"DesktopLegacyManager\"","reason":"legacy desktop shortcut install snapshot"}
+{"path":"scripts/installer/windows/CodexPlusPlus.nsi","pattern":"Codex++ 管理工具","lineNumber":412,"line":"!insertmacro BackupShortcut \"$SMPROGRAMS\\Codex++\\Codex++ 管理工具.lnk\" \"MenuLegacyManager\"","reason":"legacy Start Menu shortcut install snapshot"}
+{"path":"scripts/installer/windows/CodexPlusPlus.nsi","pattern":"Codex++ 管理工具","lineNumber":476,"line":"!insertmacro DeleteInstallShortcut \"$DESKTOP\\Codex++ 管理工具.lnk\" \"DesktopLegacyManager\"","reason":"legacy desktop shortcut cleanup"}
+{"path":"scripts/installer/windows/CodexPlusPlus.nsi","pattern":"Codex++ 管理工具","lineNumber":479,"line":"!insertmacro DeleteInstallShortcut \"$SMPROGRAMS\\Codex++\\Codex++ 管理工具.lnk\" \"MenuLegacyManager\"","reason":"legacy Start Menu shortcut cleanup"}
+{"path":"scripts/installer/windows/CodexPlusPlus.nsi","pattern":"Codex++ 管理工具","lineNumber":537,"line":"!insertmacro RollbackShortcut \"$DESKTOP\\Codex++ 管理工具.lnk\" \"$DESKTOP\" \"DesktopLegacyManager\"","reason":"legacy desktop shortcut install rollback"}
+{"path":"scripts/installer/windows/CodexPlusPlus.nsi","pattern":"Codex++ 管理工具","lineNumber":540,"line":"!insertmacro RollbackShortcut \"$SMPROGRAMS\\Codex++\\Codex++ 管理工具.lnk\" \"$SMPROGRAMS\\Codex++\" \"MenuLegacyManager\"","reason":"legacy Start Menu shortcut install rollback"}
+{"path":"scripts/installer/windows/CodexPlusPlus.nsi","pattern":"Codex++ 管理工具","lineNumber":678,"line":"!insertmacro BackupUninstallShortcut \"$DESKTOP\\Codex++ 管理工具.lnk\" \"DesktopLegacyManager\"","reason":"legacy desktop shortcut uninstall snapshot"}
+{"path":"scripts/installer/windows/CodexPlusPlus.nsi","pattern":"Codex++ 管理工具","lineNumber":683,"line":"!insertmacro BackupUninstallShortcut \"$SMPROGRAMS\\Codex++\\Codex++ 管理工具.lnk\" \"MenuLegacyManager\"","reason":"legacy Start Menu shortcut uninstall snapshot"}
+{"path":"scripts/installer/windows/CodexPlusPlus.nsi","pattern":"Codex++ 管理工具","lineNumber":741,"line":"!insertmacro UninstallShortcut \"$DESKTOP\\Codex++ 管理工具.lnk\" \"DesktopLegacyManager\"","reason":"legacy desktop shortcut uninstall cleanup"}
+{"path":"scripts/installer/windows/CodexPlusPlus.nsi","pattern":"Codex++ 管理工具","lineNumber":746,"line":"!insertmacro UninstallShortcut \"$SMPROGRAMS\\Codex++\\Codex++ 管理工具.lnk\" \"MenuLegacyManager\"","reason":"legacy Start Menu shortcut uninstall cleanup"}
+{"path":"scripts/installer/windows/CodexPlusPlus.nsi","pattern":"Codex++ 管理工具","lineNumber":795,"line":"!insertmacro RollbackShortcut \"$DESKTOP\\Codex++ 管理工具.lnk\" \"$DESKTOP\" \"DesktopLegacyManager\"","reason":"legacy desktop shortcut uninstall rollback"}
+{"path":"scripts/installer/windows/CodexPlusPlus.nsi","pattern":"Codex++ 管理工具","lineNumber":800,"line":"!insertmacro RollbackShortcut \"$SMPROGRAMS\\Codex++\\Codex++ 管理工具.lnk\" \"$SMPROGRAMS\\Codex++\" \"MenuLegacyManager\"","reason":"legacy Start Menu shortcut uninstall rollback"}
 
 # DMG stage README.txt migration steps for old app bundle names
-scripts/installer/macos/package-dmg.sh:Codex++ 管理工具:legacy migration instructions embedded in DMG README.txt
+{"path":"scripts/installer/macos/package-dmg.sh","pattern":"Codex++ 管理工具","lineNumber":205,"line":"1. Quit Codex++ / Codex++ 管理工具 completely.","reason":"legacy migration instruction embedded in DMG README"}
+{"path":"scripts/installer/macos/package-dmg.sh","pattern":"Codex++ 管理工具","lineNumber":207,"line":"3. Manually delete old \"Codex++.app\" and \"Codex++ 管理工具.app\".","reason":"legacy migration instruction embedded in DMG README"}

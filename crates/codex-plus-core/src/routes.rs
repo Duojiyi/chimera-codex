@@ -78,7 +78,6 @@ pub trait BridgeRuntimeService: Send + Sync {
     async fn open_manager(&self) -> anyhow::Result<Value>;
     async fn backend_status(&self) -> anyhow::Result<Value>;
     async fn codex_model_catalog(&self) -> anyhow::Result<Value>;
-    async fn ads(&self) -> anyhow::Result<Value>;
     async fn zed_remote_status(&self) -> anyhow::Result<Value>;
     async fn resolve_zed_remote_host(&self, payload: Value) -> anyhow::Result<Value>;
     async fn fallback_zed_remote_request(&self, payload: Value) -> anyhow::Result<Value>;
@@ -166,7 +165,6 @@ pub async fn handle_bridge_request(
         "/backend/status" => ctx.runtime.backend_status().await,
         "/codex-model-catalog" | "/codex-config-model" => ctx.runtime.codex_model_catalog().await,
         "/diagnostics/log" => diagnostic_log_value(payload.clone()),
-        "/ads" => ctx.runtime.ads().await,
         "/zed-remote/status" => ctx.runtime.zed_remote_status().await,
         "/zed-remote/resolve-host" => ctx.runtime.resolve_zed_remote_host(payload.clone()).await,
         "/zed-remote/fallback-request" => {
@@ -467,10 +465,6 @@ impl BridgeRuntimeService for CoreRuntimeService {
         Ok(crate::model_catalog::read_codex_model_catalog().await)
     }
 
-    async fn ads(&self) -> anyhow::Result<Value> {
-        crate::ads::fetch_ad_list().await
-    }
-
     async fn zed_remote_status(&self) -> anyhow::Result<Value> {
         Ok(crate::zed_remote::zed_remote_status())
     }
@@ -689,21 +683,72 @@ fn diagnostic_log_value(payload: Value) -> anyhow::Result<Value> {
     }))
 }
 
-fn sanitize_diagnostic_event(event: &str) -> String {
-    let sanitized = event
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if sanitized.is_empty() {
-        "event".to_string()
-    } else {
-        sanitized
+pub(crate) fn sanitize_diagnostic_event(event: &str) -> String {
+    match event.trim() {
+        "backend_bridge_timeout"
+        | "backend_check_failed"
+        | "backend_status_bridge_and_http_failed"
+        | "backend_status_bridge_failed_http_fallback_ok"
+        | "bridge_call_failed"
+        | "bridge_missing_for_route"
+        | "image_overlay_installed"
+        | "model_app_server_request_patch_failed"
+        | "model_app_server_request_patch_installed"
+        | "model_app_server_request_patch_not_found"
+        | "model_app_server_request_patch_skipped"
+        | "model_app_server_result_patched"
+        | "model_catalog_fallback_applied"
+        | "model_catalog_fallback_error"
+        | "model_whitelist_refresh_scheduled"
+        | "plugin_auto_expand_finished"
+        | "plugin_build_flavor_filter_bypassed"
+        | "plugin_build_flavor_filter_patch_installed"
+        | "plugin_install_request_debug"
+        | "plugin_install_request_failed"
+        | "plugin_marketplace_bridge_patch_installed"
+        | "plugin_marketplace_bridge_patch_not_found"
+        | "plugin_marketplace_bridge_request_patch_failed"
+        | "plugin_marketplace_dispatch_event_patch_failed"
+        | "plugin_marketplace_fetch_response_patch_failed"
+        | "plugin_marketplace_hidden_filter_bypassed"
+        | "plugin_marketplace_local_merged"
+        | "plugin_marketplace_request_expanded"
+        | "plugin_marketplace_request_patch_failed"
+        | "plugin_marketplace_request_patch_installed"
+        | "plugin_marketplace_request_patch_not_found"
+        | "plugin_marketplace_response_debug"
+        | "plugin_marketplace_response_expanded"
+        | "plugin_marketplace_response_message_patch_failed"
+        | "plugin_marketplace_response_patch_failed"
+        | "plugin_unlock_strategy_selected"
+        | "script_loaded"
+        | "service_tier_dispatcher_patch_failed"
+        | "service_tier_dispatcher_patch_installed"
+        | "service_tier_read_failed"
+        | "service_tier_request_override_applied"
+        | "stepwise_sync_failed"
+        | "upstream_branch_prepare_failed"
+        | "upstream_pending_worktree_override_applied"
+        | "upstream_pending_worktree_patch_failed" => event.trim().to_string(),
+        _ => "event".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_event_tests {
+    use super::sanitize_diagnostic_event;
+
+    #[test]
+    fn renderer_diagnostic_event_rejects_untrusted_secret_text() {
+        assert_eq!(sanitize_diagnostic_event("script_loaded"), "script_loaded");
+        assert_eq!(
+            sanitize_diagnostic_event("sk-renderer-event-sentinel"),
+            "event"
+        );
+        assert_eq!(
+            sanitize_diagnostic_event("https://secret.example/key"),
+            "event"
+        );
     }
 }
 

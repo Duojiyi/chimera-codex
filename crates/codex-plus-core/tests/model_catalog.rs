@@ -5,7 +5,7 @@ use std::path::Path;
 use std::thread;
 
 use codex_plus_core::model_catalog::{
-    read_codex_model_catalog, read_codex_model_catalog_from_home,
+    read_codex_model_catalog_from_home, read_codex_model_catalog_from_paths,
 };
 use codex_plus_core::settings::{
     BackendSettings, RelayMode, RelayProfile, RelayProtocol, SettingsStore,
@@ -118,45 +118,25 @@ async fn model_catalog_uses_active_relay_profile_model_list_for_display() {
     let codex_home = temp.path().join("codex-home");
     std::fs::create_dir_all(&codex_home).unwrap();
     let settings_path = temp.path().join("settings.json");
-    let previous_codex_home = std::env::var_os("CODEX_HOME");
-    let previous_settings_path =
-        codex_plus_core::paths::set_settings_path_for_tests(Some(settings_path.clone()));
-    unsafe {
-        std::env::set_var("CODEX_HOME", &codex_home);
-    }
+    SettingsStore::new_with_codex_home(settings_path.clone(), codex_home.clone())
+        .save(&BackendSettings {
+            active_relay_id: "relay-a".to_string(),
+            relay_profiles: vec![RelayProfile {
+                id: "relay-a".to_string(),
+                name: "Relay A".to_string(),
+                model: "qwen3-coder".to_string(),
+                base_url: "https://example.test/v1".to_string(),
+                protocol: RelayProtocol::Responses,
+                relay_mode: RelayMode::MixedApi,
+                model_list: "deepseek-coder\nqwen3-coder\nclaude-compatible".to_string(),
+                config_contents: "model = \"qwen3-coder\"\n".to_string(),
+                ..RelayProfile::default()
+            }],
+            ..BackendSettings::default()
+        })
+        .unwrap();
 
-    let result = async {
-        SettingsStore::new(settings_path)
-            .save(&BackendSettings {
-                active_relay_id: "relay-a".to_string(),
-                relay_profiles: vec![RelayProfile {
-                    id: "relay-a".to_string(),
-                    name: "Relay A".to_string(),
-                    model: "qwen3-coder".to_string(),
-                    base_url: "https://example.test/v1".to_string(),
-                    protocol: RelayProtocol::Responses,
-                    relay_mode: RelayMode::MixedApi,
-                    model_list: "deepseek-coder\nqwen3-coder\nclaude-compatible".to_string(),
-                    config_contents: "model = \"qwen3-coder\"\n".to_string(),
-                    ..RelayProfile::default()
-                }],
-                ..BackendSettings::default()
-            })
-            .unwrap();
-
-        read_codex_model_catalog().await
-    }
-    .await;
-
-    match previous_codex_home {
-        Some(value) => unsafe {
-            std::env::set_var("CODEX_HOME", value);
-        },
-        None => unsafe {
-            std::env::remove_var("CODEX_HOME");
-        },
-    }
-    codex_plus_core::paths::set_settings_path_for_tests(previous_settings_path);
+    let result = read_codex_model_catalog_from_paths(&codex_home, &settings_path).await;
 
     assert_eq!(result["status"], "ok");
     assert_eq!(result["model_provider"], "relay-a");

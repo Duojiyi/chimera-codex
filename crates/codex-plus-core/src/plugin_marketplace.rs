@@ -149,16 +149,20 @@ impl MarketplaceStatus {
 pub async fn initialize_openai_curated_marketplace_and_configure(
     home: &Path,
 ) -> anyhow::Result<MarketplaceEnsureResult> {
-    let mut initialized = false;
-    if local_openai_curated_marketplace_root(home)?.is_none() {
-        initialize_openai_curated_marketplace_from_github(home).await?;
-        initialized = true;
-    }
+    let initialized = initialize_openai_curated_marketplace(home).await?;
     let configured = ensure_openai_curated_marketplace_config(home)?;
     Ok(MarketplaceEnsureResult {
         initialized,
         configured,
     })
+}
+
+pub async fn initialize_openai_curated_marketplace(home: &Path) -> anyhow::Result<bool> {
+    if local_openai_curated_marketplace_root(home)?.is_none() {
+        initialize_openai_curated_marketplace_from_github(home).await?;
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -299,8 +303,9 @@ async fn initialize_openai_curated_marketplace_from_github(home: &Path) -> anyho
 }
 
 async fn download_openai_plugins_zip() -> anyhow::Result<Vec<u8>> {
-    let client =
-        crate::http_client::proxied_client(&format!("Codex++/{}", crate::version::VERSION))?;
+    let client = crate::http_client::proxied_client(&crate::http_client::branded_user_agent(
+        "PluginMarketplace",
+    ))?;
     let bytes = client
         .get(OPENAI_PLUGINS_ZIP_URL)
         .header(reqwest::header::ACCEPT, "application/zip")

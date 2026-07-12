@@ -1,5 +1,7 @@
 # Chimera Codex 公开发行版 Implementation Plan
 
+> **后续计划：** 2026-07-11 产品刷新任务见 `2026-07-11-chimera-plus-product-refresh.md`。本文件中的旧品牌、About 手动更新和沿用旧图标决策不再用于新实现。
+
 > 本计划不依赖特定 agent skill。实施者按 task 顺序执行，每个 task 先测试、再实现、再验证；checkbox 是唯一进度记录。
 
 **Goal:** 将上游 Codex++ 制作为 ChimeraHub 公开发行版：去广告、浅层改名、全新安装默认中转、公开更新源，并建立跟踪上游正式 Release 的同步、构建和发布流水线。
@@ -123,7 +125,7 @@ Task 完成时再做聚合双盲审计：审计者复核所有子任务证据、
 
 当前已启用 PR、1 次批准、dismiss stale review、last-push approval、线性历史、禁止强推/删除和 conversation resolution；CI 尚未落地，因此 required status checks 留待真实 check 名产生后追加。
 
-- [ ] **Step 4: Record repository in brand config**
+- [x] **Step 4: Record repository in brand config**
 
 只有真实地址确定后才写 `brand/product.toml`；任何 `TBD`、`example`、`chimera-org` 占位值都必须使 `-Check` 失败。
 
@@ -201,7 +203,7 @@ git commit -m "feat: add generated Chimera branding configuration"
 - Modify: `crates/codex-plus-core/tests/cdp_bridge.rs`
 - Modify: `assets/inject/renderer-inject.js`（Ad-List URL 与推荐/赞赏 Tab）
 
-- [ ] **Step 1: Write/adjust failing tests**
+- [x] **Step 1: Write/adjust failing tests**
 
 在 `tests/ads.rs` 增加生产入口测试，同时保留 `fetch_ad_list_from_urls` 的本地 fixture 测试：
 
@@ -218,12 +220,12 @@ async fn ads_disabled_returns_empty_list_without_network() {
 
 在 `cdp_bridge.rs` 将 sponsor images “存在”断言改成“变量和 data URI 均不存在”，并断言脚本不含 Ad-List URL、推荐 Tab 和赞赏 fallback URL。
 
-- [ ] **Step 2: Run tests to see failures**
+- [x] **Step 2: Run tests to see failures**
 
 Run: `cargo test -p codex-plus-core --test ads`
 Expected: 旧断言失败 / 新断言失败
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 在 `ads.rs`：
 
@@ -242,12 +244,12 @@ pub async fn fetch_ad_list() -> anyhow::Result<Value> {
 
 `renderer-inject.js`：删除/短路广告 URL 常量与「推荐内容」「赞赏」Tab 渲染入口（保留其它增强功能）。
 
-- [ ] **Step 4: Re-run ads tests**
+- [x] **Step 4: Re-run ads tests**
 
 Run: `cargo test -p codex-plus-core --test ads`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/codex-plus-core/src/ads.rs crates/codex-plus-core/tests/ads.rs crates/codex-plus-core/src/assets.rs crates/codex-plus-core/tests/cdp_bridge.rs assets/inject/renderer-inject.js
@@ -263,15 +265,15 @@ git commit -m "feat: disable ad list, builtins, sponsor images, and inject recom
 - Modify: `apps/codex-plus-manager/src/App.tsx`（`SCRIPT_MARKET_REPOSITORY_URL`）
 - Test: 相关 `bridge_routes` / market 测试若依赖上游 URL 则改为本地 fixture
 
-- [ ] **Step 1: Short-circuit market fetch**
+- [x] **Step 1: Short-circuit market fetch**
 
 将 `DEFAULT_MARKET_INDEX_URL` 置空，并在 `fetch_market_manifest` 发请求前对空 URL 返回 `ScriptMarketManifest { version: 1, updated_at: None, scripts: Vec::new() }`；非空 URL 的现有 fixture 能力保持不变。
 
-- [ ] **Step 2: UI**
+- [x] **Step 2: UI**
 
 隐藏市场刷新和上游仓库外链，但保留本地脚本的启用、禁用、导入和删除能力。后端空 manifest 仅作为旧调用兼容，不向空 URL 发请求。
 
-- [ ] **Step 3: Test + commit**
+- [x] **Step 3: Test + commit**
 
 ```bash
 cargo test -p codex-plus-core --test bridge_routes
@@ -655,7 +657,7 @@ git commit -m "ci: add upstream sync watcher with conflict issues"
 **Files:**
 - Modify: `docs/superpowers/todos/2026-07-10-chimera-private-fork-todo.md`（勾选）
 
-- [ ] **Step 1: Full automated verification**
+- [x] **Step 1: Full automated verification**
 
 ```powershell
 pwsh -File scripts/verify-no-upstream-ads.ps1

@@ -30,7 +30,8 @@ Exit codes:
 param(
     [switch]$DryRun,
     [switch]$SkipGates,
-    [string]$ResultPath = ''
+    [string]$ResultPath = '',
+    [switch]$SkipMain
 )
 
 Set-StrictMode -Version Latest
@@ -48,6 +49,7 @@ $script:Result = [ordered]@{
     upstream_sha    = $null
     sync_branch     = $null
     chimera_version = $null
+    gated_sha       = $null
     conflict_files  = @()
     message         = ''
 }
@@ -178,7 +180,89 @@ function Assert-Remotes {
     }
 }
 
+function Get-FormalSemVerParts {
+    param([Parameter(Mandatory)][string]$Version)
+
+    $normalized = $Version.Trim()
+    if ($normalized.StartsWith('v') -or $normalized.StartsWith('V')) {
+        $normalized = $normalized.Substring(1)
+    }
+    if ($normalized -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+        throw "Version is not formal SemVer X.Y.Z: $Version"
+    }
+    return @($Matches[1], $Matches[2], $Matches[3])
+}
+
+function Compare-FormalSemVer {
+    param(
+        [Parameter(Mandatory)][string]$Left,
+        [Parameter(Mandatory)][string]$Right
+    )
+
+    $leftParts = @(Get-FormalSemVerParts -Version $Left)
+    $rightParts = @(Get-FormalSemVerParts -Version $Right)
+    for ($i = 0; $i -lt 3; $i++) {
+        if ($leftParts[$i].Length -lt $rightParts[$i].Length) { return -1 }
+        if ($leftParts[$i].Length -gt $rightParts[$i].Length) { return 1 }
+        $comparison = [string]::CompareOrdinal($leftParts[$i], $rightParts[$i])
+        if ($comparison -lt 0) { return -1 }
+        if ($comparison -gt 0) { return 1 }
+    }
+    return 0
+}
+
+function Get-FormalBaselineVersion {
+    param([Parameter(Mandatory)][string]$WorkspaceVersion)
+
+    if ($WorkspaceVersion -notmatch '^((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))(?:-chimera\.\d+)?$') {
+        throw "Workspace version does not contain a formal X.Y.Z baseline: $WorkspaceVersion"
+    }
+    return $Matches[1]
+}
+
+function Get-UpstreamVersionDisposition {
+    param(
+        [Parameter(Mandatory)][string]$CandidateVersion,
+        [Parameter(Mandatory)][string]$BaselineVersion
+    )
+
+    $comparison = Compare-FormalSemVer -Left $CandidateVersion -Right $BaselineVersion
+    if ($comparison -lt 0) { return 'regression' }
+    if ($comparison -eq 0) { return 'duplicate' }
+    return 'advance'
+}
+
+function Select-LatestFormalRelease {
+    param([Parameter(Mandatory)][object[]]$Releases)
+
+    $best = $null
+    $bestVersion = $null
+    foreach ($rel in $Releases) {
+        if ($null -eq $rel -or $rel.draft -eq $true -or $rel.prerelease -eq $true) {
+            continue
+        }
+        $tag = [string]$rel.tag_name
+        if ($tag -notmatch '^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+            continue
+        }
+        $version = $tag -replace '^[vV]', ''
+        if ($null -eq $best -or (Compare-FormalSemVer -Left $version -Right $bestVersion) -gt 0) {
+            $bestVersion = $version
+            $best = [pscustomobject]@{
+                Tag         = $tag
+                Name        = [string]$rel.name
+                Targetish   = [string]$rel.target_commitish
+                HtmlUrl     = [string]$rel.html_url
+                PublishedAt = [string]$rel.published_at
+            }
+        }
+    }
+    return $best
+}
+
 function Get-LatestFormalUpstreamRelease {
+    param([scriptblock]$RequestPage = $null)
+
     $headers = @{
         'Accept'               = 'application/vnd.github+json'
         'User-Agent'           = 'chimera-codex-sync-upstream'
@@ -191,41 +275,50 @@ function Get-LatestFormalUpstreamRelease {
         $headers['Authorization'] = "Bearer $token"
     }
 
-    $uri = "https://api.github.com/repos/$($script:UpstreamOwnerRepo)/releases?per_page=30"
-    try {
-        $releases = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get
-    }
-    catch {
-        Set-ResultAndExit -Code 4 -Message "Failed to query upstream releases: $_" -Action 'error'
-    }
-
-    foreach ($rel in $releases) {
-        if ($rel.draft -eq $true) { continue }
-        if ($rel.prerelease -eq $true) { continue }
-        $tag = [string]$rel.tag_name
-        if ($tag -notmatch '^v?\d+\.\d+\.\d+$') { continue }
-        $sha = $null
-        # Prefer target commit via ls-remote when available
-        return [pscustomobject]@{
-            Tag         = $tag
-            Name        = [string]$rel.name
-            Targetish   = [string]$rel.target_commitish
-            HtmlUrl     = [string]$rel.html_url
-            PublishedAt = [string]$rel.published_at
+    if ($null -eq $RequestPage) {
+        $RequestPage = {
+            param([string]$Uri, [hashtable]$Headers)
+            Invoke-RestMethod -Uri $Uri -Headers $Headers -Method Get
         }
     }
+
+    $allReleases = New-Object 'System.Collections.Generic.List[object]'
+    $page = 1
+    while ($true) {
+        $uri = "https://api.github.com/repos/$($script:UpstreamOwnerRepo)/releases?per_page=100&page=$page"
+        try {
+            # Invoke-RestMethod emits a JSON array as one pipeline object. Assign first,
+            # then array-expand the value so both live API responses and fixtures agree.
+            $pageResponse = & $RequestPage -Uri $uri -Headers $headers
+            $pageReleases = @($pageResponse)
+        }
+        catch {
+            Set-ResultAndExit -Code 4 -Message "Failed to query upstream releases page ${page}: $_" -Action 'error'
+        }
+        foreach ($release in $pageReleases) {
+            if ($null -ne $release) {
+                $allReleases.Add($release)
+            }
+        }
+        if ($pageReleases.Count -lt 100) { break }
+        if ($page -ge 100) {
+            Set-ResultAndExit -Code 4 -Message 'Upstream release pagination exceeded 100 pages' -Action 'error'
+        }
+        $page++
+    }
+
+    $selected = Select-LatestFormalRelease -Releases ($allReleases.ToArray())
+    if ($null -ne $selected) { return $selected }
     Set-ResultAndExit -Code 4 -Message 'No formal (non-draft/non-prerelease) upstream Release found' -Action 'error'
 }
 
 function Normalize-UpstreamVersion([string]$Tag) {
-    $t = $Tag.Trim()
-    if ($t.StartsWith('v') -or $t.StartsWith('V')) {
-        $t = $t.Substring(1)
+    try {
+        return (@(Get-FormalSemVerParts -Version $Tag) -join '.')
     }
-    if ($t -notmatch '^\d+\.\d+\.\d+$') {
+    catch {
         Set-ResultAndExit -Code 4 -Message "Upstream tag is not X.Y.Z: $Tag" -Action 'error'
     }
-    return $t
 }
 
 function Get-LsRemoteRef {
@@ -271,13 +364,15 @@ function Test-IdempotentAlreadySynced {
     if ($tagSha) {
         return [pscustomobject]@{
             Synced  = $true
+            Resume  = $false
             Reason  = "origin already has tag $chimeraTag ($tagSha)"
         }
     }
     $branchSha = Get-LsRemoteRef -Remote 'origin' -Ref "refs/heads/$SyncBranch"
     if ($branchSha) {
         return [pscustomobject]@{
-            Synced  = $true
+            Synced  = $false
+            Resume  = $true
             Reason  = "origin already has branch $SyncBranch ($branchSha)"
         }
     }
@@ -285,10 +380,11 @@ function Test-IdempotentAlreadySynced {
     if ($localVer -and $localVer -match "^$([regex]::Escape($Version))-chimera\.\d+$") {
         return [pscustomobject]@{
             Synced  = $true
+            Resume  = $false
             Reason  = "workspace already at upstream $Version ($localVer)"
         }
     }
-    return [pscustomobject]@{ Synced = $false; Reason = '' }
+    return [pscustomobject]@{ Synced = $false; Resume = $false; Reason = '' }
 }
 
 function Set-WorkspaceChimeraVersion {
@@ -349,6 +445,95 @@ function Set-WorkspaceChimeraVersion {
     [System.IO.File]::WriteAllText($tomlPath, (($newToml -join "`n") + "`n"))
 }
 
+function Set-PackageLockVersion {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$Version
+    )
+
+    $path = Join-Path $Root 'apps\codex-plus-manager\package-lock.json'
+    $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+    $json = $raw | ConvertFrom-Json
+    $rootPackageProperty = $json.packages.PSObject.Properties['']
+    if (-not $json.version -or $null -eq $rootPackageProperty -or -not $rootPackageProperty.Value.version) {
+        throw 'package-lock.json is missing top-level or root-package version'
+    }
+
+    $topVersion = [regex]::new('(?m)^(  "version"\s*:\s*")[^"]+(",\s*)$')
+    if ($topVersion.Matches($raw).Count -ne 1) {
+        throw 'Unable to locate unique top-level package-lock.json version'
+    }
+    $updated = $topVersion.Replace(
+        $raw,
+        { param($match) $match.Groups[1].Value + $Version + $match.Groups[2].Value },
+        1
+    )
+
+    $rootVersion = [regex]::new(
+        '(?ms)("packages"\s*:\s*\{\s*""\s*:\s*\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"version"\s*:\s*")[^"]+(")'
+    )
+    if ($rootVersion.Matches($updated).Count -ne 1) {
+        throw 'Unable to locate unique root-package package-lock.json version'
+    }
+    $updated = $rootVersion.Replace(
+        $updated,
+        { param($match) $match.Groups[1].Value + $Version + $match.Groups[2].Value },
+        1
+    )
+    [System.IO.File]::WriteAllText($path, $updated)
+
+    $verified = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $verifiedRoot = $verified.packages.PSObject.Properties[''].Value
+    if ([string]$verified.version -ne $Version -or [string]$verifiedRoot.version -ne $Version) {
+        throw "package-lock.json version refresh did not produce $Version"
+    }
+}
+
+function Update-AndValidateDependencyLocks {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$Version
+    )
+
+    Set-PackageLockVersion -Root $Root -Version $Version
+    $packageLockPath = Join-Path $Root 'apps\codex-plus-manager\package-lock.json'
+
+    Push-Location $Root
+    try {
+        Write-Info 'Lock refresh: cargo update --workspace'
+        & cargo update --workspace
+        if ($LASTEXITCODE -ne 0) {
+            throw "cargo workspace lock refresh failed (exit $LASTEXITCODE)"
+        }
+
+        Write-Info 'Lock validation: cargo metadata --locked --format-version 1 --no-deps'
+        & cargo metadata --locked --format-version 1 --no-deps | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Cargo.lock validation failed (exit $LASTEXITCODE)"
+        }
+
+        $packageLockHashBeforeValidation = (Get-FileHash -LiteralPath $packageLockPath -Algorithm SHA256).Hash
+        Push-Location (Join-Path $Root 'apps\codex-plus-manager')
+        try {
+            Write-Info 'Lock validation: npm ci --ignore-scripts --no-audit --no-fund'
+            & npm ci --ignore-scripts --no-audit --no-fund
+            if ($LASTEXITCODE -ne 0) {
+                throw "package-lock.json validation failed (exit $LASTEXITCODE)"
+            }
+        }
+        finally {
+            Pop-Location
+        }
+        $packageLockHashAfterValidation = (Get-FileHash -LiteralPath $packageLockPath -Algorithm SHA256).Hash
+        if ($packageLockHashBeforeValidation -ne $packageLockHashAfterValidation) {
+            throw 'package-lock validation changed package-lock.json; refusing unrelated dependency updates'
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Invoke-Gates {
     param([Parameter(Mandatory)][string]$Root)
 
@@ -370,12 +555,80 @@ function Invoke-Gates {
         & cargo fmt --check
         if ($LASTEXITCODE -ne 0) { throw "cargo fmt --check failed (exit $LASTEXITCODE)" }
 
-        Write-Info 'Gate: cargo test --workspace'
-        & cargo test --workspace
-        if ($LASTEXITCODE -ne 0) { throw "cargo test --workspace failed (exit $LASTEXITCODE)" }
+        Write-Info 'Gate: cargo test --workspace --locked'
+        & cargo test --workspace --locked
+        if ($LASTEXITCODE -ne 0) { throw "cargo test --workspace --locked failed (exit $LASTEXITCODE)" }
     }
     finally {
         Pop-Location
+    }
+}
+
+function Test-RemoteSyncBranch {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$SyncBranch,
+        [Parameter(Mandatory)][string]$ExpectedVersion,
+        [Parameter(Mandatory)][string]$ExpectedUpstreamTag
+    )
+
+    $remoteRef = "refs/remotes/origin/$SyncBranch"
+    $mainFetch = Invoke-Git -Args @(
+        'fetch', 'origin', '+refs/heads/main:refs/remotes/origin/main', '--no-tags'
+    )
+    Require-GitOk -Result $mainFetch -Context 'fetch trusted origin/main for resume'
+    $tagFetch = Invoke-Git -Args @(
+        'fetch', 'upstream', "+refs/tags/${ExpectedUpstreamTag}:refs/tags/${ExpectedUpstreamTag}", '--no-tags'
+    )
+    Require-GitOk -Result $tagFetch -Context "fetch formal upstream tag $ExpectedUpstreamTag for resume"
+    $fetch = Invoke-Git -Args @(
+        'fetch', 'origin', "+refs/heads/${SyncBranch}:${remoteRef}", '--no-tags'
+    )
+    Require-GitOk -Result $fetch -Context "fetch existing remote sync branch $SyncBranch"
+    $mainAncestry = Invoke-Git -Args @('merge-base', '--is-ancestor', 'origin/main', $remoteRef)
+    if ($mainAncestry.Code -ne 0) {
+        throw 'remote sync branch is not based on trusted origin/main'
+    }
+    $tagAncestry = Invoke-Git -Args @(
+        'merge-base', '--is-ancestor', "refs/tags/$ExpectedUpstreamTag", $remoteRef
+    )
+    if ($tagAncestry.Code -ne 0) {
+        throw "remote sync branch does not contain formal upstream tag $ExpectedUpstreamTag"
+    }
+    $worktreePath = Join-Path ([System.IO.Path]::GetTempPath()) ("chimera-resume-" + [guid]::NewGuid().ToString('N'))
+    $worktree = Invoke-Git -Args @('worktree', 'add', '--detach', $worktreePath, $remoteRef)
+    Require-GitOk -Result $worktree -Context "create resume worktree for $SyncBranch"
+    try {
+        $actualVersion = Get-WorkspaceCargoVersion -Root $worktreePath
+        if ($actualVersion -ne $ExpectedVersion) {
+            throw "remote sync branch version mismatch: expected $ExpectedVersion, got $actualVersion"
+        }
+        $candidateHead = Invoke-Git -WorkDir $worktreePath -Args @('rev-parse', 'HEAD')
+        if ($candidateHead.Code -ne 0) {
+            throw "failed to resolve resumed branch HEAD: $($candidateHead.Text)"
+        }
+        $candidateSha = $candidateHead.Text.Trim()
+        if ($candidateSha -notmatch '^[0-9a-f]{40}$') {
+            throw "resumed branch produced unsafe candidate SHA: $candidateSha"
+        }
+        Invoke-Gates -Root $worktreePath
+        $status = Invoke-Git -WorkDir $worktreePath -Args @('status', '--porcelain')
+        Require-GitOk -Result $status -Context 'check resumed branch worktree'
+        if (-not [string]::IsNullOrWhiteSpace($status.Text)) {
+            throw "gates changed resumed branch worktree: $($status.Text)"
+        }
+        $afterGateHead = Invoke-Git -WorkDir $worktreePath -Args @('rev-parse', 'HEAD')
+        if ($afterGateHead.Code -ne 0) {
+            throw "failed to re-resolve resumed branch HEAD: $($afterGateHead.Text)"
+        }
+        $afterGateSha = $afterGateHead.Text.Trim()
+        if ($afterGateSha -ne $candidateSha) {
+            throw "gates changed resumed branch HEAD: expected $candidateSha, got $afterGateSha"
+        }
+        return $candidateSha
+    }
+    finally {
+        Invoke-Git -Args @('worktree', 'remove', '--force', $worktreePath) | Out-Null
     }
 }
 
@@ -386,6 +639,10 @@ function Get-Snapshot {
         Head = $head
         Refs = $refs
     }
+}
+
+if ($SkipMain) {
+    return
 }
 
 # --- main ---
@@ -431,6 +688,17 @@ if ($DryRun) {
 
 $release = Get-LatestFormalUpstreamRelease
 $version = Normalize-UpstreamVersion -Tag $release.Tag
+$workspaceVersion = Get-WorkspaceCargoVersion -Root $root
+if (-not $workspaceVersion) {
+    Set-ResultAndExit -Code 4 -Message 'Unable to read current workspace version baseline' -Action 'error'
+}
+try {
+    $baselineVersion = Get-FormalBaselineVersion -WorkspaceVersion $workspaceVersion
+    $versionDisposition = Get-UpstreamVersionDisposition -CandidateVersion $version -BaselineVersion $baselineVersion
+}
+catch {
+    Set-ResultAndExit -Code 4 -Message "Unable to compare upstream release with current baseline: $_" -Action 'error'
+}
 $upstreamTag = if ($release.Tag.StartsWith('v') -or $release.Tag.StartsWith('V')) { $release.Tag } else { "v$($release.Tag)" }
 $syncBranch = "sync/upstream-v$version"
 $chimeraVersion = "$version-chimera.1"
@@ -444,11 +712,33 @@ $script:Result.chimera_version = $chimeraVersion
 Write-Info ''
 Write-Info '--- plan ---'
 Write-Info "upstream release: $upstreamTag ($($release.HtmlUrl))"
+Write-Info "current baseline: $baselineVersion ($workspaceVersion)"
 Write-Info "upstream sha:     $(if ($upstreamShaHint) { $upstreamShaHint } else { '(ls-remote miss; will fetch on apply)' })"
 Write-Info "sync branch:      $syncBranch"
 Write-Info "chimera version:  $chimeraVersion"
-Write-Info 'gates:            generate-branding (+Check), verify-no-upstream-ads, cargo fmt --check, cargo test'
+Write-Info 'gates:            generate-branding (+Check), verify-no-upstream-ads, cargo fmt --check, cargo test --locked'
 Write-Info 'forbidden:        modify main, create Release, push (workflow owns push/PR/Issue)'
+
+if ($versionDisposition -eq 'regression') {
+    if ($DryRun) {
+        $after = Get-Snapshot
+        if ($before.Head -ne $after.Head -or $before.Refs -ne $after.Refs) {
+            Set-ResultAndExit -Code 4 -Message 'DryRun mutated HEAD/refs (unexpected)' -Action 'error'
+        }
+    }
+    Set-ResultAndExit -Code 4 -Message "Refusing upstream regression: latest formal Release $version is older than current baseline $baselineVersion" -Action 'error'
+}
+if ($versionDisposition -eq 'duplicate') {
+    Write-Info "idempotent:       YES - latest formal Release equals current baseline $baselineVersion"
+    if ($DryRun) {
+        $after = Get-Snapshot
+        if ($before.Head -ne $after.Head -or $before.Refs -ne $after.Refs) {
+            Set-ResultAndExit -Code 4 -Message 'DryRun mutated HEAD/refs (unexpected)' -Action 'error'
+        }
+        Write-Info 'DryRun: HEAD / refs unchanged (read-only: remote get-url, status, ls-remote, API)'
+    }
+    Set-ResultAndExit -Code 0 -Message "No sync needed: latest formal Release $version equals current baseline" -Action 'noop'
+}
 
 $idemp = Test-IdempotentAlreadySynced -Root $root -Version $version -SyncBranch $syncBranch
 if ($idemp.Synced) {
@@ -461,6 +751,27 @@ if ($idemp.Synced) {
         Write-Info 'DryRun: HEAD / refs unchanged (read-only: remote get-url, status, ls-remote, API)'
     }
     Set-ResultAndExit -Code 0 -Message "No sync needed: $($idemp.Reason)" -Action 'noop'
+}
+
+if ($idemp.Resume) {
+    Write-Info "idempotent:       RESUME - $($idemp.Reason)"
+    if ($DryRun) {
+        $after = Get-Snapshot
+        if ($before.Head -ne $after.Head -or $before.Refs -ne $after.Refs) {
+            Set-ResultAndExit -Code 4 -Message 'DryRun mutated HEAD/refs (unexpected)' -Action 'error'
+        }
+        Write-Info 'DryRun: existing remote branch would be fetched and re-gated on apply'
+        Set-ResultAndExit -Code 0 -Message "DryRun OK: would resume $syncBranch as $chimeraVersion" -Action 'plan'
+    }
+
+    try {
+        $gatedSha = Test-RemoteSyncBranch -Root $root -SyncBranch $syncBranch -ExpectedVersion $chimeraVersion -ExpectedUpstreamTag $upstreamTag
+    }
+    catch {
+        Set-ResultAndExit -Code 3 -Message "Gate failure while resuming ${syncBranch}: $_" -Action 'gate_failed'
+    }
+    $script:Result.gated_sha = $gatedSha
+    Set-ResultAndExit -Code 0 -Message "Re-gated existing remote branch $syncBranch at $gatedSha" -Action 'resume'
 }
 
 Write-Info 'idempotent:       NO - sync would proceed'
@@ -550,18 +861,18 @@ try {
     Write-Info "Setting version $chimeraVersion and bumping macos_build_number..."
     Set-WorkspaceChimeraVersion -Root $worktreePath -Version $chimeraVersion
 
-    if (-not $SkipGates) {
-        try {
-            Invoke-Gates -Root $worktreePath
-        }
-        catch {
-            & $cleanupWorktree
-            Invoke-Git -Args @('branch', '-D', $syncBranch) | Out-Null
-            Set-ResultAndExit -Code 3 -Message "Gate failure: $_" -Action 'gate_failed'
-        }
+    Write-Info 'Refreshing and validating dependency lockfiles before staging...'
+    try {
+        Update-AndValidateDependencyLocks -Root $worktreePath -Version $chimeraVersion
     }
-    else {
-        Write-Info 'SkipGates: running generate-branding only (no cargo/ads gates)'
+    catch {
+        & $cleanupWorktree
+        Invoke-Git -Args @('branch', '-D', $syncBranch) | Out-Null
+        Set-ResultAndExit -Code 3 -Message "Dependency lock refresh failure: $_" -Action 'gate_failed'
+    }
+
+    Write-Info 'Generating branded files before committing the candidate tree...'
+    try {
         Push-Location $worktreePath
         try {
             & pwsh -NoProfile -File (Join-Path $worktreePath 'scripts\generate-branding.ps1')
@@ -571,6 +882,11 @@ try {
             Pop-Location
         }
     }
+    catch {
+        & $cleanupWorktree
+        Invoke-Git -Args @('branch', '-D', $syncBranch) | Out-Null
+        Set-ResultAndExit -Code 3 -Message "Branding generation failure: $_" -Action 'gate_failed'
+    }
 
     $add = Invoke-Git -WorkDir $worktreePath -Args @('add', '-A')
     Require-GitOk -Result $add -Context 'git add'
@@ -579,7 +895,7 @@ chore: sync upstream $upstreamTag as $chimeraVersion
 
 Upstream: $upstreamTag ($tagSha)
 Sync branch: $syncBranch
-Gates: branding, no-promo scan, cargo fmt --check, cargo test
+Gates: branding, lock validation, no-promo scan, cargo fmt --check, cargo test --locked
 "@
     $commit = Invoke-Git -WorkDir $worktreePath -Args @('commit', '-m', $commitMsg)
     if ($commit.Code -ne 0) {
@@ -593,7 +909,56 @@ Gates: branding, no-promo scan, cargo fmt --check, cargo test
         Write-Info 'Nothing extra to commit after merge/version bump'
     }
 
-    Write-Info "Sync branch ready: $syncBranch"
+    $beforeGates = Invoke-Git -WorkDir $worktreePath -Args @('status', '--porcelain')
+    Require-GitOk -Result $beforeGates -Context 'check committed sync candidate'
+    if (-not [string]::IsNullOrWhiteSpace($beforeGates.Text)) {
+        & $cleanupWorktree
+        Invoke-Git -Args @('branch', '-D', $syncBranch) | Out-Null
+        Set-ResultAndExit -Code 4 -Message "Sync candidate is dirty before gates: $($beforeGates.Text)" -Action 'error'
+    }
+
+    $candidateHead = Invoke-Git -WorkDir $worktreePath -Args @('rev-parse', 'HEAD')
+    Require-GitOk -Result $candidateHead -Context 'resolve committed sync candidate'
+    $candidateSha = $candidateHead.Text.Trim()
+    if ($candidateSha -notmatch '^[0-9a-f]{40}$') {
+        & $cleanupWorktree
+        Invoke-Git -Args @('branch', '-D', $syncBranch) | Out-Null
+        Set-ResultAndExit -Code 4 -Message "Sync candidate produced unsafe SHA: $candidateSha" -Action 'error'
+    }
+
+    if (-not $SkipGates) {
+        try {
+            Invoke-Gates -Root $worktreePath
+            $afterGates = Invoke-Git -WorkDir $worktreePath -Args @('status', '--porcelain')
+            if ($afterGates.Code -ne 0) {
+                throw "git status after gates failed (exit $($afterGates.Code)): $($afterGates.Text)"
+            }
+            if (-not [string]::IsNullOrWhiteSpace($afterGates.Text)) {
+                throw "gates changed committed sync candidate: $($afterGates.Text)"
+            }
+            $afterGateHead = Invoke-Git -WorkDir $worktreePath -Args @('rev-parse', 'HEAD')
+            if ($afterGateHead.Code -ne 0) {
+                throw "failed to re-resolve sync candidate HEAD: $($afterGateHead.Text)"
+            }
+            $afterGateSha = $afterGateHead.Text.Trim()
+            if ($afterGateSha -ne $candidateSha) {
+                throw "gates changed sync candidate HEAD: expected $candidateSha, got $afterGateSha"
+            }
+        }
+        catch {
+            & $cleanupWorktree
+            Invoke-Git -Args @('branch', '-D', $syncBranch) | Out-Null
+            Set-ResultAndExit -Code 3 -Message "Gate failure: $_" -Action 'gate_failed'
+        }
+    }
+    else {
+        Write-Info 'SkipGates: full ads/format/test gates were skipped by explicit request'
+    }
+
+    $gatedSha = $candidateSha
+    $script:Result.gated_sha = $gatedSha
+
+    Write-Info "Sync branch ready: $syncBranch ($gatedSha)"
     Write-Info 'Next: workflow pushes branch, opens PR, enables auto-merge (script will not push or create Release).'
 }
 catch {

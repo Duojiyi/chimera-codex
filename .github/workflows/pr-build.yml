@@ -19,17 +19,19 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/codex-plus-manager/package-lock.json
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
 
       - name: Branding generate check
         shell: pwsh
@@ -39,9 +41,28 @@ jobs:
         shell: pwsh
         run: pwsh -File scripts/verify-no-upstream-ads.ps1
 
+      - name: Verify license and corresponding source contract
+        shell: pwsh
+        run: pwsh -File scripts/verify-license.ps1
+
+      - name: Verify license gate fail-closed cases
+        shell: pwsh
+        run: pwsh -File scripts/verify-license.ps1 -SelfTest
+
+      - name: Verify release manifest generator
+        run: node scripts/release-manifest.mjs --self-test
+
       - name: Install frontend dependencies
         working-directory: apps/codex-plus-manager
         run: npm ci
+
+      - name: Verify original brand icon gate self-test
+        shell: pwsh
+        run: pwsh -File scripts/verify-brand-icons.ps1 -SelfTest
+
+      - name: Verify original brand icons
+        shell: pwsh
+        run: pwsh -File scripts/verify-brand-icons.ps1
 
       - name: TypeScript check
         working-directory: apps/codex-plus-manager
@@ -51,8 +72,11 @@ jobs:
         working-directory: apps/codex-plus-manager
         run: npm run vite:build
 
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+
       - name: Rust tests
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
   resolve-version:
     name: Resolve Cargo version
@@ -61,7 +85,7 @@ jobs:
       version: ${{ steps.resolve.outputs.version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Read Cargo workspace version
         id: resolve
@@ -95,20 +119,20 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/codex-plus-manager/package-lock.json
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
 
       - name: Install NSIS
-        run: choco install nsis -y
+        run: choco install nsis --version=3.11 -y --no-progress
 
       - name: Install frontend dependencies
         working-directory: apps/codex-plus-manager
@@ -119,14 +143,24 @@ jobs:
         run: npm run vite:build
 
       - name: Build release binaries
-        run: cargo build --release
+        run: cargo build --release --locked
 
       - name: Stage Windows app files
         shell: pwsh
+        env:
+          REPO: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
         run: |
+          @(
+            "Corresponding source for this exact CI build:"
+            "https://github.com/$env:REPO/archive/$($env:TARGET_SHA).tar.gz"
+            "Build commit: $env:TARGET_SHA"
+            "License: AGPL-3.0-only"
+          ) | Set-Content -LiteralPath SOURCE_CODE.txt -Encoding utf8
           New-Item -ItemType Directory -Force dist/windows/app | Out-Null
           Copy-Item target/release/codex-plus-plus.exe dist/windows/app/
           Copy-Item target/release/codex-plus-plus-manager.exe dist/windows/app/
+          Copy-Item LICENSE,NOTICE,SOURCE_CODE.txt dist/windows/app/
 
       - name: Build Windows zip and installer
         shell: pwsh
@@ -136,7 +170,7 @@ jobs:
           $version = $env:VERSION
           if (-not $version) { throw "VERSION is empty" }
           New-Item -ItemType Directory -Force dist/windows | Out-Null
-          Compress-Archive -Path dist/windows/app/* -DestinationPath "dist/windows/ChimeraCodex-$version-windows-x64.zip" -Force
+          Compress-Archive -Path dist/windows/app/* -DestinationPath "dist/windows/ChimeraPlusPlus-$version-windows-x64.zip" -Force
 
           $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
           if (-not (Test-Path $makensis)) {
@@ -146,18 +180,18 @@ jobs:
           & $makensis "/INPUTCHARSET" "UTF8" "/DVERSION=$version" CodexPlusPlus.nsi
           Pop-Location
 
-          $setup = "dist/windows/ChimeraCodex-$version-windows-x64-setup.exe"
-          $zip = "dist/windows/ChimeraCodex-$version-windows-x64.zip"
+          $setup = "dist/windows/ChimeraPlusPlus-$version-windows-x64-setup.exe"
+          $zip = "dist/windows/ChimeraPlusPlus-$version-windows-x64.zip"
           if (-not (Test-Path $setup)) { throw "missing $setup" }
           if (-not (Test-Path $zip)) { throw "missing $zip" }
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: chimera-codex-windows-x64
           path: |
-            dist/windows/ChimeraCodex-*-windows-x64-setup.exe
-            dist/windows/ChimeraCodex-*-windows-x64.zip
+            dist/windows/ChimeraPlusPlus-*-windows-x64-setup.exe
+            dist/windows/ChimeraPlusPlus-*-windows-x64.zip
           if-no-files-found: error
 
   macos-dmg:
@@ -180,19 +214,22 @@ jobs:
             lipo_arch: arm64
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/codex-plus-manager/package-lock.json
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           targets: ${{ matrix.target }}
+
+      - name: Rust core unit tests (macOS)
+        run: cargo test -p codex-plus-core --lib --locked
 
       - name: Install frontend dependencies
         working-directory: apps/codex-plus-manager
@@ -203,21 +240,32 @@ jobs:
         run: npm run vite:build
 
       - name: Build release binaries
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Build macOS DMG and zip
         env:
           VERSION: ${{ needs.resolve-version.outputs.version }}
+          REPO: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           VERSION="${VERSION:?}"
+          REPO="${REPO:?}"
+          TARGET_SHA="${TARGET_SHA:?}"
+          cat > SOURCE_CODE.txt <<EOF
+          Corresponding source for this exact CI build:
+          https://github.com/${REPO}/archive/${TARGET_SHA}.tar.gz
+          Build commit: ${TARGET_SHA}
+          License: AGPL-3.0-only
+          EOF
           BINARY_DIR="$PWD/target/${{ matrix.target }}/release" bash scripts/installer/macos/package-dmg.sh "$VERSION" "${{ matrix.arch }}"
           mkdir -p "dist/macos/app-${{ matrix.arch }}"
           cp "target/${{ matrix.target }}/release/codex-plus-plus" "dist/macos/app-${{ matrix.arch }}/"
           cp "target/${{ matrix.target }}/release/codex-plus-plus-manager" "dist/macos/app-${{ matrix.arch }}/"
-          (cd dist/macos && zip -r "ChimeraCodex-${VERSION}-macos-${{ matrix.arch }}.zip" "app-${{ matrix.arch }}")
-          test -f "dist/macos/ChimeraCodex-${VERSION}-macos-${{ matrix.arch }}.dmg"
-          test -f "dist/macos/ChimeraCodex-${VERSION}-macos-${{ matrix.arch }}.zip"
+          cp LICENSE NOTICE SOURCE_CODE.txt "dist/macos/app-${{ matrix.arch }}/"
+          (cd dist/macos && zip -r "ChimeraPlusPlus-${VERSION}-macos-${{ matrix.arch }}.zip" "app-${{ matrix.arch }}")
+          test -f "dist/macos/ChimeraPlusPlus-${VERSION}-macos-${{ matrix.arch }}.dmg"
+          test -f "dist/macos/ChimeraPlusPlus-${VERSION}-macos-${{ matrix.arch }}.zip"
 
       - name: Verify macOS bundle structure
         run: |
@@ -225,7 +273,8 @@ jobs:
           expected_arch="${{ matrix.lipo_arch }}"
           test -L "dist/macos/stage/Applications"
           test "$(readlink "dist/macos/stage/Applications")" = "/Applications"
-          for app in "dist/macos/stage/Chimera Codex.app" "dist/macos/stage/Chimera Codex 管理工具.app"; do
+          test -f "dist/macos/stage/SOURCE_CODE.txt"
+          for app in "dist/macos/stage/Chimera++.app" "dist/macos/stage/Chimera++ 管理工具.app"; do
             test -f "$app/Contents/Info.plist"
             test -f "$app/Contents/PkgInfo"
             exe_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
@@ -246,10 +295,10 @@ jobs:
           done
 
       - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: chimera-codex-macos-${{ matrix.arch }}
           path: |
-            dist/macos/ChimeraCodex-*-macos-${{ matrix.arch }}.dmg
-            dist/macos/ChimeraCodex-*-macos-${{ matrix.arch }}.zip
+            dist/macos/ChimeraPlusPlus-*-macos-${{ matrix.arch }}.dmg
+            dist/macos/ChimeraPlusPlus-*-macos-${{ matrix.arch }}.zip
           if-no-files-found: error

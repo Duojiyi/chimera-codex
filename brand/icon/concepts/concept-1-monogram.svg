@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title description">
+  <title id="title">Chimera++ monogram icon</title>
+  <desc id="description">A negative-space C surrounding a green plus symbol.</desc>
+  <g id="icon">
+    <rect id="backplate" x="56" y="56" width="400" height="400" rx="104" fill="#101414"/>
+    <g id="monogram">
+      <path id="negative-c" fill="#F4F7F5" d="M356 164C329 136 294 120 256 120C181 120 120 181 120 256C120 331 181 392 256 392C294 392 329 376 356 348L310 302C296 316 277 328 256 328C216 328 184 296 184 256C184 216 216 184 256 184C277 184 296 196 310 210L356 164Z"/>
+      <path id="plus" fill="#31DD84" d="M236 212H276V236H300V276H276V300H236V276H212V236H236V212Z"/>
+    </g>
+  </g>
+</svg>

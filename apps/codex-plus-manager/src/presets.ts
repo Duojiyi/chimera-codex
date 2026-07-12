@@ -1,7 +1,7 @@
 /**
- * Codex++ 供应商预设
+ * Chimera++ 供应商预设
  * 基于 cc-switch (MIT) 的 codexProviderPresets.ts，作者 Jason Young
- * https://github.com/farion1231/cc-switch
+ * Compatible with cc-switch provider preset conventions.
  *
  * 提供一键填充供应商配置的预设模板，包括 Base URL、协议、模型列表等。
  * 去掉了 cc-switch 原始的商业合作标记（isPartner、partnerPromotionKey）。
