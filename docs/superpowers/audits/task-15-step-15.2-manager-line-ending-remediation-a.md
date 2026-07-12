@@ -20,7 +20,7 @@ The remediation makes the manager diagnostics source contract independent of che
 | Requirement | Evidence | Result |
 |---|---|---|
 | Normalize Windows checkout | Source replaces CRLF with LF, then lone CR with LF before parsing | PASS |
-| Preserve source content | Synthetic CRLF is normalized back and asserted equal to the canonical source | PASS |
+| Preserve source content | A shared normalization closure converts synthetic CRLF and synthetic CR back to the same canonical source | PASS |
 | Correctly isolate production | Existing test-module marker is applied only after canonicalization | PASS |
 | Preserve diagnostics security checks | Raw `error.to_string()` remains forbidden for all three events | PASS |
 | Preserve test-isolated logging contract | Production still must contain exactly two `append_diagnostic_log` references | PASS |
@@ -38,3 +38,5 @@ The remediation makes the manager diagnostics source contract independent of che
 ## Gate
 
 **PASS.** Audit A approves the manager diagnostics line-ending remediation. The fix may proceed after independent audit B also passes; the patched Windows CI run remains the remote confirmation gate.
+
+Final focused recheck: the synthetic line-ending loop now covers both CRLF and CR-only inputs through the exact production normalization closure. The full targeted test remains 1/1 PASS; Audit A remains PASS.

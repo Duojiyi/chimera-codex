@@ -34,3 +34,15 @@ The remediation must be committed and pushed. Step 15.2 remains open until the r
 - `manager_diagnostics_do_not_submit_raw_errors_or_write_logs_in_unit_tests` failed because an LF-only `#[cfg(test)]` split did not cut the CRLF source; the test counted its own assertion as a production diagnostic call (`3` instead of `2`).
 - Green normalizes CRLF and CR to LF before source inspection and requires synthetic CRLF and CR inputs to normalize identically. Removing CR-only normalization is a failing mutation.
 - The fully qualified targeted test runs 1/1 and passes; formatting and diff checks pass. Independent manager line-ending remediation audits A and B pass.
+
+## Fourth Remote Red
+
+- Run `29200727538` passed `Branding / ads / Rust / frontend` and produced the Windows artifacts successfully.
+- Both `macOS DMG (x64)` and `macOS DMG (arm64)` failed in `Rust core unit tests (macOS)` with `E0599`: the macOS-only FD restore branch called `.context(...)` directly on `std::io::Error`.
+- Green converts the I/O error to `anyhow::Error` before adding the unchanged operator context. The call order, spawn-error priority and underlying I/O source are preserved.
+- The focused regression runs 1/1 and verifies both the outer context and inner error text. The complete core suite, including core unit `157/157`, launcher `66/66`, installer `28/28` and updater `53/53`, passes locally.
+- `cargo fmt --all -- --check` and `git diff --check` pass. Independent macOS FD-context remediation audits A and B both pass.
+
+## Fourth Remediation Pending Remote Gate
+
+The audited remediation must pass a replacement PR run on Windows x64 and both macOS architectures. Step 15.2 remains open until all four required checks are green at the new pushed SHA.

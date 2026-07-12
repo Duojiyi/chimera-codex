@@ -22,6 +22,11 @@ const UPDATE_CONTINUATION_TTL: std::time::Duration = std::time::Duration::from_s
 const MAX_RETAINED_UPDATE_ASSETS: usize = 3;
 static NEXT_DOWNLOAD_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(any(target_os = "macos", test))]
+fn installer_fd_restore_error(error: std::io::Error) -> anyhow::Error {
+    anyhow::Error::new(error).context("failed to restore installer FD flags")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReleaseAsset {
     pub name: String,
@@ -1870,7 +1875,7 @@ fn launch_installer(
         match (spawn_result, restore_result) {
             (Ok(policy), Ok(())) => Ok(policy),
             (Err(error), _) => Err(error),
-            (Ok(_), Err(error)) => Err(error.context("failed to restore installer FD flags")),
+            (Ok(_), Err(error)) => Err(installer_fd_restore_error(error)),
         }
     }
 
@@ -1884,6 +1889,17 @@ fn launch_installer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installer_fd_restore_error_preserves_context_and_source() {
+        let error = installer_fd_restore_error(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "restore denied",
+        ));
+
+        assert_eq!(error.to_string(), "failed to restore installer FD flags");
+        assert!(format!("{error:#}").contains("restore denied"));
+    }
 
     #[cfg(windows)]
     #[test]
