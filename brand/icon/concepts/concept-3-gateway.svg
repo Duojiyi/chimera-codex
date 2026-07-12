@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title description">
+  <title id="title">Chimera++ gateway icon</title>
+  <desc id="description">An open geometric gateway surrounding a green prism with a bold plus symbol.</desc>
+  <g id="icon">
+    <rect id="backplate" x="56" y="56" width="400" height="400" rx="104" fill="#101414"/>
+    <g id="gateway">
+      <path id="open-frame" fill="#F4F7F5" d="M112 128H300L388 212V244H332V220L276 176H168V336H276L332 292V268H388V300L300 384H112V128Z"/>
+      <path id="prism" fill="#31DD84" d="M196 216L272 176L348 216V296L272 336L196 296V216Z"/>
+    </g>
+    <path id="plus" fill="#101414" d="M256 216H288V240H312V272H288V296H256V272H232V240H256V216Z"/>
+  </g>
+</svg>

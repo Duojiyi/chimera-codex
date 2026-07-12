@@ -34,7 +34,6 @@ async fn bridge_routes_cover_all_current_paths() {
         ("/backend/status", json!({})),
         ("/codex-model-catalog", json!({})),
         ("/codex-config-model", json!({})),
-        ("/ads", json!({})),
         ("/zed-remote/status", json!({})),
         (
             "/zed-remote/resolve-host",
@@ -354,7 +353,7 @@ async fn runtime_routes_keep_user_script_inventory_shape() {
 }
 
 #[tokio::test]
-async fn runtime_status_devtools_repair_and_ads_routes_are_dispatched() {
+async fn runtime_status_and_devtools_routes_are_dispatched_without_ads_surface() {
     let ctx = test_context();
 
     assert_eq!(
@@ -371,7 +370,7 @@ async fn runtime_status_devtools_repair_and_ads_routes_are_dispatched() {
     );
     assert_eq!(
         handle_bridge_request(ctx.clone(), "/ads", json!({})).await,
-        json!({"version": 1, "ads": [{"id": "runtime-ad"}]})
+        json!({"status": "failed", "session_id": "", "message": "Unknown bridge path"})
     );
     assert_eq!(
         handle_bridge_request(ctx.clone(), "/zed-remote/status", json!({})).await,
@@ -772,7 +771,8 @@ async fn bridge_backend_status_writes_diagnostic_log() {
     let contents = std::fs::read_to_string(&log_path).unwrap();
     assert!(contents.contains("bridge.request"));
     assert!(contents.contains("bridge.backend_status_ok"));
-    assert!(contents.contains("/backend/status"));
+    assert!(!contents.contains("/backend/status"));
+    assert!(contents.contains("[REDACTED]"));
     codex_plus_core::diagnostic_log::set_diagnostic_log_path_for_tests(None);
 }
 
@@ -835,6 +835,23 @@ fn script_market_manifest_filters_invalid_entries() {
     assert_eq!(manifest.scripts[0].tags, vec!["ui"]);
 }
 
+#[tokio::test]
+async fn empty_default_market_url_returns_empty_manifest_without_network() {
+    assert!(codex_plus_core::script_market::DEFAULT_MARKET_INDEX_URL.is_empty());
+    assert!(
+        !codex_plus_core::script_market::DEFAULT_MARKET_INDEX_URL
+            .contains("CodexPlusPlusScriptMarket")
+    );
+    let manifest = codex_plus_core::script_market::fetch_market_manifest(
+        codex_plus_core::script_market::DEFAULT_MARKET_INDEX_URL,
+    )
+    .await
+    .unwrap();
+    assert_eq!(manifest.version, 1);
+    assert!(manifest.updated_at.is_none());
+    assert!(manifest.scripts.is_empty());
+}
+
 #[test]
 fn user_script_inventory_includes_market_metadata() {
     let temp = tempfile::tempdir().unwrap();
@@ -871,10 +888,7 @@ fn user_script_inventory_includes_market_metadata() {
         inventory["scripts"][0]["source_url"],
         "https://example.com/demo.js"
     );
-    assert_eq!(
-        inventory["scripts"][0]["homepage"],
-        "https://example.com/demo"
-    );
+    assert!(inventory["scripts"][0]["homepage"].is_null());
 }
 
 #[test]
@@ -1126,10 +1140,6 @@ impl BridgeRuntimeService for FakeRuntime {
             "models": ["qwen3-coder"],
             "sources": []
         }))
-    }
-
-    async fn ads(&self) -> anyhow::Result<Value> {
-        Ok(json!({"version": 1, "ads": [{"id": "runtime-ad"}]}))
     }
 
     async fn zed_remote_status(&self) -> anyhow::Result<Value> {

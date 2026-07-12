@@ -21,7 +21,6 @@ import {
   ArrowLeft,
   Bell,
   CheckCircle2,
-  CircleArrowUp,
   Copy,
   Download,
   Edit3,
@@ -69,6 +68,12 @@ import {
   type ModelWindowRow,
 } from "./model-windows";
 import { getLanguage, t, tf, toggleLanguage } from "@/i18n";
+import {
+  API_KEY_URL,
+  DEFAULT_RELAY_BASE_URL,
+  DISPLAY_MANAGER_NAME,
+  DISPLAY_SILENT_NAME,
+} from "./branding.generated";
 
 type Status = "ok" | "failed" | "not_implemented" | "not_checked" | string;
 
@@ -101,6 +106,8 @@ type OverviewResult = CommandResult<{
   update_status: string;
   settings_path: string;
   logs_path: string;
+  legacy_macos_apps?: string[];
+  legacy_macos_migration_hint?: string | null;
 }>;
 
 type PluginMarketplaceRepairResult = CommandResult<{
@@ -259,7 +266,7 @@ type RelayProtocol = "responses" | "chatCompletions";
 type RelayMode = "official" | "mixedApi" | "pureApi" | "aggregate";
 const PROTOCOL_PROXY_BASE_URL = "http://127.0.0.1:57321/v1";
 const CHAT_UPSTREAM_BASE_URL_KEY = "codex_plus_chat_base_url";
-const SCRIPT_MARKET_REPOSITORY_URL = "https://github.com/BigPizzaV3/CodexPlusPlusScriptMarket";
+const SCRIPT_MARKET_DISABLED = true;
 
 const emptyContextSelection = (): RelayContextSelection => ({
   mcpServers: [],
@@ -280,7 +287,6 @@ type UserScriptInventory = {
     version?: string;
     installed?: boolean;
     source_url?: string;
-    homepage?: string;
   }>;
 };
 
@@ -432,6 +438,7 @@ type CcsProvidersResult = CommandResult<{
 }>;
 
 type ProviderImportRequest = {
+  requestId: string;
   name: string;
   baseUrl: string;
   apiKey: string;
@@ -531,28 +538,19 @@ type InstallResult = CommandResult<{
 type UpdateResult = CommandResult<{
   currentVersion: string;
   latestVersion?: string | null;
+  minimumSupportedVersion?: string | null;
   releaseSummary?: string;
   assetName?: string | null;
   assetUrl?: string | null;
+  assetSha256?: string | null;
+  assetSize?: number | null;
   updateAvailable?: boolean;
+  mandatoryUpdate?: boolean;
+  updateInProgress?: boolean;
+  exitCurrentProcess?: boolean;
+  requiresUserConfirmation?: boolean;
   installedPath?: string;
   progress?: number;
-}>;
-
-type AdItem = {
-  id?: string;
-  type: "sponsor" | "normal" | string;
-  title: string;
-  description: string;
-  url: string;
-  image?: string;
-  highlights?: string[];
-  expires_at?: string;
-};
-
-type AdsResult = CommandResult<{
-  version: number;
-  ads: AdItem[];
 }>;
 
 type ScriptMarketItem = {
@@ -562,7 +560,6 @@ type ScriptMarketItem = {
   version: string;
   author: string;
   tags: string[];
-  homepage: string;
   script_url: string;
   sha256: string;
   installed: boolean;
@@ -632,7 +629,7 @@ type StartupResult = CommandResult<{
   showUpdate: boolean;
 }>;
 
-type Route = "overview" | "relay" | "sessions" | "context" | "enhance" | "zedRemote" | "userScripts" | "recommendations" | "maintenance" | "about" | "settings";
+type Route = "overview" | "relay" | "sessions" | "context" | "enhance" | "zedRemote" | "userScripts" | "maintenance" | "settings";
 type Theme = "dark" | "light";
 
 const routes: Array<{ id: Route; label: string; icon: LucideIcon; badge?: string }> = [
@@ -643,9 +640,7 @@ const routes: Array<{ id: Route; label: string; icon: LucideIcon; badge?: string
   { id: "enhance", label: t("Codex增强"), icon: Hammer },
   { id: "zedRemote", label: t("Zed 远程项目"), icon: ExternalLink },
   { id: "userScripts", label: t("脚本市场"), icon: FileCode2 },
-  { id: "recommendations", label: t("推荐内容"), icon: ExternalLink },
   { id: "maintenance", label: t("安装维护"), icon: Wrench },
-  { id: "about", label: t("关于"), icon: Info },
   { id: "settings", label: t("设置"), icon: Settings },
 ];
 
@@ -759,7 +754,7 @@ export function App() {
     percent: 0,
     message: t("尚未运行安装包更新。"),
   });
-  const [ads, setAds] = useState<AdsResult | null>(null);
+  const updateInstallInFlightRef = useRef(false);
   const [scriptMarket, setScriptMarket] = useState<ScriptMarketResult | null>(null);
   const [launchForm, setLaunchForm] = useState({
     appPath: "",
@@ -939,27 +934,43 @@ export function App() {
     const result = await run(() => call<PendingProviderImportResult>("load_pending_provider_import"));
     if (result) {
       setPendingProviderImport(result.pending);
-      if (!silent && !isSuccessStatus(result.status)) showResultNotice(t("Codex++ 导入"), result, { silentSuccess: true });
+      if (!silent && !isSuccessStatus(result.status)) showResultNotice(t("Chimera++ 导入"), result, { silentSuccess: true });
     }
     return result;
   };
 
-  const confirmPendingProviderImport = async () => {
-    const result = await run(() => call<SettingsResult>("confirm_pending_provider_import"));
+  const confirmPendingProviderImport = async (requestId: string) => {
+    const result = await run(() =>
+      call<SettingsResult>("confirm_pending_provider_import", {
+        request: { requestId },
+      }),
+    );
     if (result) {
-      setPendingProviderImport(null);
-      setSettings(result);
-      setSettingsForm(normalizeSettings(result.settings));
-      showResultNotice(t("Codex++ 导入"), result);
-      await refreshCcsProviders(true);
+      showResultNotice(t("Chimera++ 导入"), result);
+      if (isSuccessStatus(result.status)) {
+        setPendingProviderImport(null);
+        setSettings(result);
+        setSettingsForm(normalizeSettings(result.settings));
+        await refreshCcsProviders(true);
+      } else {
+        await refreshPendingProviderImport(true);
+      }
     }
   };
 
-  const dismissPendingProviderImport = async () => {
-    const result = await run(() => call<PendingProviderImportResult>("dismiss_pending_provider_import"));
+  const dismissPendingProviderImport = async (requestId: string) => {
+    const result = await run(() =>
+      call<PendingProviderImportResult>("dismiss_pending_provider_import", {
+        request: { requestId },
+      }),
+    );
     if (result) {
-      setPendingProviderImport(null);
-      showResultNotice(t("Codex++ 导入"), result, { silentSuccess: true });
+      showResultNotice(t("Chimera++ 导入"), result, { silentSuccess: true });
+      if (isSuccessStatus(result.status)) {
+        setPendingProviderImport(null);
+      } else {
+        await refreshPendingProviderImport(true);
+      }
     }
   };
 
@@ -1148,15 +1159,11 @@ export function App() {
       await refreshSettings(true);
       await refreshScriptMarket(true);
     }
-    if (next === "recommendations") await refreshAds(true);
-    if (next === "about") {
-      await refreshOverview(true);
-      await refreshLogs(true);
-      await refreshDiagnostics(true);
-    }
     if (next === "maintenance") {
       await refreshOverview(true);
       await refreshWatcher(true);
+      await refreshLogs(true);
+      await refreshDiagnostics(true);
     }
   };
 
@@ -1171,12 +1178,14 @@ export function App() {
   const restart = async () => {
     const result = await launchCommand("restart_codex_plus");
     if (result) {
-      showNotice(t("重启 Codex++"), result.message, result.status);
+      showNotice(t("重启 Chimera++"), result.message, result.status);
       await refreshOverview(true);
     }
   };
 
-  const launchCommand = async (command: "launch_codex_plus" | "restart_codex_plus") => {
+  const launchCommand = async (
+    command: "launch_codex_plus" | "restart_codex_plus" | "launch_after_optional_update_failure",
+  ) => {
     const result = await run(() =>
       call<CommandResult<Record<string, unknown>>>(command, {
         request: {
@@ -1327,23 +1336,26 @@ export function App() {
     if (result) {
       setUpdate(result);
       if (!silent || result.updateAvailable) {
-        showNotice(t("GitHub Release 检查"), result.message, result.status);
+        const message = result.status === "failed"
+          ? t("版本更新服务暂时不可用，请稍后重试。")
+          : result.updateAvailable
+            ? t("发现可用更新。")
+            : t("当前已是最新版本。");
+        showNotice(t("版本更新检查"), message, result.status);
       }
     }
+    return result;
   };
 
-  const performUpdate = async () => {
-    if (updateInstallProgress.active) return;
-    const release =
-      update?.latestVersion && update.assetName && update.assetUrl
-        ? {
-            version: update.latestVersion,
-            url: "",
-            body: update.releaseSummary ?? "",
-            asset_name: update.assetName,
-            asset_url: update.assetUrl,
-          }
-        : null;
+  const performUpdate = async (
+    versionOverride?: string | null,
+    operationAlreadyActive = false,
+  ) => {
+    if (!operationAlreadyActive) {
+      if (updateInstallInFlightRef.current) return;
+      updateInstallInFlightRef.current = true;
+    }
+    const version = versionOverride ?? update?.latestVersion ?? null;
     setUpdateInstallProgress({
       active: true,
       percent: 8,
@@ -1355,7 +1367,7 @@ export function App() {
         const nextPercent = Math.min(92, current.percent + 10);
         const message =
           nextPercent < 32
-            ? t("正在获取 GitHub Release 信息…")
+            ? t("正在获取版本更新信息…")
             : nextPercent < 72
               ? t("正在下载安装包…")
               : t("正在启动安装包…");
@@ -1363,15 +1375,25 @@ export function App() {
       });
     }, 500);
     try {
-      const result = await run(() => call<UpdateResult>("perform_update", { release }));
+      const result = await run(() => call<UpdateResult>("perform_update", { version }));
       if (result) {
+        const localizedMessage = t(result.message);
         setUpdate(result);
         setUpdateInstallProgress({
           active: false,
           percent: result.progress ?? 100,
-          message: result.message,
+          message: localizedMessage,
         });
-        showNotice(t("更新安装"), result.message, result.status);
+        showNotice(t("更新安装"), localizedMessage, result.status);
+        if (!isSuccessStatus(result.status) && !result.mandatoryUpdate) {
+          const continued = await launchCommand("launch_after_optional_update_failure");
+          if (continued) {
+            showNotice(t("启动任务"), t(continued.message), continued.status);
+          }
+        }
+        if (result.exitCurrentProcess) {
+          await call<null>("manager_exit_app");
+        }
       } else {
         setUpdateInstallProgress({
           active: false,
@@ -1381,6 +1403,22 @@ export function App() {
       }
     } finally {
       window.clearInterval(progressTimer);
+      if (!operationAlreadyActive) {
+        updateInstallInFlightRef.current = false;
+      }
+    }
+  };
+
+  const updateAutomatically = async (silent: boolean) => {
+    if (updateInstallInFlightRef.current) return;
+    updateInstallInFlightRef.current = true;
+    try {
+      const result = await checkUpdate(silent);
+      if (result?.updateAvailable) {
+        await performUpdate(result.latestVersion ?? null, true);
+      }
+    } finally {
+      updateInstallInFlightRef.current = false;
     }
   };
 
@@ -1420,14 +1458,6 @@ export function App() {
       setSettings(result);
       setSettingsForm(normalizeSettings(result.settings));
       showNotice(t("图片覆盖层"), result.message, result.status);
-    }
-  };
-
-  const refreshAds = async (silent = false) => {
-    const result = await run(() => call<AdsResult>("load_ads"));
-    if (result) {
-      setAds(result);
-      if (!silent) showResultNotice(t("推荐内容"), result, { silentSuccess: true });
     }
   };
 
@@ -1637,7 +1667,7 @@ export function App() {
 
   const testStepwiseSettings = async (settings: BackendSettings) => {
     const result = await run(() => call<StepwiseTestResult>("test_stepwise_settings", { settings }));
-    if (result) showNotice("Stepwise 测试", result.message, result.status);
+    if (result) showNotice(t("Stepwise 测试"), result.message, result.status);
   };
 
   const fetchRelayProfileModels = async (profile: RelayProfile) => {
@@ -1658,6 +1688,32 @@ export function App() {
     if (!switched) return;
     const result = await saveLaunchMode("patch", true);
     if (result) showNotice(t("纯 API 模式"), t("已切换到纯 API；Codex增强已设为完整增强。"), result.status);
+  };
+
+  const saveAndEnableChimeraHub = async (apiKey: string) => {
+    const result = await run(() =>
+      call<RelaySwitchResult>("save_and_enable_chimera_hub", {
+        request: { apiKey },
+      }),
+    );
+    if (!result) return false;
+    const selectedSettings = normalizeSettings(result.settings);
+    setSettings({
+      status: result.status,
+      message: result.message,
+      settings: selectedSettings,
+      settings_path: result.settingsPath,
+      user_scripts: result.user_scripts as UserScriptInventory,
+    });
+    setSettingsForm(selectedSettings);
+    setRelay({
+      status: result.status,
+      message: result.message,
+      ...result.relay,
+    });
+    await refreshRelayFiles(true);
+    showNotice(t("ChimeraHub"), result.message, result.status);
+    return isSuccessStatus(result.status) && result.relay.configured;
   };
 
   const switchRelayProfile = async (next: BackendSettings, previousActiveRelayId = settingsForm.activeRelayId) => {
@@ -1805,13 +1861,37 @@ export function App() {
   };
 
   useEffect(() => {
+    let dispose: (() => void) | undefined;
+    let cancelled = false;
+    void listen<string>("chimera-start-route", (event) => {
+      if (event.payload === "update") {
+        setRoute("maintenance");
+        void updateAutomatically(false);
+      } else if (event.payload === "maintenance" || event.payload === "relay") {
+        void navigate(event.payload);
+      }
+    }).then((unlisten) => {
+      if (cancelled) unlisten();
+      else {
+        dispose = unlisten;
+        void invoke("manager_frontend_ready");
+      }
+    });
+    return () => {
+      cancelled = true;
+      const unlisten = dispose;
+      void invoke("manager_frontend_not_ready").finally(() => unlisten?.());
+    };
+  }, []);
+
+  useEffect(() => {
     void (async () => {
       const startup = await run(() => call<StartupResult>("startup_options"));
       if (startup?.showUpdate) {
-        setRoute("about");
-        void checkUpdate(false);
+        setRoute("maintenance");
+        void updateAutomatically(false);
       } else {
-        void checkUpdate(true);
+        void updateAutomatically(true);
       }
       await refreshOverview(true);
       await refreshSettings(true);
@@ -1824,11 +1904,15 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    document.title = DISPLAY_MANAGER_NAME;
+  }, []);
+
+  useEffect(() => {
     if (getLanguage() === "en") {
       void invoke("update_tray_labels", {
         showLabel: "Show window",
         quitLabel: "Quit",
-        windowTitle: "Codex++ Manager",
+        windowTitle: DISPLAY_MANAGER_NAME,
       });
     }
   }, []);
@@ -1870,8 +1954,6 @@ export function App() {
       installEntrypoints,
       uninstallEntrypoints,
       repairShortcuts,
-      checkUpdate,
-      performUpdate,
       saveSettings,
       saveSettingsValue,
       refreshSettings,
@@ -1965,7 +2047,6 @@ export function App() {
       importCcsProviders,
       refreshLiveContextEntries,
       syncLiveContextEntries,
-      refreshAds,
       refreshScriptMarket,
       installMarketScript,
       setUserScriptEnabled,
@@ -1977,6 +2058,14 @@ export function App() {
       openZedRemoteProject,
       forgetZedRemoteProject,
       openExternalUrl,
+      openApplicationsFolder: async () => {
+        const result = await run(() =>
+          call<CommandResult<Record<string, unknown>>>("open_applications_folder"),
+        );
+        if (result) {
+          showNotice(t("打开 Applications"), result.message, result.status);
+        }
+      },
       applyRelayInjection,
       applyPureApiInjection,
       clearRelayInjection,
@@ -1989,6 +2078,7 @@ export function App() {
       testStepwiseSettings,
       fetchRelayProfileModels,
       switchRelayProfile,
+      saveAndEnableChimeraHub,
       relaySwitching,
       switchOfficialMode,
       switchPureApiMode,
@@ -1997,7 +2087,7 @@ export function App() {
       showMessage: async (title: string, message: string, status?: Status) => showNotice(title, message, status),
       copyLogs: () => copyText(logs?.text ?? "", t("日志已复制。")),
       copyDiagnostics: () => copyText(diagnostics?.report ?? "", t("诊断报告已复制。")),
-      goLogs: () => navigate("about"),
+      goLogs: () => navigate("maintenance"),
       checkHealth: async () => {
         await refreshOverview(true);
         await refreshRelay(true);
@@ -2012,29 +2102,14 @@ export function App() {
     }),
     [route, launchForm, settingsForm, settings, removeOwnedData, update, updateInstallProgress.active, logs, diagnostics, theme, relayFiles, localSessions, zedRemoteProjects, selectedProviderSyncTarget, envConflicts, ccsProviders],
   );
-  const hasUpdate = update?.updateAvailable === true;
-
   return (
     <div className={`shell ${theme}`}>
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">C++</div>
+          <div className="brand-mark">CC</div>
           <div className="brand-copy">
             <div className="brand-title-row">
-              <div className="brand-title">Codex++</div>
-              {hasUpdate ? (
-                <button
-                  className="update-dot"
-                  onClick={() => {
-                    setRoute("about");
-                    void checkUpdate(false);
-                  }}
-                  title={tf("发现新版本 {0}", [update?.latestVersion ?? ""])}
-                  type="button"
-                >
-                  <CircleArrowUp className="h-4 w-4" aria-hidden="true" />
-                </button>
-              ) : null}
+              <div className="brand-title">{DISPLAY_SILENT_NAME}</div>
             </div>
             <div className="brand-subtitle">{t("管理控制台")}</div>
           </div>
@@ -2083,9 +2158,9 @@ export function App() {
             >
               {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </Button>
-            <Button onClick={() => void actions.restart()} title={t("重启 Codex++")} variant="outline">
+            <Button onClick={() => void actions.restart()} title={t("重启 Chimera++")} variant="outline">
               <Rocket className="h-4 w-4" />
-              {t("重启 Codex++")}
+              {t("重启 Chimera++")}
             </Button>
             <Button onClick={() => void actions.refreshCurrent()} size="icon" title={t("刷新当前页面")} variant="outline">
               <RefreshCw className="h-4 w-4" />
@@ -2146,7 +2221,6 @@ export function App() {
             <ZedRemoteScreen projects={zedRemoteProjects} form={settingsForm} onFormChange={setSettingsForm} actions={actions} />
           ) : null}
           {route === "userScripts" ? <UserScriptsScreen settings={settings} market={scriptMarket} actions={actions} /> : null}
-          {route === "recommendations" ? <RecommendationsScreen ads={ads} actions={actions} /> : null}
           {route === "maintenance" ? (
             <MaintenanceScreen
               overview={overview}
@@ -2156,16 +2230,9 @@ export function App() {
               onLaunchFormChange={setLaunchForm}
               removeOwnedData={removeOwnedData}
               onRemoveOwnedDataChange={setRemoveOwnedData}
-              actions={actions}
-            />
-          ) : null}
-          {route === "about" ? (
-            <AboutScreen
-              overview={overview}
-              update={update}
-              updateInstallProgress={updateInstallProgress}
               logs={logs}
               diagnostics={diagnostics}
+              updateInstallProgress={updateInstallProgress}
               actions={actions}
             />
           ) : null}
@@ -2174,6 +2241,24 @@ export function App() {
           ) : null}
         </section>
       </main>
+      {update?.mandatoryUpdate ? (
+        <div className="mandatory-update-overlay">
+          <section aria-labelledby="mandatory-update-title" aria-modal="true" className="mandatory-update-panel" role="alertdialog">
+            <ShieldAlert className="mandatory-update-icon" aria-hidden="true" />
+            <h2 id="mandatory-update-title">{t("需要完成更新")}</h2>
+            <p>{updateInstallProgress.message || t("正在准备更新…")}</p>
+            <div className="mandatory-update-progress" aria-hidden="true">
+              <span style={{ width: `${Math.max(4, updateInstallProgress.percent)}%` }} />
+            </div>
+            {!updateInstallProgress.active ? (
+              <Button onClick={() => void updateAutomatically(false)}>
+                <RefreshCw className="h-4 w-4" />
+                {t("重试")}
+              </Button>
+            ) : null}
+          </section>
+        </div>
+      ) : null}
       {notice ? (
         <NoticeDialog
           key={`${notice.title}-${notice.message}-${notice.status ?? ""}`}
@@ -2197,8 +2282,8 @@ export function App() {
       {pendingProviderImport ? (
         <PendingProviderImportDialog
           request={pendingProviderImport}
-          onConfirm={() => void confirmPendingProviderImport()}
-          onDismiss={() => void dismissPendingProviderImport()}
+          onConfirm={() => void confirmPendingProviderImport(pendingProviderImport.requestId)}
+          onDismiss={() => void dismissPendingProviderImport(pendingProviderImport.requestId)}
         />
       ) : null}
     </div>
@@ -2215,8 +2300,6 @@ type Actions = {
   installEntrypoints: () => Promise<void>;
   uninstallEntrypoints: () => Promise<void>;
   repairShortcuts: () => Promise<void>;
-  checkUpdate: () => Promise<void>;
-  performUpdate: () => Promise<void>;
   saveSettings: () => Promise<void>;
   saveSettingsValue: (settings: BackendSettings, silent?: boolean) => Promise<void>;
   refreshSettings: (silent?: boolean) => Promise<BackendSettings | null>;
@@ -2238,7 +2321,6 @@ type Actions = {
   importCcsProviders: () => Promise<void>;
   refreshLiveContextEntries: () => Promise<LiveContextEntriesResult | null>;
   syncLiveContextEntries: (settings: BackendSettings, silent?: boolean) => Promise<LiveContextEntriesResult | null>;
-  refreshAds: () => Promise<void>;
   refreshScriptMarket: () => Promise<void>;
   installMarketScript: (id: string) => Promise<void>;
   setUserScriptEnabled: (key: string, enabled: boolean) => Promise<void>;
@@ -2250,6 +2332,7 @@ type Actions = {
   openZedRemoteProject: (project: ZedRemoteProject, strategy?: ZedOpenStrategy) => Promise<void>;
   forgetZedRemoteProject: (project: ZedRemoteProject) => Promise<void>;
   openExternalUrl: (url: string) => Promise<void>;
+  openApplicationsFolder: () => Promise<void>;
   applyRelayInjection: () => Promise<boolean>;
   applyPureApiInjection: () => Promise<boolean>;
   clearRelayInjection: () => Promise<boolean>;
@@ -2267,6 +2350,7 @@ type Actions = {
   testStepwiseSettings: (settings: BackendSettings) => Promise<void>;
   fetchRelayProfileModels: (profile: RelayProfile) => Promise<string[] | null>;
   switchRelayProfile: (settings: BackendSettings, previousActiveRelayId?: string) => Promise<void>;
+  saveAndEnableChimeraHub: (apiKey: string) => Promise<boolean>;
   relaySwitching: boolean;
   switchOfficialMode: () => Promise<void>;
   switchPureApiMode: () => Promise<void>;
@@ -2296,40 +2380,6 @@ function OverviewScreen({
   const health = healthItems(overview);
   return (
     <>
-      <Panel className="jojocode-overview">
-        <CardContent>
-          <div className="jojocode-overview-layout">
-            <div className="jojocode-overview-main">
-              <div className="jojocode-overview-mark">
-                <Network className="h-5 w-5" />
-              </div>
-              <div>
-                <span className="eyebrow">{t("官方中转站")}</span>
-                <h2>JOJO Code</h2>
-                <p>
-                  {t("Codex++ 官方中转站，主打稳定接入和划算价格，支持 GPT-5.6 全系列、Fable 5、Sonnet 5、GPT-5.5、GPT-5.4、Claude Opus 4.8、Claude Opus 4.7、gpt-image-2 等模型与图像能力。")}
-                </p>
-              </div>
-            </div>
-            <div className="jojocode-overview-side">
-              <div className="jojocode-model-tags">
-                <span>GPT-5.6 全系列</span>
-                <span>Fable 5</span>
-                <span>Sonnet 5</span>
-                <span>GPT-5.5</span>
-                <span>GPT-5.4</span>
-                <span>Opus 4.8</span>
-                <span>Opus 4.7</span>
-                <span>gpt-image-2</span>
-              </div>
-              <Button onClick={() => void actions.openExternalUrl("https://jojocode.com/")}>
-                <ExternalLink className="h-4 w-4" />
-                {t("打开 JOJO Code")}
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Panel>
       <Panel>
         <CardHead title={t("健康检查")} detail={t("概览只展示关键问题，具体配置在对应页面处理")} />
         <CardContent>
@@ -2376,10 +2426,10 @@ function OverviewScreen({
           <Toolbar>
             <Button onClick={() => void actions.launch()}>
               <Rocket className="h-4 w-4" />
-              {t("启动 Codex++")}
+              {t("启动 Chimera++")}
             </Button>
             <Button variant="secondary" onClick={() => void actions.goLogs()}>
-              {t("打开关于")}
+              {t("打开维护")}
             </Button>
           </Toolbar>
         </CardContent>
@@ -2409,6 +2459,9 @@ function RelayScreen({
   const [detailProfileId, setDetailProfileId] = useState<string | null>(null);
   const [newProfileDraft, setNewProfileDraft] = useState<RelayProfile | null>(null);
   const [thirdPartyImportOpen, setThirdPartyImportOpen] = useState(false);
+  const [chimeraKeyDraft, setChimeraKeyDraft] = useState("");
+  const [chimeraEnabling, setChimeraEnabling] = useState(false);
+  const showChimeraKeyFirst = isChimeraKeyFirstState(normalized);
   const detailProfile = newProfileDraft || (detailProfileId
     ? normalized.relayProfiles.find((profile) => profile.id === detailProfileId) || null
     : null);
@@ -2416,6 +2469,16 @@ function RelayScreen({
   const saveRelaySettings = async (next: BackendSettings) => {
     onFormChange(next);
     await actions.saveSettingsValue(next, true);
+  };
+  const enableChimeraHub = async () => {
+    if (!chimeraKeyDraft.trim() || chimeraEnabling) return;
+    setChimeraEnabling(true);
+    try {
+      const ok = await actions.saveAndEnableChimeraHub(chimeraKeyDraft);
+      if (ok) setChimeraKeyDraft("");
+    } finally {
+      setChimeraEnabling(false);
+    }
   };
   const createNewAggregateProfile = () => {
     const draft = createAggregateRelayProfile(normalized);
@@ -2473,6 +2536,44 @@ function RelayScreen({
 
   return (
     <>
+      {showChimeraKeyFirst ? (
+        <Panel>
+          <CardHead
+            title={t("启用 ChimeraHub")}
+            detail={t("全新安装只需填写 API Key，保存后才会写入 Codex 配置。")}
+          />
+          <CardContent>
+            <p>
+              {t("默认中转")}{t("：")}{DEFAULT_RELAY_BASE_URL}
+            </p>
+            <Field label="API Key">
+              <Input
+                type="password"
+                value={chimeraKeyDraft}
+                onChange={(event) => setChimeraKeyDraft(event.currentTarget.value)}
+                placeholder={t("输入 ChimeraHub API Key")}
+                autoComplete="off"
+              />
+            </Field>
+            <Toolbar>
+              <Button
+                disabled={!chimeraKeyDraft.trim() || chimeraEnabling}
+                onClick={() => void enableChimeraHub()}
+              >
+                <Save className="h-4 w-4" />
+                {chimeraEnabling ? t("正在启用…") : t("保存并启用")}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => void actions.openExternalUrl(API_KEY_URL)}
+              >
+                <ExternalLink className="h-4 w-4" />
+                {t("获取 API Key")}
+              </Button>
+            </Toolbar>
+          </CardContent>
+        </Panel>
+      ) : null}
       <Panel>
         <CardHead title={t("供应商列表")} detail={tf("{0} 个供应商配置；可拖动排序，点编辑进入详情", [normalized.relayProfiles.length])} />
         <CardContent>
@@ -2629,7 +2730,7 @@ function EnhanceScreen({
         String(remotePluginMarketplace.pluginCount),
         String(remotePluginMarketplace.skillCount),
       ])
-    : t("未发现本地缓存；点击按钮会从 Codex++ 内置快照释放并注册，无需官方账号预缓存。");
+    : t("未发现本地缓存；点击按钮会从 Chimera++ 内置快照释放并注册，无需官方账号预缓存。");
   return (
     <>
       <Panel>
@@ -2673,7 +2774,7 @@ function EnhanceScreen({
               <div className="feature-action-row">
                 <div>
                   <strong>{t("官方远端插件缓存")}</strong>
-                  <small>{t("使用 Codex++ 内置快照补齐远端插件，API 模式也可显示和安装 Product Design 插件。")}</small>
+                  <small>{t("使用 Chimera++ 内置快照补齐远端插件，API 模式也可显示和安装 Product Design 插件。")}</small>
                   <small>{remoteMarketplaceSummary}</small>
                 </div>
                 <Badge status={remotePluginMarketplace?.configRegistered ? "ok" : "not_checked"} />
@@ -2710,12 +2811,12 @@ function EnhanceScreen({
             <FeatureGroup title={t("界面与启动")} detail={t("控制语言、启动速度和 Codex 原生界面调整。")}>
               <FeatureToggle title={t("强制中文界面")} detail={t("强制启用 Codex App 内置 zh-CN 语言包，避免 Statsig/VPN 不通时回退英文。需重启 Codex 才能完整生效。")} checked={form.codexAppForceChineseLocale} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppForceChineseLocale", value)} />
               <FeatureToggle title={t("快速启动")} detail={t("默认关闭；无 VPN 时可开启，让 Statsig 初始化快速失败，减少启动时长。需重启 Codex 才生效。")} checked={form.codexAppFastStartup} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppFastStartup", value)} />
-              <FeatureToggle title={t("原生菜单栏位置")} detail={t("把 Codex++ 菜单插入 Codex 顶部原生菜单栏。")} checked={form.codexAppNativeMenuPlacement} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppNativeMenuPlacement", value)} />
+              <FeatureToggle title={t("原生菜单栏位置")} detail={t("把 Chimera++ 菜单插入 Codex 顶部原生菜单栏。")} checked={form.codexAppNativeMenuPlacement} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppNativeMenuPlacement", value)} />
               <FeatureToggle title={t("原生菜单汉化")} detail={t("启动时通过本地主进程调试端口汉化 Codex 原生菜单；不修改安装包。需重启 Codex 才生效。")} checked={form.codexAppNativeMenuLocalization} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppNativeMenuLocalization", value)} />
             </FeatureGroup>
             <FeatureGroup title={t("远程项目")} detail={t("连接 Zed Remote 和 upstream worktree 辅助能力。")}>
               <FeatureToggle title="Zed Remote open" detail={t("远程 SSH 文件引用可直接用 Zed Remote Development 打开。")} checked={form.codexAppZedRemoteOpen} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppZedRemoteOpen", value)} />
-              <FeatureToggle title={t("Zed 项目记录")} detail={t("维护 Codex++ 自己的远程项目最近列表。")} checked={form.zedRemoteProjectRegistryEnabled} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("zedRemoteProjectRegistryEnabled", value)} />
+              <FeatureToggle title={t("Zed 项目记录")} detail={t("维护 Chimera++ 自己的远程项目最近列表。")} checked={form.zedRemoteProjectRegistryEnabled} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("zedRemoteProjectRegistryEnabled", value)} />
               <FeatureToggle title={t("同步 Zed settings")} detail={t("高级选项，默认关闭；当前实现不主动改写 Zed settings。")} checked={form.zedRemoteSyncToZedSettings} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("zedRemoteSyncToZedSettings", value)} />
               <FeatureToggle title="Upstream worktree" detail={t("从最新 upstream 分支创建 Git worktree。")} checked={form.codexAppUpstreamWorktreeCreate} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppUpstreamWorktreeCreate", value)} />
             </FeatureGroup>
@@ -2785,7 +2886,7 @@ function ZedRemoteScreen({
   return (
     <>
       <Panel>
-        <CardHead title={t("Zed 远程项目")} detail={tf("{0} 个 Codex++ 可识别项目，默认策略：{1}", [allProjects.length, zedStrategyLabel(form.zedRemoteOpenStrategy)])} />
+        <CardHead title={t("Zed 远程项目")} detail={tf("{0} 个 Chimera++ 可识别项目，默认策略：{1}", [allProjects.length, zedStrategyLabel(form.zedRemoteOpenStrategy)])} />
         <CardContent>
           <div className="metric-list">
             <Metric label="Current" value={String(currentProjects.length)} />
@@ -2813,7 +2914,7 @@ function ZedRemoteScreen({
               />
               <span>
                 <strong>{t("记录最近打开")}</strong>
-                <small>{t("保存到 Codex++ state，不改写 Zed settings。")}</small>
+                <small>{t("保存到 Chimera++ state，不改写 Zed settings。")}</small>
               </span>
             </label>
           </div>
@@ -2904,48 +3005,54 @@ function UserScriptsScreen({ settings, market, actions }: { settings: SettingsRe
   const installedCount = marketScripts.filter((script) => script.installed).length;
   return (
     <>
+      {SCRIPT_MARKET_DISABLED ? null : (
+        <>
+          <Panel>
+            <CardHead title={t("脚本市场")} detail={tf("{0} 个市场脚本，已安装 {1} 个，本地整体 {2}", [marketScripts.length, installedCount, inventory?.enabled === false ? t("关闭") : t("开启")])} />
+            <CardContent>
+              <div className="metric-list">
+                <Metric label={t("市场状态")} value={market?.market.message ?? t("尚未刷新")} />
+                <Metric label={t("远程脚本")} value={tf("{0} 个", [marketScripts.length])} />
+                <Metric label={t("已安装")} value={tf("{0} 个", [installedCount])} />
+                <Metric label={t("本地整体")} value={inventory?.enabled === false ? t("关闭") : t("开启")} />
+              </div>
+              <Toolbar>
+                <Button onClick={() => void actions.refreshScriptMarket()}>
+                  <RefreshCw className="h-4 w-4" />
+                  {t("刷新市场")}
+                </Button>
+                <Button onClick={() => void actions.refreshCurrent()} variant="secondary">
+                  <RefreshCw className="h-4 w-4" />
+                  {t("刷新本地")}
+                </Button>
+              </Toolbar>
+            </CardContent>
+          </Panel>
+          <Panel>
+            <CardHead title={t("市场脚本")} detail={market?.market.updatedAt ? tf("清单更新时间：{0}", [market.market.updatedAt]) : t("从远程清单加载")} />
+            <CardContent>
+              {marketScripts.length ? (
+                <div className="script-market-grid">
+                  {marketScripts.map((script) => (
+                    <MarketScriptCard key={script.id} script={script} actions={actions} />
+                  ))}
+                </div>
+              ) : (
+                <div className="empty">{market?.status === "failed" ? market.message : t("点击刷新市场加载远程脚本。")}</div>
+              )}
+            </CardContent>
+          </Panel>
+        </>
+      )}
       <Panel>
-        <CardHead title={t("脚本市场")} detail={tf("{0} 个市场脚本，已安装 {1} 个，本地整体 {2}", [marketScripts.length, installedCount, inventory?.enabled === false ? t("关闭") : t("开启")])} />
+        <CardHead title={t("本地脚本")} detail={t("内置、手动和市场安装脚本；可在这里启停或删除用户脚本")} />
         <CardContent>
-          <div className="metric-list">
-            <Metric label={t("市场状态")} value={market?.market.message ?? t("尚未刷新")} />
-            <Metric label={t("远程脚本")} value={tf("{0} 个", [marketScripts.length])} />
-            <Metric label={t("已安装")} value={tf("{0} 个", [installedCount])} />
-            <Metric label={t("本地整体")} value={inventory?.enabled === false ? t("关闭") : t("开启")} />
-          </div>
           <Toolbar>
-            <Button onClick={() => void actions.refreshScriptMarket()}>
-              <RefreshCw className="h-4 w-4" />
-              {t("刷新市场")}
-            </Button>
-            <Button onClick={() => void actions.openExternalUrl(SCRIPT_MARKET_REPOSITORY_URL)} variant="secondary">
-              <ExternalLink className="h-4 w-4" />
-              {t("投稿")}
-            </Button>
             <Button onClick={() => void actions.refreshCurrent()} variant="secondary">
               <RefreshCw className="h-4 w-4" />
               {t("刷新本地")}
             </Button>
           </Toolbar>
-        </CardContent>
-      </Panel>
-      <Panel>
-        <CardHead title={t("市场脚本")} detail={market?.market.updatedAt ? tf("清单更新时间：{0}", [market.market.updatedAt]) : t("从 GitHub 静态清单加载")} />
-        <CardContent>
-          {marketScripts.length ? (
-            <div className="script-market-grid">
-              {marketScripts.map((script) => (
-                <MarketScriptCard key={script.id} script={script} actions={actions} />
-              ))}
-            </div>
-          ) : (
-            <div className="empty">{market?.status === "failed" ? market.message : t("点击刷新市场加载远程脚本。")}</div>
-          )}
-        </CardContent>
-      </Panel>
-      <Panel>
-        <CardHead title={t("本地脚本")} detail={t("内置、手动和市场安装脚本；可在这里启停或删除用户脚本")} />
-        <CardContent>
           <div className="table">
             {scripts.length ? scripts.map((script) => <ScriptRow key={script.key} script={script} actions={actions} />) : <div className="empty">{t("未发现用户脚本。")}</div>}
           </div>
@@ -3090,7 +3197,7 @@ function SessionsScreen({
             />
             <span>
               <strong>{t("启动前自动修复历史会话")}</strong>
-              <small>{t("开启后，通过 Codex++ 启动 Codex 前自动整理一次旧对话的归属标记。")}</small>
+              <small>{t("开启后，通过 Chimera++ 启动 Codex 前自动整理一次旧对话的归属标记。")}</small>
             </span>
           </label>
           <Toolbar>
@@ -3161,43 +3268,6 @@ function SessionsScreen({
   );
 }
 
-function RecommendationsScreen({ ads, actions }: { ads: AdsResult | null; actions: Actions }) {
-  const items = (ads?.ads ?? []).filter((ad) => !isExpiredAd(ad));
-  const sponsors = items.filter((ad) => ad.type === "sponsor");
-  const normal = items.filter((ad) => ad.type === "normal");
-  return (
-    <>
-      <Panel>
-        <CardHead title={t("推荐内容")} detail={t("与 Codex 内插件菜单使用同一个远端广告源")} />
-        <CardContent>
-          <div className="recommend-hero">
-            <div>
-              <strong>{ads ? tf("已加载 {0} 条推荐", [items.length]) : t("尚未加载推荐内容")}</strong>
-              <span>{t("内容来自 BigPizzaV3/Ad-List，分为赞助商推荐和普通推荐。")}</span>
-            </div>
-            <Button onClick={() => void actions.refreshAds()}>
-              <RefreshCw className="h-4 w-4" />
-              {t("刷新推荐")}
-            </Button>
-          </div>
-        </CardContent>
-      </Panel>
-      <Panel>
-        <CardHead title={t("赞助商推荐")} detail={tf("{0} 条", [sponsors.length])} />
-        <CardContent>
-          <AdGrid actions={actions} ads={sponsors} empty={t("暂无赞助商推荐。")} />
-        </CardContent>
-      </Panel>
-      <Panel>
-        <CardHead title={t("普通推荐")} detail={tf("{0} 条", [normal.length])} />
-        <CardContent>
-          <AdGrid actions={actions} ads={normal} empty={t("暂无普通推荐。")} />
-        </CardContent>
-      </Panel>
-    </>
-  );
-}
-
 function MaintenanceScreen({
   overview,
   watcher,
@@ -3206,6 +3276,9 @@ function MaintenanceScreen({
   onLaunchFormChange,
   removeOwnedData,
   onRemoveOwnedDataChange,
+  logs,
+  diagnostics,
+  updateInstallProgress,
   actions,
 }: {
   overview: OverviewResult | null;
@@ -3215,6 +3288,9 @@ function MaintenanceScreen({
   onLaunchFormChange: (next: { appPath: string; debugPort: string; helperPort: string }) => void;
   removeOwnedData: boolean;
   onRemoveOwnedDataChange: (value: boolean) => void;
+  logs: LogsResult | null;
+  diagnostics: DiagnosticsResult | null;
+  updateInstallProgress: TaskProgress;
   actions: Actions;
 }) {
   const savedCodexAppPath = settings?.settings.codexAppPath ?? "";
@@ -3238,9 +3314,26 @@ function MaintenanceScreen({
       <Panel>
         <CardHead title={t("入口管理")} detail={t("快捷方式写入系统实际桌面位置，不使用写死桌面路径")} />
         <CardContent>
+          {overview?.legacy_macos_migration_hint ? (
+            <div className="notice-banner" role="status">
+              <p>{overview.legacy_macos_migration_hint}</p>
+              {overview.legacy_macos_apps && overview.legacy_macos_apps.length > 0 ? (
+                <ul>
+                  {overview.legacy_macos_apps.map((path) => (
+                    <li key={path}>{path}</li>
+                  ))}
+                </ul>
+              ) : null}
+              <Toolbar>
+                <Button variant="secondary" onClick={() => void actions.openApplicationsFolder()}>
+                  {t("打开 Applications")}
+                </Button>
+              </Toolbar>
+            </div>
+          ) : null}
           <label className="check-row">
             <input checked={removeOwnedData} onChange={(event) => onRemoveOwnedDataChange(event.currentTarget.checked)} type="checkbox" />
-            <span>{t("卸载时移除 Codex++ 托管数据")}</span>
+            <span>{t("卸载时移除 Chimera++ 托管数据")}</span>
           </label>
           <Toolbar>
             <Button onClick={() => void actions.installEntrypoints()}>{t("安装入口")}</Button>
@@ -3250,7 +3343,7 @@ function MaintenanceScreen({
         </CardContent>
       </Panel>
       <Panel>
-        <CardHead title={t("自动接管")} detail={t("Watcher 用于保持 Codex++ 接管状态")} />
+        <CardHead title={t("自动接管")} detail={t("Watcher 用于保持 Chimera++ 接管状态")} />
         <CardContent>
           <Toolbar>
             <Button variant="secondary" onClick={() => void actions.installWatcher()}>{t("安装 watcher")}</Button>
@@ -3306,81 +3399,18 @@ function MaintenanceScreen({
             </Field>
           </div>
           <Toolbar>
-            <Button onClick={() => void actions.launch()}>{t("启动 Codex++")}</Button>
+            <Button onClick={() => void actions.launch()}>{t("启动 Chimera++")}</Button>
             <Button variant="secondary" onClick={() => void actions.saveManualCodexAppPath()}>
               {t("保存为默认路径")}
             </Button>
           </Toolbar>
         </CardContent>
       </Panel>
-    </>
-  );
-}
-
-function AboutScreen({
-  overview,
-  update,
-  updateInstallProgress,
-  logs,
-  diagnostics,
-  actions,
-}: {
-  overview: OverviewResult | null;
-  update: UpdateResult | null;
-  updateInstallProgress: TaskProgress;
-  logs: LogsResult | null;
-  diagnostics: DiagnosticsResult | null;
-  actions: Actions;
-}) {
-  return (
-    <>
-      <Panel>
-        <CardHead title={t("关于 Codex++")} detail={t("本地 Codex 增强、管理工具和安装包维护")} />
-        <CardContent>
-          <div className="metric-list">
-            <Metric label={t("Codex++ 版本")} value={overview?.current_version ?? update?.currentVersion ?? "-"} />
-            <Metric label={t("Codex 版本")} value={overview?.codex_version ?? t("未检测到")} />
-            <Metric label={t("项目地址")} value="github.com/BigPizzaV3/CodexPlusPlus" />
-          </div>
-          <Toolbar>
-            <Button onClick={() => void actions.openExternalUrl("https://github.com/BigPizzaV3/CodexPlusPlus")} variant="secondary">
-              <ExternalLink className="h-4 w-4" />
-              {t("打开项目主页")}
-            </Button>
-            <Button onClick={() => void actions.openExternalUrl("https://github.com/BigPizzaV3/CodexPlusPlus/issues")} variant="secondary">
-              <ExternalLink className="h-4 w-4" />
-              {t("反馈问题")}
-            </Button>
-            <Button onClick={() => void actions.openExternalUrl("https://discord.gg/y96kX7A76v")} variant="secondary">
-              <MessageCircle className="h-4 w-4" />
-              Discord
-            </Button>
-            <Button onClick={() => void actions.openExternalUrl("https://t.me/CodexPlusPlus")} variant="secondary">
-              <MessageCircle className="h-4 w-4" />
-              Telegram
-            </Button>
-          </Toolbar>
-        </CardContent>
-      </Panel>
-      <Panel>
-        <CardHead title={t("GitHub Release 更新")} detail={tf("当前版本 {0}", [overview?.current_version ?? update?.currentVersion ?? "-"])} />
-        <CardContent>
-          <div className="metric-list">
-            <Metric label={t("状态")} value={update?.status ?? "not_checked"} />
-            <Metric label={t("最新版本")} value={update?.latestVersion ?? t("未检查")} />
-            <Metric label={t("资源")} value={update?.assetName ?? "-"} />
-            <Metric label={t("进度")} value={`${update?.progress ?? 0}%`} />
-          </div>
-          <Textarea className="log-view" readOnly value={update?.releaseSummary || update?.message || t("尚未检查 GitHub Release；更新会下载并启动安装包。")} />
-          <TaskProgressBox completedTitle={t("上次更新结果")} progress={updateInstallProgress} title={t("安装包更新进度")} />
-          <Toolbar>
-            <Button onClick={() => void actions.checkUpdate()}>{t("检查更新")}</Button>
-            <Button disabled={updateInstallProgress.active} variant="secondary" onClick={() => void actions.performUpdate()}>
-              {updateInstallProgress.active ? t("正在下载安装包…") : t("下载并运行安装包")}
-            </Button>
-          </Toolbar>
-        </CardContent>
-      </Panel>
+      <TaskProgressBox
+        progress={updateInstallProgress}
+        title={t("安装包更新进度")}
+        completedTitle={t("上次更新结果")}
+      />
       <LogsPanel logs={logs} actions={actions} />
       <DiagnosticsPanel diagnostics={diagnostics} actions={actions} />
     </>
@@ -3840,12 +3870,6 @@ function MarketScriptCard({ script, actions }: { script: ScriptMarketItem; actio
           <Download className="h-4 w-4" />
           {script.updateAvailable ? t("更新") : script.installed ? t("重新安装") : t("安装")}
         </Button>
-        {script.homepage ? (
-          <Button onClick={() => void actions.openExternalUrl(script.homepage)} size="sm" variant="secondary">
-            <ExternalLink className="h-4 w-4" />
-            {t("主页")}
-          </Button>
-        ) : null}
       </div>
     </div>
   );
@@ -4304,7 +4328,7 @@ function RelayProfileEditor({
       {showApiFields && profile.protocol === "chatCompletions" ? (
         <div className="hint-line relay-protocol-hint">
           <MessageCircle className="h-4 w-4" />
-          <span>{t("此上游会通过本地 127.0.0.1:57321 转成 Responses API，需要从 Codex++ 启动 Codex。")}</span>
+          <span>{t("此上游会通过本地 127.0.0.1:57321 转成 Responses API，需要从 Chimera++ 启动 Codex。")}</span>
         </div>
       ) : null}
       <div className="hint-line relay-protocol-hint">
@@ -5079,8 +5103,8 @@ function PendingProviderImportDialog({
       <div className="modal-card provider-import-modal">
         <div className="modal-head">
           <div>
-            <h2>{t("导入 Codex++ 供应商")}</h2>
-            <p>{t("检测到来自网页的供应商配置导入请求，确认后会写入本机 Codex++ 管理工具。")}</p>
+            <h2>{t("导入 Chimera++ 供应商")}</h2>
+            <p>{t("检测到来自网页的供应商配置导入请求，确认后会写入本机 Chimera++ 管理工具。")}</p>
           </div>
           <button className="toast-close" onClick={onDismiss} type="button">×</button>
         </div>
@@ -5216,40 +5240,6 @@ function ScriptRow({ script, actions }: { script: NonNullable<UserScriptInventor
   );
 }
 
-function AdGrid({ ads, empty, actions }: { ads: AdItem[]; empty: string; actions: Actions }) {
-  if (!ads.length) return <div className="empty">{empty}</div>;
-  return (
-    <div className="ad-grid">
-      {ads.map((ad) => (
-        <button className="ad-card" key={ad.id || `${ad.type}-${ad.title}`} onClick={() => void actions.openExternalUrl(ad.url)} type="button">
-          {ad.image ? <img alt="" className="ad-image" src={ad.image} /> : null}
-          <div>
-            <strong>{ad.title}</strong>
-            <p>{ad.description}</p>
-          </div>
-          {ad.highlights?.length ? (
-            <div className="ad-tags">
-              {ad.highlights.map((item) => (
-                <span key={item}>{item}</span>
-              ))}
-            </div>
-          ) : null}
-          <span className="ad-link">
-            {t("打开")}
-            <ExternalLink className="h-4 w-4" />
-          </span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function isExpiredAd(ad: AdItem) {
-  if (!ad.expires_at) return false;
-  const expiresAt = Date.parse(ad.expires_at);
-  return Number.isFinite(expiresAt) && expiresAt < Date.now();
-}
-
 function routeTitle(route: Route) {
   return routes.find((item) => item.id === route)?.label ?? t("概览");
 }
@@ -5263,9 +5253,7 @@ function routeSubtitle(route: Route) {
     enhance: t("会话删除、导出、项目移动和脚本能力"),
     zedRemote: t("管理 Codex SSH 项目并加入 Zed workspace"),
     userScripts: t("内置和用户自定义脚本清单"),
-    recommendations: t("赞助商推荐与普通推荐"),
     maintenance: t("入口安装、修复、Watcher 与手动启动"),
-    about: t("版本信息、项目链接、GitHub Release 更新、日志与诊断"),
     settings: t("主题和启动参数"),
   };
   return subtitles[route];
@@ -5921,7 +5909,7 @@ function healthItems(overview: OverviewResult | null) {
       title: t("静默启动入口"),
       status: overview?.silent_shortcut.status ?? "not_checked",
       ok: overview?.silent_shortcut.status === "installed",
-      detail: overview?.silent_shortcut.path || t("缺少 Codex++ 静默启动快捷方式时可在安装维护页修复。"),
+      detail: overview?.silent_shortcut.path || t("缺少 Chimera++ 静默启动快捷方式时可在安装维护页修复。"),
     },
     {
       title: t("管理工具入口"),
@@ -5930,6 +5918,16 @@ function healthItems(overview: OverviewResult | null) {
       detail: overview?.management_shortcut.path || t("缺少管理工具快捷方式时可在安装维护页修复。"),
     },
   ];
+}
+
+function isChimeraKeyFirstState(settings: BackendSettings): boolean {
+  if (settings.activeRelayId !== "chimerahub") return false;
+  const profile = settings.relayProfiles.find((item) => item.id === "chimerahub");
+  if (!profile || profile.relayMode !== "pureApi") return false;
+  const hasKey =
+    Boolean(profile.apiKey.trim()) ||
+    Boolean(codexApiKeyFromAuth(profile.authContents || "").trim());
+  return !hasKey;
 }
 
 function normalizeSettings(settings: BackendSettings): BackendSettings {
@@ -6971,8 +6969,10 @@ function loadInitialTheme(): Theme {
 function loadInitialRoute(): Route {
   if (typeof window === "undefined") return "overview";
   const params = new URLSearchParams(window.location.search);
+  const startRoute = params.get("startRoute");
+  if (startRoute === "maintenance" || startRoute === "relay") return startRoute;
   if (params.get("showUpdate") === "1" || window.location.hash === "#about") {
-    return "about";
+    return "maintenance";
   }
   return "overview";
 }

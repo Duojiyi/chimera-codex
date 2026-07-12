@@ -1,10 +1,12 @@
 # Chimera Codex 公开发行版 — TODO Checklist
 
+> **后续 TODO：** 2026-07-11 新增的 Chimera++、无 About/GitHub UI、自动更新和原创图标任务见 `2026-07-11-chimera-plus-product-refresh-todo.md`。本清单保留历史完成状态。
+
 > 对应：
 > - Spec: `docs/superpowers/specs/2026-07-10-chimera-private-fork-design.md`
 > - Plan: `docs/superpowers/plans/2026-07-10-chimera-private-fork.md`
 > 日期：2026-07-10
-> 状态：文档与仓库初始化完成；等待用户明确批准产品代码开工
+> 状态：本地产品实现与补救已通过全量自动化回归和双盲审计；待提交/推送、自动化 token、远端 Actions、安装冒烟与首次公开 Release
 
 ## 决策与开工门
 
@@ -17,64 +19,64 @@
 - [x] D7. 产物名固定 `ChimeraCodex-*`，严格匹配平台与架构
 - [x] D8. 全新安装默认选中 ChimeraHub；Key 为空不应用；升级不覆盖已有配置
 - [x] D9. Windows x64、macOS x64/arm64 都构建；macOS 仅 ad-hoc sign，不 notarize
-- [ ] D10. 用户明确授权开工
-- [ ] D11. 写入真实 repository，配置 branch protection 和最小权限自动化 token（仓库已创建，策略配置仍待初始化任务完成）
+- [x] D10. 用户明确授权开工
+- [ ] D11. 写入真实 repository，配置 branch protection 和最小权限自动化 token（仓库、branch protection 与 Actions 默认只读已完成；专用自动化 token 仍待配置）
 - [x] D12. 每个 checkbox 坚持 Red → Green → 双盲审计；每个大任务另做聚合双盲审计
 
 ## P0 — 仓库、品牌、去推广与安全更新
 
 - [x] T1. 安全规范 remotes：公开仓库=`origin`，BigPizzaV3=`upstream`，补全历史并阻断 upstream push
-- [ ] T2. 新增 `brand/product.toml`、生成脚本、Rust/TS generated branding 与 `-Check`
-- [ ] T3. 短路生产 `ads.rs` 网络入口，删除 builtin append，保留纯 normalize 测试
-- [ ] T4. 停止 `assets.rs` sponsor 变量/图片注入，更新 `cdp_bridge.rs`
-- [ ] T5. 清理 `renderer-inject.js` 推荐/赞赏/Ad-List
-- [ ] T6. 禁用远端 ScriptMarket，保留本地脚本管理
-- [ ] T7. 删除 App JOJO/推荐 UI、CSS、i18n 与生成键
-- [ ] T8. 品牌化 About、HTML title、Tauri 窗口/托盘、Stepwise 用户文案
-- [ ] T9. 引入标准 SemVer，统一 Cargo/package/Tauri 版本
-- [ ] T10. updater 改公开 latest.json，严格 Win/macOS+arch matcher
-- [ ] T11. latest.json 增加 size/SHA-256，下载验证后才启动安装器
-- [ ] T12. updater 覆盖 `.1→.2`、跨上游版本、错误哈希/大小/通道测试
+- [x] T2. 新增 `brand/product.toml`、生成脚本、Rust/TS generated branding 与 `-Check`
+- [x] T3. 短路生产 `ads.rs` 网络入口，删除 builtin append，保留纯 normalize 测试
+- [x] T4. 停止 `assets.rs` sponsor 变量/图片注入，更新 `cdp_bridge.rs`
+- [x] T5. 清理 `renderer-inject.js` 推荐/赞赏/Ad-List
+- [x] T6. 禁用远端 ScriptMarket，保留本地脚本管理
+- [x] T7. 删除 App JOJO/推荐 UI、CSS、i18n 与生成键
+- [x] T8. 品牌化 About、HTML title、Tauri 窗口/托盘、Stepwise 用户文案
+- [x] T9. 引入标准 SemVer，统一 Cargo/package/Tauri 版本
+- [x] T10. updater 改公开 latest.json，严格 Win/macOS+arch matcher
+- [x] T11. latest.json 增加 size/SHA-256，下载验证后才启动安装器
+- [x] T12. updater 覆盖 `.1→.2`、跨上游版本、错误哈希/大小/通道测试
 
 ## P1 — Key-first 中转与覆盖升级
 
-- [ ] T13. 完整 ChimeraHub preset：`/v1`、responses、已验证默认模型
-- [ ] T14. 仅 settings 文件不存在时创建并选中 Chimera profile
-- [ ] T15. Key-first “保存并启用”原子命令；空 Key/失败不写 live config、不泄密
-- [ ] T16. 现有 settings/profile/active id 升级保持测试
-- [ ] T17. `install/mod.rs/windows.rs/macos.rs` 显示名接 branding，保留 legacy 常量
-- [ ] T18. NSIS 原目录覆盖、旧快捷方式/乱码清理、新入口、卸载回归
-- [ ] T19. macOS 新 App/DMG 名、纯数字 plist 版本、legacy App 检测提示、release 验证路径
-- [ ] T20. README/README_EN 去推广，保留 MIT 归属，写双平台升级/Gatekeeper 指南
-- [ ] T21. branding + no-promo 门禁通过，allowlist 仅覆盖明确 fixture/legacy 常量
+- [x] T13. 完整 ChimeraHub preset：`/v1`、responses、已验证默认模型
+- [x] T14. 仅 settings 文件不存在时创建并选中 Chimera profile
+- [x] T15. Key-first “保存并启用”原子命令；空 Key/失败不写 live config、不泄密
+- [x] T16. 现有 settings/profile/active id 升级保持测试
+- [x] T17. `install/mod.rs/windows.rs/macos.rs` 显示名接 branding，保留 legacy 常量
+- [x] T18. NSIS 原目录覆盖、旧快捷方式/乱码清理、新入口、卸载回归
+- [x] T19. macOS 新 App/DMG 名、纯数字 plist 版本、legacy App 检测提示、release 验证路径
+- [x] T20. README/README_EN 去推广，保留 MIT 归属，写双平台升级/Gatekeeper 指南
+- [x] T21. branding + no-promo 门禁通过；allowlist 精确绑定 path/pattern/line number/full line，并拒绝重复或未使用豁免
 
 ## P2 — CI、上游同步与发布
 
-- [ ] T22. `pr-build.yml` 跑生成检查、扫描、Rust、前端和三平台构建
-- [ ] T23. `release-assets.yml` 改为 build-first；全部成功后 draft → upload → publish
-- [ ] T24. 三平台产物命名一致，生成 size/SHA-256/latest.json
-- [ ] T25. 写安全 `sync-upstream.ps1`，DryRun 前后 refs/files/status 不变
-- [ ] T26. `sync-upstream.yml` 轮询正式 Release、去重、建 PR、auto-merge、Issue 去重
-- [ ] T27. 同步 workflow 不直接创建 Release；main 新版本由发布 workflow 处理
-- [ ] T28. 冲突/test/hash failure 演练：main/latest 不变，无重复 Issue/Release
-- [ ] T29. 首次公开 Release：匿名 latest/asset 下载成功
+- [x] T22. `pr-build.yml` 跑生成检查、扫描、Rust、前端和三平台构建
+- [x] T23. `release-assets.yml` 改为 build-first；全部成功后 draft → upload → publish
+- [x] T24. 三平台产物命名一致，生成 size/SHA-256/latest.json
+- [x] T25. 写安全 `sync-upstream.ps1`，DryRun 前后 refs/files/status 不变
+- [x] T26. `sync-upstream.yml` 轮询正式 Release、去重、建 PR、auto-merge、Issue 去重
+- [x] T27. 同步 workflow 不直接创建 Release；main 新版本由发布 workflow 处理
+- [ ] T28. 冲突/test/hash failure 演练：DryRun 与静态失败路径已证；真实 main/latest 不变、Issue 去重与 Release 不创建仍待首次启用 token 后演练
+- [ ] T29. 首次公开 Release：匿名 latest/asset 下载成功（**待用户推送并触发 release workflow 后**）
 
 ## 验收（S1–S12）
 
-- [ ] V1. UI 无推荐/JOJO/赞助/赞赏（S1）
-- [ ] V2. 无 Ad-List 网络请求（S2）
-- [ ] V3. 更新检查匿名读取公开 latest.json，不回落上游（S3）
-- [ ] V4. 全新安装默认 ChimeraHub，Key-first，`/v1`；升级不覆盖（S4/S9）
-- [ ] V5. Windows 原版覆盖安装无重复入口，更新器识别资产并校验哈希（S5/S10/S11）
-- [ ] V6. 上游正式 Release → PR → checks → merge → build-first Release（S6）
-- [ ] V7. 冲突告警可用（S7）
-- [ ] V8. `.1→.2`、跨上游版本比较正确（S8）
-- [ ] V9. Windows + macOS x64/arm64 资产齐全；macOS 未 notarize 说明清楚（S12）
-- [ ] V10. macOS 原版旧 App 被检测，完成迁移后只留新入口（S10）
-- [ ] V11. `generate-branding -Check` 与 `verify-no-upstream-ads.ps1` exit 0
-- [ ] V12. `cargo fmt --check`、`cargo test`、manager build/typecheck 全绿
-- [ ] V13. ScriptMarket 不访问上游，本地脚本仍可用
-- [ ] V14. 错误哈希/大小时不启动安装器，latest 仍指向上一成功版本（S11）
+- [x] V1. UI 无推荐/JOJO/赞助/赞赏（S1）— 代码/扫描门禁已证；安装包目视待 Release
+- [x] V2. 无 Ad-List 网络请求（S2）— 生产短路 + 扫描
+- [x] V3. 更新检查匿名读取公开 latest.json，不回落上游（S3）— updater 单测 + branding URL
+- [x] V4. 全新安装默认 ChimeraHub，Key-first，`/v1`；升级不覆盖（S4/S9）— settings/command 单测
+- [ ] V5. Windows 原版覆盖安装无重复入口，更新器识别资产并校验哈希（S5/S10/S11）— **待安装包冒烟**
+- [ ] V6. 上游正式 Release → PR → checks → merge → build-first Release（S6）— **待 token + 推送**
+- [ ] V7. 冲突告警可用（S7）— **待 token 演练**
+- [x] V8. `.1→.2`、跨上游版本比较正确（S8）— updater 单测
+- [ ] V9. Windows + macOS x64/arm64 资产齐全；macOS 未 notarize 说明清楚（S12）— README 已写；**资产待 Release**
+- [ ] V10. macOS 原版旧 App 被检测，完成迁移后只留新入口（S10）— 代码已有；**待 macOS 冒烟**
+- [x] V11. `generate-branding -Check` 与 `verify-no-upstream-ads.ps1` exit 0
+- [x] V12. `cargo fmt --all -- --check`、`cargo test --workspace --locked`（747 tests）、manager typecheck 与 Vite production build 全绿
+- [x] V13. ScriptMarket 不访问上游，本地脚本仍可用
+- [x] V14. 错误哈希/大小时不启动安装器（S11）— updater 单测；远端 latest 回滚待 Release
 
 ## 明确不做（防范围蔓延）
 

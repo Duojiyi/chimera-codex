@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Chimera++ modular convergence icon</title>
+  <desc id="desc">Three geometric modules converge around a central plus symbol.</desc>
+  <g id="icon">
+    <g id="modules" fill="#31DD84">
+      <path id="top-module" d="M184 56h144l40 40v24l-32 32h-48v16h-64v-16h-48l-32-32V96z"/>
+      <path id="lower-left-module" d="M88 264h48l32 32v24h-24v64h24v32l-32 40H88l-32-32V296z"/>
+      <path id="lower-right-module" d="M376 248h56l24 32v144l-32 32h-48l-32-32v-24h24v-80h-24v-24z"/>
+    </g>
+    <g id="enhancement-plus">
+      <path fill="#101414" d="M224 192h64v32h32v64h-32v32h-64v-32h-32v-64h32z"/>
+      <path fill="#31DD84" d="M240 216h32v24h24v32h-24v24h-32v-24h-24v-32h24z"/>
+    </g>
+  </g>
+</svg>

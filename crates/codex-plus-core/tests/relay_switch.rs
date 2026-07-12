@@ -56,6 +56,190 @@ base_url = "https://a.example/v1"
 }
 
 #[test]
+fn failed_switch_restores_missing_settings_file_as_missing() {
+    let temp = tempfile::tempdir().unwrap();
+    let settings_path = temp.path().join("settings.json");
+    let store = SettingsStore::new(settings_path.clone());
+    let home = temp.path().join("codex");
+    std::fs::create_dir(&home).unwrap();
+    let next = BackendSettings {
+        relay_profiles_enabled: true,
+        active_relay_id: "chimerahub".to_string(),
+        relay_profiles: vec![RelayProfile {
+            id: "chimerahub".to_string(),
+            relay_mode: RelayMode::PureApi,
+            config_contents: "model_provider = \"custom\"\n".to_string(),
+            auth_contents: "{bad json".to_string(),
+            ..RelayProfile::default()
+        }],
+        ..BackendSettings::default()
+    };
+
+    switch_relay_profile_in_home(&store, &home, next, "chimerahub")
+        .expect_err("invalid auth should fail switch");
+
+    assert!(!settings_path.exists());
+}
+
+#[test]
+fn failed_post_apply_validation_restores_live_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let settings_path = temp.path().join("settings.json");
+    let store = SettingsStore::new(settings_path.clone());
+    let home = temp.path().join("codex");
+    std::fs::create_dir(&home).unwrap();
+    let old_config = "model_provider = \"old\"\n";
+    let old_auth = "{\"OPENAI_API_KEY\":\"sk-old\"}\n";
+    std::fs::write(home.join("config.toml"), old_config).unwrap();
+    std::fs::write(home.join("auth.json"), old_auth).unwrap();
+    let original = BackendSettings {
+        active_relay_id: "chimerahub".to_string(),
+        relay_profiles: vec![pure_profile(
+            "chimerahub",
+            "https://old.example/v1",
+            "sk-old",
+        )],
+        ..BackendSettings::default()
+    };
+    store.save(&original).unwrap();
+    let original_settings = std::fs::read(&settings_path).unwrap();
+    let new_secret = "sk-new-must-be-rolled-back";
+    let next = BackendSettings {
+        relay_profiles_enabled: true,
+        active_relay_id: "chimerahub".to_string(),
+        relay_profiles: vec![RelayProfile {
+            id: "chimerahub".to_string(),
+            relay_mode: RelayMode::PureApi,
+            api_key: new_secret.to_string(),
+            config_contents: r#"model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://new.example/v1"
+"#
+            .to_string(),
+            auth_contents: "{}\n".to_string(),
+            ..RelayProfile::default()
+        }],
+        ..BackendSettings::default()
+    };
+
+    switch_relay_profile_in_home(&store, &home, next, "chimerahub")
+        .expect_err("missing API key should fail post-apply validation");
+
+    assert_eq!(
+        std::fs::read_to_string(home.join("config.toml")).unwrap(),
+        old_config
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join("auth.json")).unwrap(),
+        old_auth
+    );
+    assert_eq!(std::fs::read(&settings_path).unwrap(), original_settings);
+    assert!(
+        !std::fs::read_to_string(settings_path)
+            .unwrap()
+            .contains(new_secret)
+    );
+}
+
+#[test]
+fn failed_switch_restores_existing_generated_model_catalog() {
+    let temp = tempfile::tempdir().unwrap();
+    let settings_path = temp.path().join("settings.json");
+    let store = SettingsStore::new(settings_path);
+    let home = temp.path().join("codex");
+    let catalog_path = home.join("model-catalogs/catalog.json");
+    std::fs::create_dir_all(catalog_path.parent().unwrap()).unwrap();
+    std::fs::write(&catalog_path, b"old catalog bytes").unwrap();
+    std::fs::write(home.join("config.toml"), "model_provider = \"old\"\n").unwrap();
+    std::fs::write(home.join("auth.json"), "{\"OPENAI_API_KEY\":\"sk-old\"}\n").unwrap();
+    let original = BackendSettings {
+        active_relay_id: "catalog".to_string(),
+        relay_profiles: vec![pure_profile("catalog", "https://old.example/v1", "sk-old")],
+        ..BackendSettings::default()
+    };
+    store.save(&original).unwrap();
+    let next = BackendSettings {
+        relay_profiles_enabled: true,
+        active_relay_id: "catalog".to_string(),
+        relay_profiles: vec![RelayProfile {
+            id: "catalog".to_string(),
+            model: "model-a".to_string(),
+            model_list: "model-a[1M]".to_string(),
+            relay_mode: RelayMode::PureApi,
+            config_contents: r#"model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://new.example/v1"
+"#
+            .to_string(),
+            auth_contents: "{}\n".to_string(),
+            ..RelayProfile::default()
+        }],
+        ..BackendSettings::default()
+    };
+
+    switch_relay_profile_in_home(&store, &home, next, "catalog")
+        .expect_err("missing API key should fail after catalog generation");
+
+    assert_eq!(std::fs::read(catalog_path).unwrap(), b"old catalog bytes");
+}
+
+#[test]
+fn failed_switch_removes_new_generated_catalog_and_empty_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = SettingsStore::new(temp.path().join("settings.json"));
+    let home = temp.path().join("codex");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::write(home.join("config.toml"), "model_provider = \"old\"\n").unwrap();
+    std::fs::write(home.join("auth.json"), "{\"OPENAI_API_KEY\":\"sk-old\"}\n").unwrap();
+    let original = BackendSettings {
+        active_relay_id: "catalog-new".to_string(),
+        relay_profiles: vec![pure_profile(
+            "catalog-new",
+            "https://old.example/v1",
+            "sk-old",
+        )],
+        ..BackendSettings::default()
+    };
+    store.save(&original).unwrap();
+    let next = BackendSettings {
+        relay_profiles_enabled: true,
+        active_relay_id: "catalog-new".to_string(),
+        relay_profiles: vec![RelayProfile {
+            id: "catalog-new".to_string(),
+            model: "model-a".to_string(),
+            model_list: "model-a[1M]".to_string(),
+            relay_mode: RelayMode::PureApi,
+            config_contents: r#"model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://new.example/v1"
+"#
+            .to_string(),
+            auth_contents: "{}\n".to_string(),
+            ..RelayProfile::default()
+        }],
+        ..BackendSettings::default()
+    };
+
+    switch_relay_profile_in_home(&store, &home, next, "catalog-new")
+        .expect_err("missing API key should fail after catalog generation");
+
+    assert!(!home.join("model-catalogs/catalog-new.json").exists());
+    assert!(!home.join("model-catalogs").exists());
+}
+
+#[test]
 fn switch_backfills_previous_profile_from_live_before_selecting_target() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("codex");

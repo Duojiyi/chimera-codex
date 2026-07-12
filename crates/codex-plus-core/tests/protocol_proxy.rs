@@ -2,11 +2,11 @@ use codex_plus_core::protocol_proxy::{
     ChatSseToResponsesConverter, chat_completion_to_response,
     chat_completion_to_response_with_request, chat_completions_url, chat_sse_to_responses_sse,
     chat_sse_to_responses_sse_with_request, is_chat_completions_proxy_path, is_models_proxy_path,
-    is_responses_proxy_path, models_url, open_chat_completions_proxy_request,
-    open_models_proxy_request, open_responses_proxy_request,
-    open_responses_proxy_request_with_settings, responses_error_from_upstream,
+    is_responses_proxy_path, models_url, open_chat_completions_proxy_request_with_client,
+    open_models_proxy_request_with_client, open_responses_proxy_request_with_client,
+    open_responses_proxy_request_with_settings_and_client, responses_error_from_upstream,
     responses_to_chat_completions, send_upstream_request_with_header_timeout,
-    upstream_header_timeout, upstream_http_client, upstream_stream_header_timeout,
+    upstream_header_timeout, upstream_stream_header_timeout,
 };
 use codex_plus_core::settings::{
     AggregateRelayMember, AggregateRelayProfile, AggregateRelayStrategy, BackendSettings,
@@ -16,10 +16,24 @@ use serde_json::json;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+#[test]
+fn protocol_proxy_tests_do_not_mutate_process_environment() {
+    let source = include_str!("protocol_proxy.rs");
+    for forbidden in [
+        concat!("std::env::", "set_var"),
+        concat!("std::env::", "remove_var"),
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "并行测试不得修改进程级环境变量: {forbidden}"
+        );
+    }
+}
 
 #[test]
 fn responses_request_converts_to_chat_completions() {
@@ -1329,9 +1343,7 @@ async fn upstream_request_returns_when_provider_accepts_but_never_sends_headers(
 
     let started = Instant::now();
     let result = send_upstream_request_with_header_timeout(
-        upstream_http_client()
-            .unwrap()
-            .get(format!("http://{addr}/v1/models")),
+        loopback_http_client().get(format!("http://{addr}/v1/models")),
         Duration::from_millis(100),
     )
     .await;
@@ -1343,7 +1355,6 @@ async fn upstream_request_returns_when_provider_accepts_but_never_sends_headers(
 
 #[tokio::test]
 async fn aggregate_proxy_fails_over_to_next_member_in_same_request() {
-    let _lock = settings_path_test_lock().lock().unwrap();
     let first = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .unwrap();
@@ -1365,10 +1376,12 @@ async fn aggregate_proxy_fails_over_to_next_member_in_same_request() {
         format!("http://{first_addr}/v1"),
         format!("http://{second_addr}/v1"),
     );
+    let client = loopback_http_client();
 
-    let result = open_responses_proxy_request_with_settings(
+    let result = open_responses_proxy_request_with_settings_and_client(
         r#"{"model":"gpt-5-mini","input":"hi","stream":false}"#,
         settings,
+        &client,
     )
     .await
     .unwrap();
@@ -1382,7 +1395,6 @@ async fn aggregate_proxy_fails_over_to_next_member_in_same_request() {
 
 #[tokio::test]
 async fn aggregate_stream_request_sends_sse_accept_header() {
-    let _lock = settings_path_test_lock().lock().unwrap();
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .unwrap();
@@ -1413,10 +1425,12 @@ async fn aggregate_stream_request_sends_sse_accept_header() {
         format!("http://{addr}/v1"),
         format!("http://{fallback_addr}/v1"),
     );
+    let client = loopback_http_client();
 
-    let result = open_responses_proxy_request_with_settings(
+    let result = open_responses_proxy_request_with_settings_and_client(
         r#"{"model":"gpt-5-mini","input":"hi","stream":true}"#,
         settings,
+        &client,
     )
     .await
     .unwrap();
@@ -1492,15 +1506,16 @@ fn aggregate_proxy_settings(
 }
 #[tokio::test]
 async fn chat_completions_proxy_uses_configured_user_agent() {
-    let _lock = settings_path_test_lock().lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let _guard = SettingsPathGuard::set(temp.path().join("settings.json"));
     let server = spawn_chat_server();
     write_chat_relay_settings(temp.path(), &server.base_url, "Configured-Codex-UA/1.0");
+    let client = loopback_http_client();
 
-    let upstream = open_chat_completions_proxy_request(
+    let upstream = open_chat_completions_proxy_request_with_client(
         r#"{"model":"gpt-5.5","messages":[{"role":"user","content":"hello"}]}"#,
         Some("Original-Codex-UA/1.0"),
+        &client,
     )
     .await
     .unwrap();
@@ -1512,15 +1527,16 @@ async fn chat_completions_proxy_uses_configured_user_agent() {
 
 #[tokio::test]
 async fn chat_completions_proxy_passes_through_original_user_agent_when_unconfigured() {
-    let _lock = settings_path_test_lock().lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let _guard = SettingsPathGuard::set(temp.path().join("settings.json"));
     let server = spawn_chat_server();
     write_chat_relay_settings(temp.path(), &server.base_url, "");
+    let client = loopback_http_client();
 
-    let upstream = open_chat_completions_proxy_request(
+    let upstream = open_chat_completions_proxy_request_with_client(
         r#"{"model":"gpt-5.5","messages":[{"role":"user","content":"hello"}]}"#,
         Some("Original-Codex-UA/1.0"),
+        &client,
     )
     .await
     .unwrap();
@@ -1532,15 +1548,16 @@ async fn chat_completions_proxy_passes_through_original_user_agent_when_unconfig
 
 #[tokio::test]
 async fn responses_proxy_passes_through_original_user_agent_when_unconfigured() {
-    let _lock = settings_path_test_lock().lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let _guard = SettingsPathGuard::set(temp.path().join("settings.json"));
     let server = spawn_chat_server();
     write_chat_relay_settings(temp.path(), &server.base_url, "");
+    let client = loopback_http_client();
 
-    let upstream = open_responses_proxy_request(
+    let upstream = open_responses_proxy_request_with_client(
         r#"{"model":"gpt-5.5","input":"hello","stream":false}"#,
         Some("Original-Codex-UA/1.0"),
+        &client,
     )
     .await
     .unwrap();
@@ -1552,13 +1569,13 @@ async fn responses_proxy_passes_through_original_user_agent_when_unconfigured() 
 
 #[tokio::test]
 async fn models_proxy_passes_through_original_user_agent_when_unconfigured() {
-    let _lock = settings_path_test_lock().lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let _guard = SettingsPathGuard::set(temp.path().join("settings.json"));
     let server = spawn_chat_server();
     write_chat_relay_settings(temp.path(), &server.base_url, "");
+    let client = loopback_http_client();
 
-    let upstream = open_models_proxy_request(Some("Original-Codex-UA/1.0"))
+    let upstream = open_models_proxy_request_with_client(Some("Original-Codex-UA/1.0"), &client)
         .await
         .unwrap();
     assert_eq!(upstream.status_code, 200);
@@ -1590,6 +1607,7 @@ fn write_chat_relay_settings(settings_dir: &Path, base_url: &str, user_agent: &s
 
 struct SettingsPathGuard {
     previous: Option<PathBuf>,
+    _lock: MutexGuard<'static, ()>,
 }
 
 fn settings_path_test_lock() -> &'static Mutex<()> {
@@ -1599,8 +1617,14 @@ fn settings_path_test_lock() -> &'static Mutex<()> {
 
 impl SettingsPathGuard {
     fn set(path: PathBuf) -> Self {
+        let lock = settings_path_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous = codex_plus_core::paths::set_settings_path_for_tests(Some(path));
-        Self { previous }
+        Self {
+            previous,
+            _lock: lock,
+        }
     }
 }
 
@@ -1608,6 +1632,10 @@ impl Drop for SettingsPathGuard {
     fn drop(&mut self) {
         codex_plus_core::paths::set_settings_path_for_tests(self.previous.take());
     }
+}
+
+fn loopback_http_client() -> reqwest::Client {
+    reqwest::Client::builder().no_proxy().build().unwrap()
 }
 
 struct ChatServer {

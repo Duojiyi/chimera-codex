@@ -12,7 +12,10 @@ use std::sync::OnceLock;
 #[cfg(windows)]
 use anyhow::Context;
 #[cfg(windows)]
-use windows::Win32::Foundation::{BOOL, CloseHandle, HANDLE, HWND, LPARAM, MAX_PATH, WPARAM};
+use windows::Win32::Foundation::{
+    BOOL, CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, HANDLE, HWND, LPARAM, MAX_PATH,
+    WPARAM,
+};
 #[cfg(windows)]
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
@@ -24,8 +27,9 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
 };
 #[cfg(windows)]
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, REG_EXPAND_SZ, REG_SZ, RegCloseKey,
-    RegCreateKeyW, RegDeleteKeyW, RegDeleteValueW, RegEnumValueW, RegOpenKeyExW, RegSetValueExW,
+    HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, REG_EXPAND_SZ, REG_SZ, REG_VALUE_TYPE,
+    RegCloseKey, RegCreateKeyW, RegDeleteKeyW, RegDeleteValueW, RegEnumValueW, RegOpenKeyExW,
+    RegQueryInfoKeyW, RegSetValueExW,
 };
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
@@ -281,11 +285,125 @@ pub fn read_current_user_string_values(
 }
 
 #[cfg(windows)]
-pub fn delete_current_user_key(subkey: &str) -> anyhow::Result<()> {
-    let subkey = wide_null(subkey);
-    unsafe { RegDeleteKeyW(HKEY_CURRENT_USER, PCWSTR(subkey.as_ptr())) }
+pub fn ensure_current_user_key(subkey: &str) -> anyhow::Result<()> {
+    with_created_current_user_key(subkey, |_| Ok(()))
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrentUserRegistryValueSnapshot {
+    pub name: String,
+    pub value_type: u32,
+    pub data: Vec<u8>,
+}
+
+#[cfg(windows)]
+pub fn snapshot_current_user_key_raw(
+    subkey: &str,
+) -> anyhow::Result<Option<Vec<CurrentUserRegistryValueSnapshot>>> {
+    let wide_subkey = wide_null(subkey);
+    let mut key = HKEY::default();
+    let status = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            PCWSTR(wide_subkey.as_ptr()),
+            0,
+            KEY_READ,
+            &mut key,
+        )
+    };
+    if status == ERROR_FILE_NOT_FOUND || status == ERROR_PATH_NOT_FOUND {
+        return Ok(None);
+    }
+    status
         .ok()
-        .or_else(|_| Ok(()))
+        .with_context(|| format!("读取注册表键 {subkey} 失败"))?;
+    let _guard = RegistryKeyGuard(key);
+    let mut value_count = 0u32;
+    let mut max_name_len = 0u32;
+    let mut max_data_len = 0u32;
+    unsafe {
+        RegQueryInfoKeyW(
+            key,
+            PWSTR::null(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&mut value_count),
+            Some(&mut max_name_len),
+            Some(&mut max_data_len),
+            None,
+            None,
+        )
+    }
+    .ok()
+    .with_context(|| format!("读取注册表键 {subkey} 元数据失败"))?;
+
+    let mut values = Vec::with_capacity(value_count as usize);
+    for index in 0..value_count {
+        let mut name = vec![0u16; max_name_len as usize + 1];
+        let mut name_len = name.len() as u32;
+        let mut data = vec![0u8; max_data_len.max(1) as usize];
+        let mut data_len = data.len() as u32;
+        let mut value_type = 0u32;
+        unsafe {
+            RegEnumValueW(
+                key,
+                index,
+                PWSTR(name.as_mut_ptr()),
+                &mut name_len,
+                None,
+                Some(&mut value_type),
+                Some(data.as_mut_ptr()),
+                Some(&mut data_len),
+            )
+        }
+        .ok()
+        .with_context(|| format!("枚举注册表键 {subkey} 的第 {index} 个值失败"))?;
+        data.truncate(data_len as usize);
+        values.push(CurrentUserRegistryValueSnapshot {
+            name: OsString::from_wide(&name[..name_len as usize])
+                .to_string_lossy()
+                .to_string(),
+            value_type,
+            data,
+        });
+    }
+    Ok(Some(values))
+}
+
+#[cfg(windows)]
+pub fn set_current_user_raw_value(
+    subkey: &str,
+    value: &CurrentUserRegistryValueSnapshot,
+) -> anyhow::Result<()> {
+    with_created_current_user_key(subkey, |key| {
+        unsafe {
+            RegSetValueExW(
+                key,
+                PCWSTR(wide_null(&value.name).as_ptr()),
+                0,
+                REG_VALUE_TYPE(value.value_type),
+                Some(&value.data),
+            )
+        }
+        .ok()
+        .with_context(|| format!("恢复注册表值 {subkey}\\{} 失败", value.name))
+    })
+}
+
+#[cfg(windows)]
+pub fn delete_current_user_key(subkey: &str) -> anyhow::Result<()> {
+    let wide_subkey = wide_null(subkey);
+    let status = unsafe { RegDeleteKeyW(HKEY_CURRENT_USER, PCWSTR(wide_subkey.as_ptr())) };
+    if status == ERROR_FILE_NOT_FOUND || status == ERROR_PATH_NOT_FOUND {
+        return Ok(());
+    }
+    status
+        .ok()
+        .with_context(|| format!("failed to delete HKCU\\{subkey}"))
 }
 
 #[cfg(windows)]
@@ -522,7 +640,7 @@ fn apply_taskbar_properties(hwnd: HWND, icon_resource_path: &PathBuf) -> anyhow:
     set_property_string(
         &store,
         &PKEY_AppUserModel_RelaunchDisplayNameResource,
-        "Codex++",
+        crate::branding::DISPLAY_SILENT_NAME,
     )?;
     set_property_string(
         &store,

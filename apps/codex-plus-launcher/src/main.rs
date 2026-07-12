@@ -2,7 +2,9 @@
 
 use anyhow::{Context, Result};
 use codex_plus_core::launcher::{
-    DefaultLaunchHooks, LaunchHooks, LaunchOptions, launch_and_inject_with_hooks,
+    DefaultLaunchHooks, LaunchHooks, LaunchOptions, LaunchRoute, LaunchRouteInput,
+    active_relay_has_launch_credentials, launch_and_inject_with_hooks, official_login_can_launch,
+    select_launch_route,
 };
 use codex_plus_core::models::{DeleteResult, ExportResult, SessionRef};
 use codex_plus_core::routes::{BridgeContext, BridgeDataService, BridgeRuntimeService};
@@ -37,6 +39,8 @@ impl Default for LauncherHooks {
 async fn main() -> Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let helper_only = args.iter().any(|arg| arg == "--helper-only");
+    let update_continuation_token = parse_update_continuation_token(args.iter())
+        .or_else(|| std::env::var("CHIMERA_UPDATE_CONTINUATION_TOKEN").ok());
     let options = parse_launch_options(args.iter());
     if helper_only {
         let hooks = LauncherHooks::default();
@@ -45,13 +49,15 @@ async fn main() -> Result<()> {
         hooks.shutdown_helper(options.helper_port).await;
         return Ok(());
     }
+    let route = resolve_single_entry_route(update_continuation_token.as_deref()).await;
+    if route != LaunchRoute::LaunchCodex {
+        open_manager_for_route(route)?;
+        return Ok(());
+    }
     let Some(_guard) = acquire_single_instance_guard(options.debug_port)? else {
         activate_existing_codex_app(&options).await?;
         return Ok(());
     };
-    tokio::spawn(async {
-        let _ = notify_manager_when_update_available().await;
-    });
     let hooks = LauncherHooks::default();
     let handle = launch_and_inject_with_hooks(options, &hooks).await?;
     handle.wait_for_codex_exit().await?;
@@ -200,20 +206,94 @@ fn log_launcher_already_running(debug_port: u16) {
     );
 }
 
-async fn notify_manager_when_update_available() -> anyhow::Result<bool> {
-    let update =
-        codex_plus_core::update::check_for_update(codex_plus_core::version::VERSION).await?;
-    if !update.update_available {
-        return Ok(false);
+async fn resolve_single_entry_route(update_continuation_token: Option<&str>) -> LaunchRoute {
+    let status = codex_plus_core::update::startup_update_status(codex_plus_core::version::VERSION)
+        .await
+        .ok();
+    let continuation_authorized = update_continuation_token.is_some_and(|token| {
+        codex_plus_core::update::UpdateContinuationStore::default()
+            .consume_if_supported(
+                token,
+                codex_plus_core::version::VERSION,
+                &codex_plus_core::update::UpdateStateStore::default(),
+            )
+            .unwrap_or(false)
+    });
+    let update_required = status.is_some_and(|status| match status.decision.action {
+        codex_plus_core::update::UpdateAction::None => false,
+        codex_plus_core::update::UpdateAction::Automatic => !continuation_authorized,
+        codex_plus_core::update::UpdateAction::Mandatory => true,
+    });
+    if update_required {
+        return select_launch_route(LaunchRouteInput {
+            mandatory_update: true,
+            settings_valid: true,
+            active_relay_live_ready: false,
+            official_login_ready: false,
+            active_profile_has_key: false,
+        });
     }
-    open_manager_with_update_prompt()?;
-    Ok(true)
+    let settings = match codex_plus_core::settings::SettingsStore::default().load_strict() {
+        Ok(settings) => settings,
+        Err(_) => {
+            return select_launch_route(LaunchRouteInput {
+                mandatory_update: false,
+                settings_valid: false,
+                active_relay_live_ready: false,
+                official_login_ready: false,
+                active_profile_has_key: false,
+            });
+        }
+    };
+    let home = codex_plus_core::relay_config::default_codex_home_dir();
+    let active_profile = settings.active_relay_profile();
+    let active_aggregate = settings.active_aggregate_relay_profile().is_some();
+    let active_profile_has_key = active_relay_has_launch_credentials(
+        active_aggregate,
+        codex_plus_core::settings::relay_profile_has_usable_key(&active_profile),
+    );
+    let active_relay_live_ready = settings.relay_profiles_enabled
+        && if active_aggregate {
+            codex_plus_core::relay_config::aggregate_relay_matches_live_config_from_home(&home)
+        } else {
+            active_profile_has_key
+                && codex_plus_core::relay_config::relay_profile_matches_live_config_from_home(
+                    &home,
+                    &active_profile,
+                )
+        };
+    let official_login_ready = official_login_can_launch(
+        settings.relay_profiles_enabled,
+        active_profile.relay_mode,
+        active_profile.official_mix_api_key,
+        codex_plus_core::relay_config::chatgpt_auth_status_from_home(&home).authenticated,
+    );
+
+    select_launch_route(LaunchRouteInput {
+        mandatory_update: false,
+        settings_valid: true,
+        active_relay_live_ready,
+        official_login_ready,
+        active_profile_has_key,
+    })
 }
 
-fn open_manager_with_update_prompt() -> anyhow::Result<()> {
+fn manager_start_argument(route: LaunchRoute) -> Option<&'static str> {
+    match route {
+        LaunchRoute::ManagerUpdate => Some("--show-update"),
+        LaunchRoute::ManagerRecovery => Some("--recover-settings"),
+        LaunchRoute::ManagerConfigureRelay => Some("--configure-relay"),
+        LaunchRoute::ManagerKeyFirst => Some("--chimera-key-first"),
+        LaunchRoute::LaunchCodex => None,
+    }
+}
+
+fn open_manager_for_route(route: LaunchRoute) -> anyhow::Result<()> {
     let manager_path = manager_exe_path();
     let mut command = std::process::Command::new(&manager_path);
-    command.arg("--show-update");
+    let argument = manager_start_argument(route)
+        .ok_or_else(|| anyhow::anyhow!("Codex launch route cannot open the manager"))?;
+    command.arg(argument);
     #[cfg(windows)]
     {
         command.creation_flags(codex_plus_core::windows_create_no_window());
@@ -259,6 +339,23 @@ where
         }
     }
     options
+}
+
+fn parse_update_continuation_token<I, S>(args: I) -> Option<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        if arg.as_ref() == "--update-continuation-token" {
+            return iter
+                .next()
+                .map(|value| value.as_ref().to_string())
+                .filter(|value| !value.is_empty());
+        }
+    }
+    None
 }
 
 #[async_trait::async_trait(?Send)]
@@ -593,10 +690,6 @@ impl BridgeRuntimeService for LauncherRuntimeService {
         Ok(codex_plus_core::model_catalog::read_codex_model_catalog().await)
     }
 
-    async fn ads(&self) -> anyhow::Result<Value> {
-        codex_plus_core::ads::fetch_ad_list().await
-    }
-
     async fn zed_remote_status(&self) -> anyhow::Result<Value> {
         Ok(codex_plus_core::zed_remote::zed_remote_status())
     }
@@ -835,6 +928,71 @@ mod tests {
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.contains(codex_plus_core::install::MANAGER_BINARY))
         );
+    }
+
+    #[test]
+    fn manager_start_arguments_cover_every_non_codex_route() {
+        assert_eq!(
+            manager_start_argument(codex_plus_core::launcher::LaunchRoute::ManagerUpdate),
+            Some("--show-update")
+        );
+        assert_eq!(
+            manager_start_argument(codex_plus_core::launcher::LaunchRoute::ManagerRecovery),
+            Some("--recover-settings")
+        );
+        assert_eq!(
+            manager_start_argument(codex_plus_core::launcher::LaunchRoute::ManagerConfigureRelay),
+            Some("--configure-relay")
+        );
+        assert_eq!(
+            manager_start_argument(codex_plus_core::launcher::LaunchRoute::ManagerKeyFirst),
+            Some("--chimera-key-first")
+        );
+        assert_eq!(
+            manager_start_argument(codex_plus_core::launcher::LaunchRoute::LaunchCodex),
+            None
+        );
+    }
+
+    #[test]
+    fn single_entry_route_is_resolved_before_guard_and_codex_launch() {
+        let source = include_str!("main.rs")
+            .split_once("mod tests {")
+            .expect("launcher test module boundary")
+            .0;
+        let route = source
+            .find("resolve_single_entry_route(update_continuation_token.as_deref()).await")
+            .expect("startup route resolution");
+        let guard = source
+            .find("acquire_single_instance_guard(options.debug_port)?")
+            .expect("launcher guard");
+        let launch = source
+            .find("launch_and_inject_with_hooks(options, &hooks).await?")
+            .expect("Codex launch");
+
+        assert!(route < guard && guard < launch);
+        assert!(source.contains("SettingsStore::default().load_strict()"));
+        assert!(source.contains("chatgpt_auth_status_from_home"));
+        assert!(source.contains("official_login_can_launch"));
+        assert!(source.contains("relay_profile_matches_live_config_from_home"));
+        assert!(!source.contains(
+            "tokio::spawn(async {\n        let _ = notify_manager_when_update_available()"
+        ));
+    }
+
+    #[test]
+    fn startup_update_decision_routes_automatic_and_mandatory_updates_to_manager() {
+        let source = include_str!("main.rs")
+            .split_once("mod tests {")
+            .expect("launcher test module boundary")
+            .0;
+
+        assert!(source.contains("startup_update_status("));
+        assert!(source.contains("status.decision.action"));
+        assert!(source.contains("UpdateAction::None"));
+        assert!(source.contains("CHIMERA_UPDATE_CONTINUATION_TOKEN"));
+        assert!(source.contains("consume_if_supported"));
+        assert!(!source.contains(".map(|update| update.update_available)"));
     }
 }
 

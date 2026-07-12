@@ -5,10 +5,15 @@ use serde::{Deserialize, Serialize};
 pub mod macos;
 pub mod windows;
 
-pub const SILENT_NAME: &str = "Codex++";
-pub const MANAGER_NAME: &str = "Codex++ 管理工具";
+pub const SILENT_NAME: &str = crate::branding::DISPLAY_SILENT_NAME;
+pub const MANAGER_NAME: &str = crate::branding::DISPLAY_MANAGER_NAME;
+// 一期保持二进制名不变：
 pub const SILENT_BINARY: &str = "codex-plus-plus";
 pub const MANAGER_BINARY: &str = "codex-plus-plus-manager";
+
+/// 原版 Codex++ 显示名，仅用于检测与清理，不用于新建入口。
+pub const LEGACY_SILENT_NAME: &str = "Codex++";
+pub const LEGACY_MANAGER_NAME: &str = "Codex++ 管理工具";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +48,12 @@ pub struct InstallActionResult {
     pub management_shortcut: ShortcutState,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LegacyMacosApps {
+    pub paths: Vec<PathBuf>,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MacosAppBundle {
     pub app_path: PathBuf,
@@ -71,12 +82,32 @@ impl ShortcutState {
     }
 }
 
-pub fn shortcut_names() -> (&'static str, &'static str) {
+pub fn shortcut_names() -> (String, String) {
+    (format!("{SILENT_NAME}.lnk"), format!("{MANAGER_NAME}.lnk"))
+}
+
+pub fn legacy_shortcut_names() -> (&'static str, &'static str) {
     ("Codex++.lnk", "Codex++ 管理工具.lnk")
 }
 
-pub fn app_bundle_names() -> (&'static str, &'static str) {
+pub fn app_bundle_names() -> (String, String) {
+    (format!("{SILENT_NAME}.app"), format!("{MANAGER_NAME}.app"))
+}
+
+pub fn legacy_app_bundle_names() -> (&'static str, &'static str) {
     ("Codex++.app", "Codex++ 管理工具.app")
+}
+
+/// 历史乱码快捷方式名（UTF-8「管理工具」被错误编码后的残留），仅用于清理。
+pub const LEGACY_MOJIBAKE_MANAGER_LNK: &str = "Codex++ 绠＄悊宸ュ叿.lnk";
+
+pub fn windows_legacy_shortcut_paths(root: &Path) -> Vec<PathBuf> {
+    let (silent, manager) = legacy_shortcut_names();
+    vec![
+        root.join(silent),
+        root.join(manager),
+        root.join(LEGACY_MOJIBAKE_MANAGER_LNK),
+    ]
 }
 
 pub fn inspect_entrypoints() -> EntryPointState {
@@ -113,6 +144,11 @@ pub fn build_macos_app_bundle(options: &InstallOptions, manager: bool) -> MacosA
     macos::build_app_bundle(options, manager)
 }
 
+/// 检测同目录或给定根下的原版 Codex++ App；不删除任何文件。
+pub fn detect_legacy_macos_apps(search_roots: &[PathBuf]) -> LegacyMacosApps {
+    macos::detect_legacy_apps(search_roots)
+}
+
 pub fn remove_owned_data() -> std::io::Result<()> {
     let dir = crate::paths::default_app_state_dir();
     if dir.exists() {
@@ -134,6 +170,8 @@ pub fn default_install_root() -> Option<PathBuf> {
         let sys_apps = PathBuf::from("/Applications");
         if sys_apps.join(format!("{SILENT_NAME}.app")).exists()
             || sys_apps.join(format!("{MANAGER_NAME}.app")).exists()
+            || sys_apps.join(format!("{LEGACY_SILENT_NAME}.app")).exists()
+            || sys_apps.join(format!("{LEGACY_MANAGER_NAME}.app")).exists()
         {
             return Some(sys_apps);
         }
@@ -177,7 +215,7 @@ fn platform_install(options: &InstallOptions) -> anyhow::Result<()> {
     #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = options;
-        anyhow::bail!("当前平台暂不支持安装 Codex++ 入口")
+        anyhow::bail!("当前平台暂不支持安装 Chimera++ 入口")
     }
 }
 
@@ -195,7 +233,7 @@ fn platform_uninstall(options: &InstallOptions) -> anyhow::Result<()> {
     #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = options;
-        anyhow::bail!("当前平台暂不支持卸载 Codex++ 入口")
+        anyhow::bail!("当前平台暂不支持卸载 Chimera++ 入口")
     }
 }
 
@@ -352,4 +390,13 @@ pub(crate) fn install_root_or_default(options: &InstallOptions) -> PathBuf {
         .clone()
         .or_else(default_install_root)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// `1.2.34-chimera.1` → `1.2.34`，供 macOS CFBundleShortVersionString。
+pub fn macos_short_version() -> String {
+    crate::version::VERSION
+        .split('-')
+        .next()
+        .unwrap_or(crate::version::VERSION)
+        .to_string()
 }

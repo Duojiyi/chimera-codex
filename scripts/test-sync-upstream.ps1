@@ -1,0 +1,290 @@
+#Requires -Version 5.1
+[CmdletBinding()]
+param()
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$syncScript = Join-Path $repoRoot 'scripts\sync-upstream.ps1'
+
+# Import functions without running remotes, API calls, fetches, worktrees, or commits.
+. $syncScript -SkipMain
+
+function Assert-Equal {
+    param(
+        [Parameter(Mandatory)]$Actual,
+        [Parameter(Mandatory)]$Expected,
+        [Parameter(Mandatory)][string]$Context
+    )
+    if ($Actual -ne $Expected) {
+        throw "${Context}: expected '$Expected', got '$Actual'"
+    }
+}
+
+function New-ReleaseFixture {
+    param(
+        [Parameter(Mandatory)][string]$Tag,
+        [bool]$Draft = $false,
+        [bool]$Prerelease = $false
+    )
+    return [pscustomobject]@{
+        tag_name         = $Tag
+        name             = $Tag
+        draft            = $Draft
+        prerelease       = $Prerelease
+        target_commitish = 'main'
+        html_url         = "https://example.invalid/releases/$Tag"
+        published_at     = '2026-01-01T00:00:00Z'
+    }
+}
+
+Assert-Equal (Compare-FormalSemVer -Left '1.10.0' -Right '1.9.99') 1 'numeric SemVer comparison'
+Assert-Equal (Compare-FormalSemVer -Left '2.0.0' -Right '2.0.0') 0 'equal SemVer comparison'
+Assert-Equal (Compare-FormalSemVer -Left '2.0.0' -Right '10.0.0') -1 'major SemVer comparison'
+Assert-Equal (Get-FormalBaselineVersion -WorkspaceVersion '3.4.5-chimera.7') '3.4.5' 'baseline extraction'
+
+$unordered = @(
+    (New-ReleaseFixture -Tag 'v2.9.99'),
+    (New-ReleaseFixture -Tag 'v99.0.0' -Draft $true),
+    (New-ReleaseFixture -Tag 'v100.0.0' -Prerelease $true),
+    (New-ReleaseFixture -Tag 'not-semver'),
+    (New-ReleaseFixture -Tag 'v2.10.0')
+)
+$selected = Select-LatestFormalRelease -Releases $unordered
+Assert-Equal $selected.Tag 'v2.10.0' 'maximum formal SemVer selection'
+
+$nonEnumeratedRequest = {
+    param([string]$Uri, [hashtable]$Headers)
+    $response = @(
+        (New-ReleaseFixture -Tag 'v3.9.0'),
+        (New-ReleaseFixture -Tag 'v3.10.0')
+    )
+    Write-Output -NoEnumerate $response
+}
+$nonEnumerated = Get-LatestFormalUpstreamRelease -RequestPage $nonEnumeratedRequest
+Assert-Equal $nonEnumerated.Tag 'v3.10.0' 'Invoke-RestMethod array response expansion'
+
+$pageOne = @(1..100 | ForEach-Object { New-ReleaseFixture -Tag 'v9.0.0' })
+$pageTwo = @(
+    (New-ReleaseFixture -Tag 'v10.0.0'),
+    (New-ReleaseFixture -Tag 'v999.0.0' -Draft $true),
+    (New-ReleaseFixture -Tag 'v1000.0.0' -Prerelease $true)
+)
+$script:requestedPages = @()
+$requestPage = {
+    param([string]$Uri, [hashtable]$Headers)
+    if ($Uri -notmatch '[?&]page=(\d+)') {
+        throw "fixture request missing page: $Uri"
+    }
+    $page = [int]$Matches[1]
+    $script:requestedPages += $page
+    switch ($page) {
+        1 { return $pageOne }
+        2 { return $pageTwo }
+        default { throw "unexpected fixture page: $page" }
+    }
+}
+$paged = Get-LatestFormalUpstreamRelease -RequestPage $requestPage
+Assert-Equal $paged.Tag 'v10.0.0' 'maximum SemVer across API pages'
+Assert-Equal ($script:requestedPages -join ',') '1,2' 'release API pagination'
+
+Assert-Equal (
+    Get-UpstreamVersionDisposition -CandidateVersion '2.9.99' -BaselineVersion '2.10.0'
+) 'regression' 'reject downgrade'
+Assert-Equal (
+    Get-UpstreamVersionDisposition -CandidateVersion '2.10.0' -BaselineVersion '2.10.0'
+) 'duplicate' 'reject duplicate'
+Assert-Equal (
+    Get-UpstreamVersionDisposition -CandidateVersion '2.10.1' -BaselineVersion '2.10.0'
+) 'advance' 'accept advance'
+
+function Test-BuiltInTokenWorkflowContract {
+    param([Parameter(Mandatory)][string]$Workflow)
+
+    $text = $Workflow.Replace("`r`n", "`n").Replace("`r", "`n")
+    if ($text.Contains('CHIMERA_AUTOMATION_TOKEN')) { return $false }
+    $match = [regex]::Match(
+        $text,
+        '(?ms)^  publish-sync-pr:\s*$\n(?<job>.*?)(?=^  report-blocked:\s*$)'
+    )
+    if (-not $match.Success) { return $false }
+    $job = $match.Groups['job'].Value
+    $permissionBlock = @"
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+      issues: write
+"@.Replace("`r`n", "`n").TrimEnd()
+
+    $verify = '          git diff --quiet $trustedMainSha "refs/heads/$branch" -- .github/workflows'
+    $push = '            git push -u origin "refs/heads/${branch}:refs/heads/${branch}"'
+    $dispatch = '          gh workflow run pr-build.yml --ref $branch'
+    $autoMerge = '          gh pr merge $pr --auto --squash'
+    $verifyIndex = $job.IndexOf($verify, [System.StringComparison]::Ordinal)
+    $pushIndex = $job.IndexOf($push, [System.StringComparison]::Ordinal)
+    $dispatchIndex = $job.IndexOf($dispatch, [System.StringComparison]::Ordinal)
+    $autoMergeIndex = $job.IndexOf($autoMerge, [System.StringComparison]::Ordinal)
+
+    return $job.Contains($permissionBlock) -and
+        $job -match '(?m)^          GH_TOKEN: \$\{\{ github\.token \}\}\s*$' -and
+        $job -match '(?m)^          TRUSTED_MAIN_SHA: \$\{\{ github\.sha \}\}\s*$' -and
+        $verifyIndex -ge 0 -and
+        $verifyIndex -lt $pushIndex -and
+        $pushIndex -lt $dispatchIndex -and
+        $dispatchIndex -lt $autoMergeIndex
+}
+
+$syncWorkflowPath = Join-Path $repoRoot '.github\workflows\sync-upstream.yml'
+$syncWorkflow = Get-Content -LiteralPath $syncWorkflowPath -Raw
+if (-not (Test-BuiltInTokenWorkflowContract -Workflow $syncWorkflow)) {
+    throw 'sync workflow must use the short-lived GITHUB_TOKEN and explicitly dispatch PR checks'
+}
+
+$normalizedWorkflow = $syncWorkflow.Replace("`r`n", "`n").Replace("`r", "`n")
+$secretMutation = $normalizedWorkflow.Replace('${{ github.token }}', '${{ secrets.CHIMERA_AUTOMATION_TOKEN }}')
+if (Test-BuiltInTokenWorkflowContract -Workflow $secretMutation) {
+    throw 'external-token mutation must fail the workflow contract'
+}
+$permissionMutation = $normalizedWorkflow.Replace("      actions: write`n", '')
+if (Test-BuiltInTokenWorkflowContract -Workflow $permissionMutation) {
+    throw 'missing Actions permission mutation must fail the workflow contract'
+}
+$crlfPermissionMutation = $normalizedWorkflow.Replace("`n", "`r`n").Replace(
+    "      actions: write`r`n",
+    ''
+)
+if (Test-BuiltInTokenWorkflowContract -Workflow $crlfPermissionMutation) {
+    throw 'CRLF missing Actions permission mutation must fail the workflow contract'
+}
+$dispatchMutation = $normalizedWorkflow.Replace(
+    '          gh workflow run pr-build.yml --ref $branch',
+    '          # gh workflow run pr-build.yml --ref $branch'
+)
+if (Test-BuiltInTokenWorkflowContract -Workflow $dispatchMutation) {
+    throw 'commented dispatch mutation must fail the workflow contract'
+}
+$verifyLine = '          git diff --quiet $trustedMainSha "refs/heads/$branch" -- .github/workflows'
+$pushLine = '            git push -u origin "refs/heads/${branch}:refs/heads/${branch}"'
+$postPushVerificationMutation = $normalizedWorkflow.Replace("$verifyLine`n", '').Replace(
+    "$pushLine`n",
+    "$pushLine`n$verifyLine`n"
+)
+if (Test-BuiltInTokenWorkflowContract -Workflow $postPushVerificationMutation) {
+    throw 'post-push workflow verification mutation must fail the workflow contract'
+}
+
+function Test-ProtectedScriptContract {
+    param([Parameter(Mandatory)][string]$Source)
+
+    $text = $Source.Replace("`r`n", "`n").Replace("`r", "`n")
+    return $text.Contains('function Restore-ProtectedWorkflowTree') -and
+        $text.Contains("@('restore', `"--source=`$TrustedRef`", '--staged', '--worktree', '--', '.github/workflows')") -and
+        $text.Contains('Assert-ProtectedWorkflowTree -Root $Root -TrustedRef $TrustedRef -Cached') -and
+        $text.Contains("Assert-ProtectedWorkflowTree -Root `$Root -TrustedRef 'origin/main' -CandidateRef `$remoteRef") -and
+        $text.Contains('Restore-ProtectedWorkflowTree -Root $worktreePath -TrustedRef $mainSha') -and
+        $text.Contains("Assert-ProtectedWorkflowTree -Root `$worktreePath -TrustedRef `$mainSha -CandidateRef 'HEAD'")
+}
+
+$syncScriptSource = (Get-Content -LiteralPath $syncScript -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+if (-not (Test-ProtectedScriptContract -Source $syncScriptSource)) {
+    throw 'sync candidate construction must restore and verify the trusted workflow tree'
+}
+$scriptMutation = $syncScriptSource.Replace("'.github/workflows'", "'.github/untrusted-workflows'")
+if (Test-ProtectedScriptContract -Source $scriptMutation) {
+    throw 'protected workflow path mutation must fail the script contract'
+}
+$crlfScriptMutation = $syncScriptSource.Replace("`n", "`r`n").Replace(
+    "'.github/workflows'",
+    "'.github/untrusted-workflows'"
+)
+if (Test-ProtectedScriptContract -Source $crlfScriptMutation) {
+    throw 'CRLF protected workflow path mutation must fail the script contract'
+}
+$resumeMutation = $syncScriptSource.Replace(
+    "    Assert-ProtectedWorkflowTree -Root `$Root -TrustedRef 'origin/main' -CandidateRef `$remoteRef`n",
+    ''
+)
+if (Test-ProtectedScriptContract -Source $resumeMutation) {
+    throw 'missing resume workflow-tree verification mutation must fail the script contract'
+}
+$candidateMutation = $syncScriptSource.Replace(
+    "    Assert-ProtectedWorkflowTree -Root `$worktreePath -TrustedRef `$mainSha -CandidateRef 'HEAD'`n",
+    ''
+)
+if (Test-ProtectedScriptContract -Source $candidateMutation) {
+    throw 'missing committed candidate verification mutation must fail the script contract'
+}
+$cachedMutation = $syncScriptSource.Replace(
+    '    Assert-ProtectedWorkflowTree -Root $Root -TrustedRef $TrustedRef -Cached',
+    '    Assert-ProtectedWorkflowTree -Root $Root -TrustedRef $TrustedRef'
+)
+if (Test-ProtectedScriptContract -Source $cachedMutation) {
+    throw 'missing cached-index verification mutation must fail the script contract'
+}
+
+function Invoke-FixtureGit {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+
+    $output = & git -C $repoRoot @Arguments 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "fixture git $($Arguments -join ' ') failed: $($output -join "`n")"
+    }
+    return ($output -join "`n").Trim()
+}
+
+function Assert-CachedWorkflowMutationRejected {
+    param([Parameter(Mandatory)][string]$Context)
+
+    $rejected = $false
+    try {
+        Assert-ProtectedWorkflowTree -Root $repoRoot -TrustedRef 'HEAD' -Cached
+    }
+    catch {
+        $rejected = $true
+    }
+    if (-not $rejected) {
+        throw "$Context must be rejected by the protected workflow tree check"
+    }
+}
+
+$previousIndex = $env:GIT_INDEX_FILE
+$fixtureIndex = Join-Path ([System.IO.Path]::GetTempPath()) (
+    'chimera-workflow-index-' + [guid]::NewGuid().ToString('N')
+)
+try {
+    $env:GIT_INDEX_FILE = $fixtureIndex
+    $foreignBlob = Invoke-FixtureGit -Arguments @('rev-parse', 'HEAD:LICENSE')
+
+    Invoke-FixtureGit -Arguments @('read-tree', 'HEAD') | Out-Null
+    Invoke-FixtureGit -Arguments @(
+        'update-index', '--add', '--cacheinfo', '100644', $foreignBlob,
+        '.github/workflows/untrusted.yml'
+    ) | Out-Null
+    Assert-CachedWorkflowMutationRejected -Context 'added workflow'
+
+    Invoke-FixtureGit -Arguments @('read-tree', 'HEAD') | Out-Null
+    Invoke-FixtureGit -Arguments @(
+        'update-index', '--cacheinfo', '100644', $foreignBlob,
+        '.github/workflows/pr-build.yml'
+    ) | Out-Null
+    Assert-CachedWorkflowMutationRejected -Context 'modified workflow'
+
+    Invoke-FixtureGit -Arguments @('read-tree', 'HEAD') | Out-Null
+    Invoke-FixtureGit -Arguments @(
+        'update-index', '--force-remove', '.github/workflows/pr-build.yml'
+    ) | Out-Null
+    Assert-CachedWorkflowMutationRejected -Context 'deleted workflow'
+
+    Invoke-FixtureGit -Arguments @('read-tree', 'HEAD') | Out-Null
+    Assert-ProtectedWorkflowTree -Root $repoRoot -TrustedRef 'HEAD' -Cached
+}
+finally {
+    $env:GIT_INDEX_FILE = $previousIndex
+    if (Test-Path -LiteralPath $fixtureIndex -PathType Leaf) {
+        Remove-Item -LiteralPath $fixtureIndex -Force
+    }
+}
+
+Write-Host 'sync-upstream contract tests passed'

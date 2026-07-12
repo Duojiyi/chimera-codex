@@ -4,8 +4,7 @@ use serde_json::Value;
 
 use crate::user_scripts::UserScriptManager;
 
-pub const DEFAULT_MARKET_INDEX_URL: &str =
-    "https://raw.githubusercontent.com/BigPizzaV3/CodexPlusPlusScriptMarket/main/index.json";
+pub const DEFAULT_MARKET_INDEX_URL: &str = "";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ScriptMarketManifest {
@@ -57,6 +56,13 @@ pub fn parse_market_manifest(raw: Value) -> anyhow::Result<ScriptMarketManifest>
 }
 
 pub async fn fetch_market_manifest(url: &str) -> anyhow::Result<ScriptMarketManifest> {
+    if url.trim().is_empty() {
+        return Ok(ScriptMarketManifest {
+            version: 1,
+            updated_at: None,
+            scripts: Vec::new(),
+        });
+    }
     let raw = reqwest::get(url)
         .await
         .with_context(|| format!("failed to request script market index {url}"))?

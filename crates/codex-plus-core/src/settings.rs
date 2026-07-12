@@ -571,6 +571,31 @@ pub fn default_relay_profiles() -> Vec<RelayProfile> {
     vec![RelayProfile::default()]
 }
 
+/// 仅在 `settings.json` 不存在时使用的全新安装默认值。
+/// 不改变 `BackendSettings::default()` / serde 缺省，避免覆盖升级用户。
+pub fn chimera_first_run_settings() -> BackendSettings {
+    let base_url = crate::branding::DEFAULT_RELAY_BASE_URL.to_string();
+    let model = crate::branding::DEFAULT_RELAY_MODEL.to_string();
+    BackendSettings {
+        relay_profiles_enabled: true,
+        relay_base_url: base_url.clone(),
+        active_relay_id: "chimerahub".to_string(),
+        relay_profiles: vec![RelayProfile {
+            id: "chimerahub".to_string(),
+            name: "ChimeraHub".to_string(),
+            model: model.clone(),
+            base_url,
+            upstream_base_url: crate::branding::DEFAULT_RELAY_BASE_URL.to_string(),
+            api_key: String::new(),
+            protocol: RelayProtocol::Responses,
+            relay_mode: RelayMode::PureApi,
+            model_list: model,
+            ..RelayProfile::default()
+        }],
+        ..BackendSettings::default()
+    }
+}
+
 pub fn default_aggregate_member_weight() -> u32 {
     1
 }
@@ -654,27 +679,60 @@ pub fn normalize_codex_extra_args(args: &[String]) -> Vec<String> {
         .collect()
 }
 
+pub fn relay_profile_has_usable_key(profile: &RelayProfile) -> bool {
+    if !profile.api_key.trim().is_empty()
+        || experimental_bearer_token_from_config_text(&profile.config_contents).is_some()
+    {
+        return true;
+    }
+    serde_json::from_str::<Value>(&profile.auth_contents)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("OPENAI_API_KEY")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .map(ToString::to_string)
+        })
+        .is_some()
+}
+
 #[derive(Debug, Clone)]
 pub struct SettingsStore {
     path: PathBuf,
+    codex_home: Option<PathBuf>,
 }
 
 impl Default for SettingsStore {
     fn default() -> Self {
-        Self::new(crate::paths::default_settings_path())
+        Self::new_with_codex_home(
+            crate::paths::default_settings_path(),
+            crate::codex_home::default_codex_home_dir(),
+        )
     }
 }
 
 impl SettingsStore {
     pub fn new(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            codex_home: None,
+        }
+    }
+
+    pub fn new_with_codex_home(path: PathBuf, codex_home: PathBuf) -> Self {
+        Self {
+            path,
+            codex_home: Some(codex_home),
+        }
     }
 
     pub fn load(&self) -> anyhow::Result<BackendSettings> {
         let contents = match fs::read_to_string(&self.path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(BackendSettings::default());
+                return Ok(self.missing_settings_defaults());
             }
             Err(error) => {
                 return Err(error)
@@ -687,11 +745,57 @@ impl SettingsStore {
         ))
     }
 
+    pub fn load_strict(&self) -> anyhow::Result<BackendSettings> {
+        let contents = match fs::read_to_string(&self.path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(self.missing_settings_defaults());
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to read settings {}", self.path.display()));
+            }
+        };
+        let settings = serde_json::from_str(&contents)
+            .with_context(|| format!("failed to parse settings {}", self.path.display()))?;
+        Ok(normalize_settings_config_sections(settings))
+    }
+
     pub fn save(&self, settings: &BackendSettings) -> anyhow::Result<()> {
+        self.save_normalized(settings).map(|_| ())
+    }
+
+    pub(crate) fn save_normalized(
+        &self,
+        settings: &BackendSettings,
+    ) -> anyhow::Result<BackendSettings> {
         let mut settings = normalize_settings_config_sections(settings.clone());
         settings.codex_extra_args = normalize_codex_extra_args(&settings.codex_extra_args);
         let bytes = serde_json::to_vec_pretty(&settings)?;
-        atomic_write(&self.path, &bytes)
+        atomic_write(&self.path, &bytes)?;
+        Ok(settings)
+    }
+
+    pub(crate) fn snapshot_bytes(&self) -> anyhow::Result<Option<Vec<u8>>> {
+        match fs::read(&self.path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error)
+                .with_context(|| format!("failed to snapshot settings {}", self.path.display())),
+        }
+    }
+
+    pub(crate) fn restore_snapshot(&self, snapshot: Option<&[u8]>) -> anyhow::Result<()> {
+        match snapshot {
+            Some(bytes) => atomic_write(&self.path, bytes),
+            None => match fs::remove_file(&self.path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error).with_context(|| {
+                    format!("failed to remove restored settings {}", self.path.display())
+                }),
+            },
+        }
     }
 
     pub fn update(&self, payload: Value) -> anyhow::Result<BackendSettings> {
@@ -721,7 +825,7 @@ impl SettingsStore {
         let contents = match fs::read_to_string(&self.path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(settings_to_object(&BackendSettings::default()));
+                return Ok(settings_to_object(&self.missing_settings_defaults()));
             }
             Err(error) => {
                 return Err(error)
@@ -734,6 +838,26 @@ impl SettingsStore {
             Ok(_) | Err(_) => Ok(settings_to_object(&BackendSettings::default())),
         }
     }
+
+    fn missing_settings_defaults(&self) -> BackendSettings {
+        if self
+            .codex_home
+            .as_deref()
+            .is_some_and(codex_home_has_nonempty_live_files)
+        {
+            BackendSettings::default()
+        } else {
+            chimera_first_run_settings()
+        }
+    }
+}
+
+fn codex_home_has_nonempty_live_files(home: &Path) -> bool {
+    ["config.toml", "auth.json"].into_iter().any(|file_name| {
+        fs::metadata(home.join(file_name))
+            .map(|metadata| metadata.is_file() && metadata.len() > 0)
+            .unwrap_or(false)
+    })
 }
 
 fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<String, Value>) {
@@ -1167,50 +1291,669 @@ fn normalize_text_config(contents: String) -> String {
 }
 
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    atomic_write_inner(
+        path,
+        bytes,
+        |_| {},
+        |_| {},
+        path_file_identity_nofollow,
+        |_| {},
+        |_| {},
+    )
+}
+
+fn atomic_write_inner(
+    path: &Path,
+    bytes: &[u8],
+    before_publish: impl FnOnce(&Path),
+    before_rename: impl FnOnce(&Path),
+    initially_published_identity: impl FnOnce(&Path) -> std::io::Result<OpenFileIdentity>,
+    after_publish: impl FnOnce(&Path),
+    before_published_cleanup: impl Fn(&Path),
+) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create directory {}", parent.display()))?;
     }
 
-    let temp_path = temp_path_for(path);
-    fs::write(&temp_path, bytes)
-        .with_context(|| format!("failed to write temp file {}", temp_path.display()))?;
-    fs::rename(&temp_path, path).with_context(|| {
-        format!(
+    let (temp_path, mut temp_file) = create_unique_atomic_temp(path)?;
+    if let Err(error) = std::io::Write::write_all(&mut temp_file, bytes) {
+        let error = anyhow::Error::new(error)
+            .context(format!("failed to write temp file {}", temp_path.display()));
+        let error = scrub_open_atomic_file_after_error(&mut temp_file, &temp_path, error);
+        drop(temp_file);
+        return Err(cleanup_atomic_temp_after_error(&temp_path, error));
+    }
+    if let Err(error) = temp_file.sync_all() {
+        let error = anyhow::Error::new(error)
+            .context(format!("failed to sync temp file {}", temp_path.display()));
+        let error = scrub_open_atomic_file_after_error(&mut temp_file, &temp_path, error);
+        drop(temp_file);
+        return Err(cleanup_atomic_temp_after_error(&temp_path, error));
+    }
+    before_publish(&temp_path);
+    let expected_identity = match open_file_identity(&temp_file) {
+        Ok(identity) => identity,
+        Err(error) => {
+            let error = anyhow::Error::new(error).context(format!(
+                "failed to inspect temp file {}",
+                temp_path.display()
+            ));
+            let error = scrub_open_atomic_file_after_error(&mut temp_file, &temp_path, error);
+            drop(temp_file);
+            return Err(cleanup_atomic_temp_after_error(&temp_path, error));
+        }
+    };
+    if expected_identity.links != 1 {
+        let error = anyhow::anyhow!(
+            "temp file has unexpected link count before replacing {}",
+            path.display()
+        );
+        let error = scrub_open_atomic_file_after_error(&mut temp_file, &temp_path, error);
+        drop(temp_file);
+        return Err(cleanup_atomic_temp_after_error(&temp_path, error));
+    }
+    let source_identity = match path_file_identity_nofollow(&temp_path) {
+        Ok(identity) => identity,
+        Err(error) => {
+            let error = anyhow::Error::new(error).context(format!(
+                "failed to verify temp file identity before replacing {}",
+                path.display()
+            ));
+            let error = scrub_open_atomic_file_after_error(&mut temp_file, &temp_path, error);
+            drop(temp_file);
+            return Err(cleanup_atomic_temp_after_error(&temp_path, error));
+        }
+    };
+    if source_identity.links != 1 || !source_identity.same_file(expected_identity) {
+        let error = anyhow::anyhow!(
+            "temp file identity changed before replacing {}",
+            path.display()
+        );
+        let error = scrub_open_atomic_file_after_error(&mut temp_file, &temp_path, error);
+        drop(temp_file);
+        return Err(cleanup_atomic_temp_after_error(&temp_path, error));
+    }
+    before_rename(&temp_path);
+    if let Err(error) = fs::rename(&temp_path, path) {
+        let error = anyhow::Error::new(error).context(format!(
             "failed to replace {} with {}",
             path.display(),
             temp_path.display()
-        )
-    })?;
+        ));
+        let error = scrub_open_atomic_file_after_error(&mut temp_file, &temp_path, error);
+        drop(temp_file);
+        return Err(cleanup_atomic_temp_after_error(&temp_path, error));
+    }
+    let initially_published_identity = match initially_published_identity(path) {
+        Ok(identity) => identity,
+        Err(error) => {
+            let error = anyhow::Error::new(error).context(format!(
+                "failed to verify initially published file identity: {}",
+                path.display()
+            ));
+            let error = scrub_open_atomic_file_after_error(&mut temp_file, path, error);
+            drop(temp_file);
+            before_published_cleanup(path);
+            return Err(quarantine_unverified_atomic_published_path(path, error));
+        }
+    };
+    if initially_published_identity.links != 1
+        || !initially_published_identity.same_file(expected_identity)
+    {
+        let error = anyhow::anyhow!(
+            "initially published file identity changed: {}",
+            path.display()
+        );
+        let error = scrub_open_atomic_file_after_error(&mut temp_file, path, error);
+        drop(temp_file);
+        before_published_cleanup(path);
+        return Err(cleanup_atomic_published_after_error(
+            path,
+            Some(initially_published_identity),
+            error,
+        ));
+    }
+    after_publish(path);
+    let published_identity = match path_file_identity_nofollow(path) {
+        Ok(identity) => identity,
+        Err(error) => {
+            let unsafe_path = error.kind() == std::io::ErrorKind::InvalidData;
+            let error = anyhow::Error::new(error).context(format!(
+                "failed to verify published file identity: {}",
+                path.display()
+            ));
+            let error = scrub_open_atomic_file_after_error(&mut temp_file, path, error);
+            drop(temp_file);
+            return if unsafe_path {
+                before_published_cleanup(path);
+                Err(cleanup_atomic_published_after_error(path, None, error))
+            } else {
+                Err(error)
+            };
+        }
+    };
+    if published_identity.links != 1 {
+        let error = anyhow::anyhow!("published file identity changed: {}", path.display());
+        let error = scrub_open_atomic_file_after_error(&mut temp_file, path, error);
+        drop(temp_file);
+        before_published_cleanup(path);
+        return Err(cleanup_atomic_published_after_error(
+            path,
+            Some(published_identity),
+            error,
+        ));
+    }
+    if !published_identity.same_file(expected_identity) {
+        let error = anyhow::anyhow!("published file identity changed: {}", path.display());
+        let error = scrub_open_atomic_file_after_error(&mut temp_file, path, error);
+        drop(temp_file);
+        return Err(error);
+    }
+    drop(temp_file);
     Ok(())
 }
 
-fn temp_path_for(path: &Path) -> PathBuf {
-    let mut temp_path = path.to_path_buf();
-    let extension = path.extension().and_then(|value| value.to_str());
-    temp_path.set_extension(match extension {
-        Some(extension) => format!("{extension}.tmp"),
-        None => "tmp".to_string(),
-    });
-    temp_path
+#[cfg(test)]
+fn atomic_write_with_before_publish_hook(
+    path: &Path,
+    bytes: &[u8],
+    before_publish: impl FnOnce(&Path),
+) -> anyhow::Result<()> {
+    atomic_write_inner(
+        path,
+        bytes,
+        before_publish,
+        |_| {},
+        path_file_identity_nofollow,
+        |_| {},
+        |_| {},
+    )
+}
+
+#[cfg(test)]
+fn atomic_write_with_before_rename_hook(
+    path: &Path,
+    bytes: &[u8],
+    before_rename: impl FnOnce(&Path),
+) -> anyhow::Result<()> {
+    atomic_write_inner(
+        path,
+        bytes,
+        |_| {},
+        before_rename,
+        path_file_identity_nofollow,
+        |_| {},
+        |_| {},
+    )
+}
+
+#[cfg(test)]
+fn atomic_write_with_before_rename_and_initial_identity_hook(
+    path: &Path,
+    bytes: &[u8],
+    before_rename: impl FnOnce(&Path),
+    initially_published_identity: impl FnOnce(&Path) -> std::io::Result<OpenFileIdentity>,
+) -> anyhow::Result<()> {
+    atomic_write_inner(
+        path,
+        bytes,
+        |_| {},
+        before_rename,
+        initially_published_identity,
+        |_| {},
+        |_| {},
+    )
+}
+
+#[cfg(test)]
+fn atomic_write_with_after_publish_hook(
+    path: &Path,
+    bytes: &[u8],
+    after_publish: impl FnOnce(&Path),
+) -> anyhow::Result<()> {
+    atomic_write_inner(
+        path,
+        bytes,
+        |_| {},
+        |_| {},
+        path_file_identity_nofollow,
+        after_publish,
+        |_| {},
+    )
+}
+
+#[cfg(test)]
+fn atomic_write_with_publish_cleanup_hook(
+    path: &Path,
+    bytes: &[u8],
+    after_publish: impl FnOnce(&Path),
+    before_published_cleanup: impl Fn(&Path),
+) -> anyhow::Result<()> {
+    atomic_write_inner(
+        path,
+        bytes,
+        |_| {},
+        |_| {},
+        path_file_identity_nofollow,
+        after_publish,
+        before_published_cleanup,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OpenFileIdentity {
+    volume: u64,
+    index: u64,
+    links: u64,
+}
+
+impl OpenFileIdentity {
+    fn same_file(self, other: Self) -> bool {
+        self.volume == other.volume && self.index == other.index
+    }
+}
+
+#[cfg(unix)]
+fn open_file_identity(file: &fs::File) -> std::io::Result<OpenFileIdentity> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = file.metadata()?;
+    Ok(OpenFileIdentity {
+        volume: metadata.dev(),
+        index: metadata.ino(),
+        links: metadata.nlink(),
+    })
+}
+
+#[cfg(windows)]
+fn open_file_identity(file: &fs::File) -> std::io::Result<OpenFileIdentity> {
+    use std::mem::MaybeUninit;
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    let mut info = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::zeroed();
+    let handle = HANDLE(file.as_raw_handle());
+    unsafe { GetFileInformationByHandle(handle, info.as_mut_ptr()) }
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let info = unsafe { info.assume_init() };
+    Ok(OpenFileIdentity {
+        volume: u64::from(info.dwVolumeSerialNumber),
+        index: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+        links: u64::from(info.nNumberOfLinks),
+    })
+}
+
+#[cfg(unix)]
+fn path_file_identity_nofollow(path: &Path) -> std::io::Result<OpenFileIdentity> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "atomic temp path is a symlink",
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "atomic temp path is not a regular file",
+        ));
+    }
+    Ok(OpenFileIdentity {
+        volume: metadata.dev(),
+        index: metadata.ino(),
+        links: metadata.nlink(),
+    })
+}
+
+#[cfg(windows)]
+fn path_file_identity_nofollow(path: &Path) -> std::io::Result<OpenFileIdentity> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+
+    const FILE_READ_ATTRIBUTES: u32 = 0x0000_0080;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+    let mut options = fs::OpenOptions::new();
+    options
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !metadata.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "atomic temp path is not a regular non-reparse file",
+        ));
+    }
+    open_file_identity(&file)
+}
+
+static NEXT_ATOMIC_TEMP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn create_unique_atomic_temp(path: &Path) -> anyhow::Result<(PathBuf, fs::File)> {
+    const MAX_ATTEMPTS: usize = 128;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("atomic-write"));
+
+    for _ in 0..MAX_ATTEMPTS {
+        let id = NEXT_ATOMIC_TEMP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let mut temp_name = std::ffi::OsString::from(".");
+        temp_name.push(file_name);
+        temp_name.push(format!(".tmp-{}-{timestamp}-{id}", std::process::id()));
+        let temp_path = parent.join(temp_name);
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+
+        match options.open(&temp_path) {
+            Ok(file) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Err(error) = file.set_permissions(std::fs::Permissions::from_mode(0o600))
+                    {
+                        drop(file);
+                        let error = anyhow::Error::new(error).context(format!(
+                            "failed to secure temp file {}",
+                            temp_path.display()
+                        ));
+                        return Err(cleanup_atomic_temp_after_error(&temp_path, error));
+                    }
+                }
+                return Ok((temp_path, file));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(anyhow::Error::new(error).context(format!(
+                    "failed to create temp file {}",
+                    temp_path.display()
+                )));
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "failed to create unique temp file for {} after {MAX_ATTEMPTS} attempts",
+        path.display()
+    )
+}
+
+fn cleanup_atomic_temp_after_error(temp_path: &Path, error: anyhow::Error) -> anyhow::Error {
+    match fs::remove_file(temp_path) {
+        Ok(()) => error,
+        Err(cleanup_error) if cleanup_error.kind() == std::io::ErrorKind::NotFound => error,
+        Err(cleanup_error) => error.context(format!(
+            "failed to remove temp file {} after write failure: {cleanup_error}",
+            temp_path.display()
+        )),
+    }
+}
+
+fn scrub_open_atomic_file_after_error(
+    file: &mut fs::File,
+    path: &Path,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    if let Err(scrub_error) = file.set_len(0).and_then(|()| file.sync_all()) {
+        error.context(format!(
+            "failed to scrub open atomic file {} after validation failure: {scrub_error}",
+            path.display()
+        ))
+    } else {
+        error
+    }
+}
+
+fn cleanup_atomic_published_after_error(
+    path: &Path,
+    unsafe_identity: Option<OpenFileIdentity>,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    cleanup_atomic_published_after_error_inner(path, unsafe_identity, error, |_| {})
+}
+
+fn cleanup_atomic_published_after_error_inner(
+    path: &Path,
+    unsafe_identity: Option<OpenFileIdentity>,
+    error: anyhow::Error,
+    after_identity_verification: impl FnOnce(&Path),
+) -> anyhow::Error {
+    let quarantine_path = match quarantine_atomic_published_path(path) {
+        Ok(Some(path)) => path,
+        Ok(None) => return error,
+        Err(cleanup_error) => {
+            return error.context(format!(
+                "failed to quarantine unsafe published file {}: {cleanup_error}",
+                path.display()
+            ));
+        }
+    };
+
+    let quarantined_is_unsafe = match path_file_identity_nofollow(&quarantine_path) {
+        Ok(identity) => unsafe_identity
+            .map(|expected| identity.same_file(expected))
+            .unwrap_or(identity.links != 1),
+        Err(check_error) if check_error.kind() == std::io::ErrorKind::InvalidData => true,
+        Err(check_error) => {
+            return restore_quarantined_atomic_path(
+                path,
+                &quarantine_path,
+                error.context(format!(
+                    "failed to verify quarantined published file {}: {check_error}",
+                    quarantine_path.display()
+                )),
+            );
+        }
+    };
+
+    if !quarantined_is_unsafe {
+        return restore_quarantined_atomic_path(path, &quarantine_path, error);
+    }
+
+    after_identity_verification(&quarantine_path);
+    error.context(format!(
+        "unsafe published file was retained outside the destination at {}",
+        quarantine_path.display()
+    ))
+}
+
+fn quarantine_unverified_atomic_published_path(path: &Path, error: anyhow::Error) -> anyhow::Error {
+    match quarantine_atomic_published_path(path) {
+        Ok(Some(quarantine_path)) => error.context(format!(
+            "unverified published file was retained outside the destination at {}",
+            quarantine_path.display()
+        )),
+        Ok(None) => error,
+        Err(quarantine_error) => error.context(format!(
+            "failed to quarantine unverified published file {}: {quarantine_error}",
+            path.display()
+        )),
+    }
+}
+
+fn quarantine_atomic_published_path(path: &Path) -> std::io::Result<Option<PathBuf>> {
+    const MAX_ATTEMPTS: usize = 128;
+    for _ in 0..MAX_ATTEMPTS {
+        let quarantine_path = unique_atomic_sidecar_path(path, "quarantine");
+        match rename_noreplace(path, &quarantine_path) {
+            Ok(()) => return Ok(Some(quarantine_path)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "failed to allocate atomic quarantine path",
+    ))
+}
+
+pub(crate) fn quarantine_corrupt_state_file(path: &Path) -> anyhow::Result<Option<PathBuf>> {
+    quarantine_atomic_published_path(path)
+        .with_context(|| format!("failed to quarantine corrupt state file {}", path.display()))
+}
+
+fn restore_quarantined_atomic_path(
+    path: &Path,
+    quarantine_path: &Path,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    match rename_noreplace(quarantine_path, path) {
+        Ok(()) => error,
+        Err(restore_error) => error.context(format!(
+            "preserved concurrently replaced file at {} because restoring {} failed: {restore_error}",
+            quarantine_path.display(),
+            path.display()
+        )),
+    }
+}
+
+#[cfg(windows)]
+fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::MoveFileW;
+    use windows::core::PCWSTR;
+
+    let from_wide = from
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let to_wide = to
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    unsafe { MoveFileW(PCWSTR(from_wide.as_ptr()), PCWSTR(to_wide.as_ptr())) }
+        .map_err(|_| std::io::Error::last_os_error())
+}
+
+#[cfg(target_os = "linux")]
+fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    const AT_FDCWD: i32 = -100;
+    const RENAME_NOREPLACE: u32 = 1;
+    unsafe extern "C" {
+        fn renameat2(
+            olddirfd: i32,
+            oldpath: *const std::ffi::c_char,
+            newdirfd: i32,
+            newpath: *const std::ffi::c_char,
+            flags: u32,
+        ) -> i32;
+    }
+
+    let from = CString::new(from.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in source path"))?;
+    let to = CString::new(to.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in destination path")
+    })?;
+    let result = unsafe {
+        renameat2(
+            AT_FDCWD,
+            from.as_ptr(),
+            AT_FDCWD,
+            to.as_ptr(),
+            RENAME_NOREPLACE,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    const RENAME_EXCL: u32 = 0x0000_0004;
+    unsafe extern "C" {
+        fn renamex_np(
+            from: *const std::ffi::c_char,
+            to: *const std::ffi::c_char,
+            flags: u32,
+        ) -> i32;
+    }
+
+    let from = CString::new(from.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in source path"))?;
+    let to = CString::new(to.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in destination path")
+    })?;
+    let result = unsafe { renamex_np(from.as_ptr(), to.as_ptr(), RENAME_EXCL) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::hard_link(from, to)?;
+    fs::remove_file(from)
+}
+
+fn unique_atomic_sidecar_path(path: &Path, kind: &str) -> PathBuf {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("atomic-write"));
+    let id = NEXT_ATOMIC_TEMP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let mut sidecar_name = std::ffi::OsString::from(".");
+    sidecar_name.push(file_name);
+    sidecar_name.push(format!(".{kind}-{}-{timestamp}-{id}", std::process::id()));
+    parent.join(sidecar_name)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
-    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+    struct TestTempDir(tempfile::TempDir);
 
-    fn temp_dir() -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "codex-plus-core-settings-test-{}-{}",
-            std::process::id(),
-            NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&path).unwrap();
-        path
+    impl std::ops::Deref for TestTempDir {
+        type Target = Path;
+
+        fn deref(&self) -> &Self::Target {
+            self.0.path()
+        }
+    }
+
+    impl AsRef<Path> for TestTempDir {
+        fn as_ref(&self) -> &Path {
+            self.0.path()
+        }
+    }
+
+    fn temp_dir() -> TestTempDir {
+        TestTempDir(tempfile::tempdir().unwrap())
     }
 
     #[test]
@@ -1253,6 +1996,318 @@ mod tests {
         assert_eq!(settings.codex_app_stepwise_max_input_chars, 6000);
         assert_eq!(settings.codex_app_stepwise_max_output_tokens, 500);
         assert_eq!(settings.codex_app_stepwise_timeout_ms, 8000);
+    }
+
+    #[test]
+    fn atomic_write_removes_secret_temp_file_when_replace_fails() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        std::fs::create_dir(&path).unwrap();
+        let secret = b"sk-must-not-remain-in-temp";
+
+        atomic_write(&path, secret).expect_err("replacing a directory should fail");
+
+        assert!(path.is_dir());
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let entry = entry.unwrap();
+            if entry.path().is_file() {
+                assert!(
+                    !std::fs::read(entry.path())
+                        .unwrap()
+                        .windows(secret.len())
+                        .any(|v| v == secret)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn atomic_write_ignores_legacy_fixed_temp_path_collision() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let legacy_temp = dir.join("settings.json.tmp");
+        std::fs::create_dir(&legacy_temp).unwrap();
+
+        atomic_write(&path, b"{\"secret\":\"new\"}").unwrap();
+
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"{\"secret\":\"new\"}".as_slice()
+        );
+        assert!(legacy_temp.is_dir(), "不得复用可预测的旧临时路径");
+    }
+
+    #[test]
+    fn atomic_write_opens_temp_with_create_new() {
+        let source = include_str!("settings.rs");
+        let atomic_write_source = source
+            .split("pub(crate) fn atomic_write")
+            .nth(1)
+            .and_then(|source| source.split("fn cleanup_atomic_temp_after_error").next())
+            .expect("atomic_write source");
+
+        assert!(
+            atomic_write_source.contains(".create_new(true)"),
+            "临时文件必须以 create_new 打开，禁止覆盖或跟随已有路径"
+        );
+    }
+
+    #[test]
+    fn atomic_rename_noreplace_preserves_an_existing_destination() {
+        let dir = temp_dir();
+        let source = dir.join("source");
+        let destination = dir.join("destination");
+        std::fs::write(&source, b"source").unwrap();
+        std::fs::write(&destination, b"destination").unwrap();
+
+        assert!(rename_noreplace(&source, &destination).is_err());
+        assert_eq!(std::fs::read(source).unwrap(), b"source");
+        assert_eq!(std::fs::read(destination).unwrap(), b"destination");
+    }
+
+    #[test]
+    fn atomic_write_rejects_a_swapped_temp_path_before_publish() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, b"original").unwrap();
+
+        let result = atomic_write_with_before_publish_hook(&path, b"trusted", |temp_path| {
+            let stolen = dir.join("stolen-temp");
+            std::fs::rename(temp_path, &stolen).unwrap();
+            std::fs::write(temp_path, b"attacker").unwrap();
+        });
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+    }
+
+    #[test]
+    fn atomic_write_never_leaves_swapped_bytes_published_after_source_verification() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let stolen = dir.join("stolen-temp");
+        let attacker = b"attacker-after-source-verification";
+        std::fs::write(&path, b"original").unwrap();
+
+        let result = atomic_write_with_before_rename_hook(&path, b"trusted", |temp_path| {
+            std::fs::rename(temp_path, &stolen).unwrap();
+            std::fs::write(temp_path, attacker).unwrap();
+        });
+
+        assert!(result.is_err());
+        assert!(
+            std::fs::read(&path).map_or(true, |bytes| bytes != attacker),
+            "source-path replacement bytes must never remain at the destination"
+        );
+        assert_eq!(std::fs::read(stolen).unwrap(), b"");
+    }
+
+    #[test]
+    fn atomic_write_quarantines_an_unverifiable_initially_published_path() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let stolen = dir.join("stolen-temp");
+        let attacker = b"attacker-with-unverifiable-identity";
+        std::fs::write(&path, b"original").unwrap();
+
+        let result = atomic_write_with_before_rename_and_initial_identity_hook(
+            &path,
+            b"trusted",
+            |temp_path| {
+                std::fs::rename(temp_path, &stolen).unwrap();
+                std::fs::write(temp_path, attacker).unwrap();
+            },
+            |_| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected identity denial",
+                ))
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(
+            std::fs::read(&path).map_or(true, |bytes| bytes != attacker),
+            "unverifiable published bytes must not remain at the destination"
+        );
+        assert_eq!(std::fs::read(stolen).unwrap(), b"");
+    }
+
+    #[test]
+    fn atomic_write_rejects_temp_files_with_attacker_hardlinks() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let attacker_link = dir.join("attacker-link");
+        std::fs::write(&path, b"original").unwrap();
+
+        let result = atomic_write_with_before_publish_hook(&path, b"trusted", |temp_path| {
+            std::fs::hard_link(temp_path, &attacker_link).unwrap();
+        });
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        assert_eq!(std::fs::read(attacker_link).unwrap(), b"");
+    }
+
+    #[test]
+    fn atomic_write_scrubs_a_hardlink_added_after_publish() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let attacker_link = dir.join("attacker-link");
+        std::fs::write(&path, b"original").unwrap();
+
+        let result = atomic_write_with_after_publish_hook(&path, b"trusted", |published_path| {
+            std::fs::hard_link(published_path, &attacker_link).unwrap();
+        });
+
+        assert!(result.is_err());
+        assert!(!path.exists());
+        assert_eq!(std::fs::read(attacker_link).unwrap(), b"");
+    }
+
+    #[test]
+    fn atomic_write_does_not_delete_a_concurrent_safe_replacement() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let displaced = dir.join("displaced-first-writer");
+        std::fs::write(&path, b"original").unwrap();
+
+        let result = atomic_write_with_after_publish_hook(&path, b"trusted", |published_path| {
+            std::fs::rename(published_path, &displaced).unwrap();
+            std::fs::write(published_path, b"concurrent").unwrap();
+        });
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"concurrent");
+        assert_eq!(std::fs::read(displaced).unwrap(), b"");
+    }
+
+    #[test]
+    fn atomic_write_cleanup_does_not_delete_a_late_safe_replacement() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let attacker_link = dir.join("attacker-link");
+        let displaced_unsafe = dir.join("displaced-unsafe");
+        std::fs::write(&path, b"original").unwrap();
+
+        let result = atomic_write_with_publish_cleanup_hook(
+            &path,
+            b"trusted",
+            |published_path| {
+                std::fs::hard_link(published_path, &attacker_link).unwrap();
+            },
+            |published_path| {
+                std::fs::rename(published_path, &displaced_unsafe).unwrap();
+                std::fs::write(published_path, b"late-concurrent").unwrap();
+            },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"late-concurrent");
+        assert_eq!(std::fs::read(attacker_link).unwrap(), b"");
+        assert_eq!(std::fs::read(displaced_unsafe).unwrap(), b"");
+    }
+
+    #[test]
+    fn atomic_quarantine_never_deletes_a_replacement_after_identity_verification() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let displaced = dir.join("displaced-quarantine");
+        let replacement_path = std::cell::RefCell::new(None::<PathBuf>);
+        std::fs::write(&path, b"unsafe-published").unwrap();
+        let unsafe_identity = path_file_identity_nofollow(&path).unwrap();
+
+        let error = cleanup_atomic_published_after_error_inner(
+            &path,
+            Some(unsafe_identity),
+            anyhow::anyhow!("injected validation failure"),
+            |quarantine_path| {
+                std::fs::rename(quarantine_path, &displaced).unwrap();
+                std::fs::write(quarantine_path, b"safe-replacement").unwrap();
+                *replacement_path.borrow_mut() = Some(quarantine_path.to_path_buf());
+            },
+        );
+
+        assert!(format!("{error:#}").contains("injected validation failure"));
+        assert_eq!(std::fs::read(displaced).unwrap(), b"unsafe-published");
+        assert_eq!(
+            std::fs::read(replacement_path.into_inner().unwrap()).unwrap(),
+            b"safe-replacement"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_path_identity_ignores_content_read_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_dir();
+        let path = dir.join("mode-000");
+        let file = std::fs::File::create(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let open_identity = open_file_identity(&file).unwrap();
+        let path_identity = path_file_identity_nofollow(&path).unwrap();
+
+        assert!(path_identity.same_file(open_identity));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_path_identity_rejects_fifo_without_blocking() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        unsafe extern "C" {
+            fn mkfifo(pathname: *const std::ffi::c_char, mode: u32) -> i32;
+        }
+
+        let dir = temp_dir();
+        let path = dir.join("fifo");
+        let c_path = CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { mkfifo(c_path.as_ptr(), 0o600) }, 0);
+
+        let started = std::time::Instant::now();
+        let error = path_file_identity_nofollow(&path).unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_rejects_a_symlink_to_the_original_temp_inode() {
+        use std::os::unix::fs::symlink;
+
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, b"original").unwrap();
+
+        let result = atomic_write_with_before_publish_hook(&path, b"trusted", |temp_path| {
+            let stolen = dir.join("stolen-temp");
+            std::fs::rename(temp_path, &stolen).unwrap();
+            symlink(&stolen, temp_path).unwrap();
+        });
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_creates_secret_file_with_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_dir();
+        let path = dir.join("auth.json");
+
+        atomic_write(&path, b"{\"OPENAI_API_KEY\":\"sk-test\"}").unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     #[test]
@@ -1664,11 +2719,135 @@ experimental_bearer_token = "sk-existing""#
     }
 
     #[test]
-    fn settings_store_load_missing_file_returns_default() {
+    fn settings_store_load_missing_file_returns_chimera_first_run_without_writing() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let codex_home = dir.join("codex-home");
+        std::fs::create_dir_all(&codex_home).unwrap();
+        let store = SettingsStore::new_with_codex_home(path.clone(), codex_home);
+
+        let loaded = store.load().unwrap();
+
+        assert!(
+            !path.exists(),
+            "missing settings must not be created on load"
+        );
+        assert_eq!(loaded, chimera_first_run_settings());
+        assert_eq!(loaded.active_relay_id, "chimerahub");
+        assert!(loaded.relay_profiles_enabled);
+        assert_eq!(loaded.relay_profiles.len(), 1);
+        let profile = &loaded.relay_profiles[0];
+        assert_eq!(profile.id, "chimerahub");
+        assert_eq!(profile.name, "ChimeraHub");
+        assert_eq!(profile.relay_mode, RelayMode::PureApi);
+        assert_eq!(profile.protocol, RelayProtocol::Responses);
+        assert_eq!(profile.base_url, crate::branding::DEFAULT_RELAY_BASE_URL);
+        assert_eq!(profile.model, crate::branding::DEFAULT_RELAY_MODEL);
+        assert!(profile.api_key.is_empty());
+        assert!(profile.config_contents.is_empty());
+        assert!(profile.auth_contents.is_empty());
+    }
+
+    #[test]
+    fn settings_store_new_does_not_probe_the_real_codex_home() {
         let dir = temp_dir();
         let store = SettingsStore::new(dir.join("settings.json"));
 
-        assert_eq!(store.load().unwrap(), BackendSettings::default());
+        assert!(
+            store.codex_home.is_none(),
+            "an explicitly injected settings path must not inspect the process default CODEX_HOME"
+        );
+        assert_eq!(
+            store.missing_settings_defaults(),
+            chimera_first_run_settings()
+        );
+    }
+
+    #[test]
+    fn settings_store_missing_file_preserves_nonempty_codex_home_without_writing() {
+        for (file_name, contents) in [
+            ("config.toml", "model_provider = \"existing\"\n"),
+            ("auth.json", "{\"auth_mode\":\"chatgpt\"}\n"),
+        ] {
+            let dir = temp_dir();
+            let path = dir.join("settings.json");
+            let codex_home = dir.join("codex-home");
+            std::fs::create_dir_all(&codex_home).unwrap();
+            std::fs::write(codex_home.join(file_name), contents).unwrap();
+            let store = SettingsStore::new_with_codex_home(path.clone(), codex_home);
+
+            let loaded = store.load().unwrap();
+
+            assert_eq!(loaded, BackendSettings::default(), "{file_name}");
+            assert_eq!(loaded.active_relay_id, "default", "{file_name}");
+            assert!(
+                !loaded
+                    .relay_profiles
+                    .iter()
+                    .any(|profile| profile.id == "chimerahub"),
+                "{file_name}"
+            );
+            assert!(!path.exists(), "{file_name}");
+        }
+    }
+
+    #[test]
+    fn settings_store_empty_codex_files_still_use_chimera_first_run() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let codex_home = dir.join("codex-home");
+        std::fs::create_dir_all(&codex_home).unwrap();
+        std::fs::write(codex_home.join("config.toml"), []).unwrap();
+        std::fs::write(codex_home.join("auth.json"), []).unwrap();
+        let store = SettingsStore::new_with_codex_home(path.clone(), codex_home);
+
+        let loaded = store.load().unwrap();
+
+        assert_eq!(loaded, chimera_first_run_settings());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn settings_store_load_existing_file_preserves_active_profile_without_chimera_injection() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let store = SettingsStore::new(path);
+        let existing = BackendSettings {
+            active_relay_id: "my-relay".to_string(),
+            relay_base_url: "https://example.test/v1".to_string(),
+            relay_api_key: "sk-existing".to_string(),
+            relay_profiles: vec![RelayProfile {
+                id: "my-relay".to_string(),
+                name: "Existing".to_string(),
+                base_url: "https://example.test/v1".to_string(),
+                relay_mode: RelayMode::PureApi,
+                ..RelayProfile::default()
+            }],
+            relay_profiles_enabled: false,
+            ..BackendSettings::default()
+        };
+        store.save(&existing).unwrap();
+
+        let loaded = store.load().unwrap();
+
+        assert_eq!(loaded.active_relay_id, "my-relay");
+        assert!(!loaded.relay_profiles_enabled);
+        assert_eq!(loaded.relay_base_url, "https://example.test/v1");
+        assert_eq!(loaded.relay_profiles.len(), 1);
+        assert_eq!(loaded.relay_profiles[0].id, "my-relay");
+        assert!(!loaded.relay_profiles.iter().any(|p| p.id == "chimerahub"));
+    }
+
+    #[test]
+    fn chimera_first_run_settings_does_not_change_serde_default() {
+        let defaults = BackendSettings::default();
+        assert_eq!(defaults.active_relay_id, "default");
+        assert_eq!(defaults.relay_profiles[0].id, "default");
+        assert_eq!(defaults.relay_profiles[0].relay_mode, RelayMode::Official);
+
+        let first_run = chimera_first_run_settings();
+        assert_ne!(first_run.active_relay_id, defaults.active_relay_id);
+        assert_eq!(first_run.active_relay_id, "chimerahub");
     }
 
     #[test]

@@ -1,0 +1,460 @@
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+  Generate Rust/TS branding files from brand/product.toml.
+
+.PARAMETER Check
+  Regenerate into a temp directory and byte-compare against the working tree.
+  Does not modify tracked generated files.
+#>
+[CmdletBinding()]
+param(
+    [switch]$Check
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+function Get-RepoRoot {
+    $scriptDir = Split-Path -Parent $PSCommandPath
+    return (Resolve-Path (Join-Path $scriptDir '..')).Path
+}
+
+function Read-FlatToml {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $map = [ordered]@{}
+    foreach ($raw in Get-Content -LiteralPath $Path -Encoding UTF8) {
+        $line = $raw.Trim()
+        if ($line -eq '' -or $line.StartsWith('#')) { continue }
+        if ($line -match '^\s*\[') {
+            throw "Nested TOML tables are not supported in brand/product.toml: $line"
+        }
+        if ($line -notmatch '^\s*([A-Za-z0-9_]+)\s*=\s*(.+)\s*$') {
+            throw "Unable to parse TOML line: $raw"
+        }
+        $key = $Matches[1]
+        $value = $Matches[2].Trim()
+        if ($value -match '^"(.*)"$') {
+            $map[$key] = $Matches[1]
+        }
+        elseif ($value -match '^(true|false)$') {
+            $map[$key] = [bool]::Parse($value)
+        }
+        elseif ($value -match '^-?\d+$') {
+            $map[$key] = [int]$value
+        }
+        else {
+            throw "Unsupported TOML value for key '$key': $value"
+        }
+    }
+    return $map
+}
+
+function Require-Keys {
+    param(
+        [Parameter(Mandatory)]$Map,
+        [Parameter(Mandatory)][string[]]$Keys
+    )
+    foreach ($key in $Keys) {
+        if (-not $Map.Contains($key)) {
+            throw "brand/product.toml missing required key: $key"
+        }
+    }
+}
+
+function Assert-NoPlaceholders {
+    param([Parameter(Mandatory)]$Map)
+
+    $forbidden = @('TBD', 'example', 'chimera-org', 'BigPizzaV3/CodexPlusPlus')
+    $scanKeys = @(
+        'display_silent_name', 'display_manager_name', 'publisher', 'repository',
+        'latest_json_url', 'default_relay_base_url', 'default_relay_model',
+        'artifact_prefix', 'website_url', 'api_key_url'
+    )
+    foreach ($key in $scanKeys) {
+        $text = [string]$Map[$key]
+        foreach ($token in $forbidden) {
+            if ($text -like "*$token*") {
+                throw "Placeholder or forbidden value in ${key}: contains '$token'"
+            }
+        }
+    }
+
+    if ($Map['repository'] -ne 'Duojiyi/chimera-codex') {
+        throw "repository must be Duojiyi/chimera-codex, got: $($Map['repository'])"
+    }
+
+    $expectedLatest = "https://github.com/$($Map['repository'])/releases/latest/download/latest.json"
+    if ($Map['latest_json_url'] -ne $expectedLatest) {
+        throw "latest_json_url must be $expectedLatest"
+    }
+
+    if ([int]$Map['macos_build_number'] -lt 1) {
+        throw 'macos_build_number must be a positive integer'
+    }
+
+    if (-not ([string]$Map['default_relay_base_url']).EndsWith('/v1')) {
+        throw 'default_relay_base_url must end with /v1'
+    }
+}
+
+function Get-WorkspaceCargoVersion {
+    param([Parameter(Mandatory)][string]$Root)
+
+    $cargoToml = Join-Path $Root 'Cargo.toml'
+    $inWorkspacePackage = $false
+    foreach ($raw in Get-Content -LiteralPath $cargoToml -Encoding UTF8) {
+        $line = $raw.Trim()
+        if ($line -eq '[workspace.package]') {
+            $inWorkspacePackage = $true
+            continue
+        }
+        if ($inWorkspacePackage -and $line.StartsWith('[')) {
+            break
+        }
+        if ($inWorkspacePackage -and $line -match '^version\s*=\s*"(.*)"\s*$') {
+            return $Matches[1]
+        }
+    }
+    throw 'Unable to read [workspace.package].version from Cargo.toml'
+}
+
+function Get-JsonVersion {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $json = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not $json.version) {
+        throw "Missing version in $Path"
+    }
+    return [string]$json.version
+}
+
+function Assert-VersionSync {
+    param([Parameter(Mandatory)][string]$Root)
+
+    $cargoVersion = Get-WorkspaceCargoVersion -Root $Root
+    $packageVersion = Get-JsonVersion -Path (Join-Path $Root 'apps\codex-plus-manager\package.json')
+    $tauriVersion = Get-JsonVersion -Path (Join-Path $Root 'apps\codex-plus-manager\src-tauri\tauri.conf.json')
+
+    if ($cargoVersion -ne $packageVersion) {
+        throw "Version drift: Cargo.toml ($cargoVersion) != package.json ($packageVersion)"
+    }
+    if ($cargoVersion -ne $tauriVersion) {
+        throw "Version drift: Cargo.toml ($cargoVersion) != tauri.conf.json ($tauriVersion)"
+    }
+    if ($cargoVersion -notmatch '^\d+\.\d+\.\d+-chimera\.\d+$') {
+        throw "Cargo workspace version must match X.Y.Z-chimera.N, got: $cargoVersion"
+    }
+}
+
+function Assert-TextContains {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string[]]$Expected
+    )
+
+    $text = [System.IO.File]::ReadAllText($Path)
+    foreach ($value in $Expected) {
+        if (-not $text.Contains($value)) {
+            throw "Brand touchpoint drift in ${Path}: missing '$value'"
+        }
+    }
+}
+
+function Assert-TextNotContains {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string[]]$Forbidden
+    )
+
+    $text = [System.IO.File]::ReadAllText($Path)
+    foreach ($value in $Forbidden) {
+        if ($text.Contains($value)) {
+            throw "Legacy brand touchpoint in ${Path}: found '$value'"
+        }
+    }
+}
+
+function Get-ActiveText {
+    param([Parameter(Mandatory)][string]$Path)
+
+    return ((Get-Content -LiteralPath $Path -Encoding UTF8 | Where-Object {
+                -not $_.TrimStart().StartsWith('#')
+            }) -join "`n")
+}
+
+function Assert-ActiveTextContains {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string[]]$Expected
+    )
+
+    $text = Get-ActiveText -Path $Path
+    foreach ($value in $Expected) {
+        if (-not $text.Contains($value)) {
+            throw "Active brand touchpoint drift in ${Path}: missing '$value'"
+        }
+    }
+}
+
+function Assert-ActiveTextNotContains {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string[]]$Forbidden
+    )
+
+    $text = Get-ActiveText -Path $Path
+    foreach ($value in $Forbidden) {
+        if ($text.Contains($value)) {
+            throw "Active legacy brand touchpoint in ${Path}: found '$value'"
+        }
+    }
+}
+
+function Assert-BrandTouchpoints {
+    param(
+        [Parameter(Mandatory)]$Map,
+        [Parameter(Mandatory)][string]$Root
+    )
+
+    $windowsInstaller = Join-Path $Root 'scripts\installer\windows\CodexPlusPlus.nsi'
+    Assert-TextContains -Path $windowsInstaller -Expected @(
+        ('Name "' + [string]$Map['display_silent_name'] + '"'),
+        ([string]$Map['artifact_prefix'] + '-${VERSION}-windows-x64-setup.exe'),
+        ('"Publisher" "' + [string]$Map['publisher'] + '"')
+    )
+
+    $macosPackager = Join-Path $Root 'scripts\installer\macos\package-dmg.sh'
+    Assert-TextContains -Path $macosPackager -Expected @(
+        ([string]$Map['artifact_prefix'] + '-${VERSION}-macos-${ARCH}.dmg'),
+        ('SILENT_APP_NAME="' + [string]$Map['display_silent_name'] + '"'),
+        ('MANAGER_APP_NAME="' + [string]$Map['display_manager_name'] + '"')
+    )
+
+    $tauriPath = Join-Path $Root 'apps\codex-plus-manager\src-tauri\tauri.conf.json'
+    $tauri = Get-Content -LiteralPath $tauriPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]$tauri.productName -ne [string]$Map['display_manager_name']) {
+        throw "Brand touchpoint drift in ${tauriPath}: productName"
+    }
+
+    $releaseWorkflow = Join-Path $Root '.github\workflows\release-assets.yml'
+    Assert-ActiveTextContains -Path $releaseWorkflow -Expected @(
+        ([string]$Map['artifact_prefix'] + '-${VERSION}-windows-x64-setup.exe'),
+        ([string]$Map['artifact_prefix'] + '-${VERSION}-windows-x64.zip'),
+        ([string]$Map['artifact_prefix'] + '-${VERSION}-macos-${{ matrix.arch }}.dmg'),
+        ([string]$Map['artifact_prefix'] + '-${VERSION}-macos-${{ matrix.arch }}.zip'),
+        ([string]$Map['artifact_prefix'] + '-*-windows-x64-setup.exe'),
+        ([string]$Map['artifact_prefix'] + '-*-macos-${{ matrix.arch }}.dmg'),
+        'REPO: ${{ github.repository }}'
+    )
+    Assert-ActiveTextNotContains -Path $releaseWorkflow -Forbidden @(
+        'CodexPlusPlus-${VERSION}-',
+        'CodexPlusPlus-${version}-',
+        'CodexPlusPlus-$version-',
+        'CodexPlusPlus-*'
+    )
+
+    $prWorkflow = Join-Path $Root '.github\workflows\pr-build.yml'
+    Assert-ActiveTextContains -Path $prWorkflow -Expected @(
+        ([string]$Map['artifact_prefix'] + '-$version-windows-x64-setup.exe'),
+        ([string]$Map['artifact_prefix'] + '-$version-windows-x64.zip'),
+        ([string]$Map['artifact_prefix'] + '-${VERSION}-macos-${{ matrix.arch }}.dmg'),
+        ([string]$Map['artifact_prefix'] + '-${VERSION}-macos-${{ matrix.arch }}.zip'),
+        ([string]$Map['artifact_prefix'] + '-*-windows-x64-setup.exe'),
+        ([string]$Map['artifact_prefix'] + '-*-macos-${{ matrix.arch }}.dmg')
+    )
+    Assert-ActiveTextNotContains -Path $prWorkflow -Forbidden @(
+        'CodexPlusPlus-${VERSION}-',
+        'CodexPlusPlus-$version-',
+        'CodexPlusPlus-*'
+    )
+
+    foreach ($readmeName in @('README.md', 'README_EN.md')) {
+        $readmePath = Join-Path $Root $readmeName
+        Assert-TextContains -Path $readmePath -Expected @(
+            ([string]$Map['artifact_prefix'] + '-*-windows-x64-setup.exe'),
+            ([string]$Map['artifact_prefix'] + '-*-macos-x64.dmg'),
+            ([string]$Map['artifact_prefix'] + '-*-macos-arm64.dmg')
+        )
+        Assert-TextNotContains -Path $readmePath -Forbidden @(
+            'CodexPlusPlus-*-windows-x64-setup.exe',
+            'CodexPlusPlus-*-macos-x64.dmg',
+            'CodexPlusPlus-*-macos-arm64.dmg'
+        )
+    }
+}
+
+function Get-PreviousMacosBuildNumber {
+    param([Parameter(Mandatory)][string]$Root)
+
+    Push-Location $Root
+    try {
+        $tags = @(git tag -l 'v*-chimera.*' --sort=-v:refname 2>$null)
+        if (-not $tags -or $tags.Count -eq 0) {
+            return $null
+        }
+        foreach ($tag in $tags) {
+            $content = git show "${tag}:brand/product.toml" 2>$null
+            if (-not $content) { continue }
+            foreach ($raw in ($content -split "`n")) {
+                $line = $raw.Trim()
+                if ($line -match '^macos_build_number\s*=\s*(\d+)\s*$') {
+                    return [int]$Matches[1]
+                }
+            }
+        }
+        return $null
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Assert-MacosBuildNumberProgress {
+    param(
+        [Parameter(Mandatory)]$Map,
+        [Parameter(Mandatory)][string]$Root
+    )
+
+    $current = [int]$Map['macos_build_number']
+    if ($current -lt 1) {
+        throw 'macos_build_number must be a positive integer'
+    }
+
+    $previous = Get-PreviousMacosBuildNumber -Root $Root
+    if ($null -ne $previous -and $current -le [int]$previous) {
+        throw "macos_build_number ($current) must be greater than previous release tag value ($previous)"
+    }
+}
+
+function Escape-RustString([string]$Value) {
+    return ($Value -replace '\\', '\\' -replace '"', '\"')
+}
+
+function Escape-TsString([string]$Value) {
+    return ($Value -replace '\\', '\\' -replace "'", "\'")
+}
+
+function New-RustBranding {
+    param([Parameter(Mandatory)]$Map)
+
+    $lines = @(
+        '// @generated by scripts/generate-branding.ps1 — DO NOT EDIT BY HAND'
+        '#![allow(dead_code)]'
+        ''
+        "pub const DISPLAY_SILENT_NAME: &str = `"$(Escape-RustString $Map['display_silent_name'])`";"
+        "pub const DISPLAY_MANAGER_NAME: &str = `"$(Escape-RustString $Map['display_manager_name'])`";"
+        "pub const PUBLISHER: &str = `"$(Escape-RustString $Map['publisher'])`";"
+        "pub const REPOSITORY: &str = `"$(Escape-RustString $Map['repository'])`";"
+        'pub const LATEST_JSON_URL: &str ='
+        "    `"$(Escape-RustString $Map['latest_json_url'])`";"
+        "pub const DEFAULT_RELAY_BASE_URL: &str = `"$(Escape-RustString $Map['default_relay_base_url'])`";"
+        "pub const DEFAULT_RELAY_MODEL: &str = `"$(Escape-RustString $Map['default_relay_model'])`";"
+        "pub const ARTIFACT_PREFIX: &str = `"$(Escape-RustString $Map['artifact_prefix'])`";"
+        "pub const MACOS_BUILD_NUMBER: u32 = $([int]$Map['macos_build_number']);"
+        "pub const WEBSITE_URL: &str = `"$(Escape-RustString $Map['website_url'])`";"
+        "pub const API_KEY_URL: &str = `"$(Escape-RustString $Map['api_key_url'])`";"
+        ''
+    )
+    return ($lines -join "`n")
+}
+
+function New-TsBranding {
+    param([Parameter(Mandatory)]$Map)
+
+    $lines = @(
+        '// @generated by scripts/generate-branding.ps1 — DO NOT EDIT BY HAND'
+        ''
+        "export const DISPLAY_SILENT_NAME = '$(Escape-TsString $Map['display_silent_name'])';"
+        "export const DISPLAY_MANAGER_NAME = '$(Escape-TsString $Map['display_manager_name'])';"
+        "export const PUBLISHER = '$(Escape-TsString $Map['publisher'])';"
+        "export const REPOSITORY = '$(Escape-TsString $Map['repository'])';"
+        "export const LATEST_JSON_URL = '$(Escape-TsString $Map['latest_json_url'])';"
+        "export const DEFAULT_RELAY_BASE_URL = '$(Escape-TsString $Map['default_relay_base_url'])';"
+        "export const DEFAULT_RELAY_MODEL = '$(Escape-TsString $Map['default_relay_model'])';"
+        "export const ARTIFACT_PREFIX = '$(Escape-TsString $Map['artifact_prefix'])';"
+        "export const MACOS_BUILD_NUMBER = $([int]$Map['macos_build_number']);"
+        "export const WEBSITE_URL = '$(Escape-TsString $Map['website_url'])';"
+        "export const API_KEY_URL = '$(Escape-TsString $Map['api_key_url'])';"
+        ''
+    )
+    return ($lines -join "`n")
+}
+
+function Write-Utf8NoBom {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Content
+    )
+    $dir = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8)
+}
+
+function Compare-FilesExact {
+    param(
+        [Parameter(Mandatory)][string]$ExpectedPath,
+        [Parameter(Mandatory)][string]$ActualPath
+    )
+    if (-not (Test-Path -LiteralPath $ActualPath)) {
+        throw "Missing generated file in working tree: $ActualPath"
+    }
+    # Normalize newlines so Windows autocrlf checkouts do not false-fail -Check.
+    $expected = ([System.IO.File]::ReadAllText($ExpectedPath) -replace "`r`n", "`n" -replace "`r", "`n")
+    $actual = ([System.IO.File]::ReadAllText($ActualPath) -replace "`r`n", "`n" -replace "`r", "`n")
+    if ($expected -cne $actual) {
+        throw "Generated drift: $ActualPath"
+    }
+}
+
+$root = Get-RepoRoot
+$tomlPath = Join-Path $root 'brand\product.toml'
+if (-not (Test-Path -LiteralPath $tomlPath)) {
+    throw "Missing $tomlPath"
+}
+
+$map = Read-FlatToml -Path $tomlPath
+Require-Keys -Map $map -Keys @(
+    'display_silent_name', 'display_manager_name', 'publisher', 'repository',
+    'latest_json_url', 'default_relay_base_url', 'default_relay_model',
+    'artifact_prefix', 'macos_build_number', 'website_url', 'api_key_url'
+)
+Assert-NoPlaceholders -Map $map
+Assert-VersionSync -Root $root
+Assert-BrandTouchpoints -Map $map -Root $root
+Assert-MacosBuildNumberProgress -Map $map -Root $root
+
+$rustContent = New-RustBranding -Map $map
+$tsContent = New-TsBranding -Map $map
+
+$rustRel = 'crates\codex-plus-core\src\branding.rs'
+$tsRel = 'apps\codex-plus-manager\src\branding.generated.ts'
+$rustPath = Join-Path $root $rustRel
+$tsPath = Join-Path $root $tsRel
+
+if ($Check) {
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("chimera-branding-check-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+    try {
+        $tempRust = Join-Path $tempRoot 'branding.rs'
+        $tempTs = Join-Path $tempRoot 'branding.generated.ts'
+        Write-Utf8NoBom -Path $tempRust -Content $rustContent
+        Write-Utf8NoBom -Path $tempTs -Content $tsContent
+        Compare-FilesExact -ExpectedPath $tempRust -ActualPath $rustPath
+        Compare-FilesExact -ExpectedPath $tempTs -ActualPath $tsPath
+        Write-Host 'generate-branding -Check: PASS'
+    }
+    finally {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+else {
+    Write-Utf8NoBom -Path $rustPath -Content $rustContent
+    Write-Utf8NoBom -Path $tsPath -Content $tsContent
+    Write-Host "Wrote $rustRel"
+    Write-Host "Wrote $tsRel"
+}

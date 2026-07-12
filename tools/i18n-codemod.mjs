@@ -82,6 +82,17 @@ let needsImport = false;
  * descended into; template interpolations are handled via recursive transform.
  */
 function collect(node, edits) {
+  if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+    const fn = node.expression.text;
+    const arg = node.arguments[0];
+    const literal =
+      arg && (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) ? arg.text : null;
+    if (literal !== null && (fn === "t" || fn === "tf")) {
+      if (fn === "t") plainKeys.add(literal);
+      else templateKeys.add(literal);
+    }
+  }
+
   if (ts.isJsxText(node)) {
     const raw = node.getText();
     if (hasCjk(raw)) {
@@ -89,7 +100,7 @@ function collect(node, edits) {
       const trail = raw.match(/\s*$/)[0];
       const core = raw.slice(lead.length, raw.length - trail.length);
       if (core && hasCjk(core)) {
-        plainKeys.add(core);
+        if (WRITE) plainKeys.add(core);
         edits.push({
           start: node.getStart(),
           end: node.getEnd(),
@@ -103,7 +114,7 @@ function collect(node, edits) {
 
   if ((ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) && hasCjk(node.text)) {
     if (!isPropertyNamePosition(node) && !isAlreadyWrapped(node)) {
-      plainKeys.add(node.text);
+      if (WRITE) plainKeys.add(node.text);
       const call = `t(${JSON.stringify(node.text)})`;
       edits.push({
         start: node.getStart(),
@@ -125,7 +136,7 @@ function collect(node, edits) {
       // a ternary with Chinese branches) is translated inside the tf() arg.
       args.push(transform(span.expression));
     });
-    templateKeys.add(key);
+    if (WRITE) templateKeys.add(key);
     const call = `tf(${JSON.stringify(key)}, [${args.join(", ")}])`;
     edits.push({
       start: node.getStart(),

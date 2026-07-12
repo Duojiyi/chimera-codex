@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chimera++ Icon Concepts</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: #eef1ef; color: #101414; font-family: Arial, sans-serif; }
+  header { display: flex; justify-content: space-between; align-items: end; margin: 0 auto 24px; max-width: 1120px; }
+  h1 { margin: 0; font-size: 24px; }
+  p { margin: 6px 0 0; color: #53605a; font-size: 14px; }
+  .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; max-width: 1120px; margin: 0 auto; }
+  .card { overflow: hidden; border: 1px solid #cbd2ce; border-radius: 8px; background: #fff; }
+  .stage { display: grid; grid-template-columns: 1fr 1fr; min-height: 250px; }
+  .stage > div { display: flex; align-items: center; justify-content: center; padding: 30px; }
+  .light { background: #fff; }
+  .dark { background: #161b19; }
+  .hero { width: min(100%, 180px); aspect-ratio: 1; }
+  .meta { padding: 14px 16px; border-top: 1px solid #dce1de; }
+  .meta strong { display: block; font-size: 15px; }
+  .sizes { display: flex; align-items: end; gap: 14px; margin-top: 12px; }
+  .sizes span { display: grid; justify-items: center; gap: 5px; color: #6b756f; font-size: 11px; }
+  .sizes img { display: block; }
+  @media (max-width: 850px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Chimera++ Icon Concepts</h1>
+      <p>Original geometric marks, tested on light and dark surfaces.</p>
+    </div>
+  </header>
+  <main class="grid">
+    <article class="card">
+      <div class="stage">
+        <div class="light"><img class="hero" src="concepts/concept-1-monogram.svg" alt="Monogram concept on light background"></div>
+        <div class="dark"><img class="hero" src="concepts/concept-1-monogram.svg" alt="Monogram concept on dark background"></div>
+      </div>
+      <div class="meta">
+        <strong>1. Monogram</strong>
+        <div class="sizes">
+          <span><img src="concepts/concept-1-monogram.svg" width="64" height="64" alt="">64</span>
+          <span><img src="concepts/concept-1-monogram.svg" width="32" height="32" alt="">32</span>
+          <span><img src="concepts/concept-1-monogram.svg" width="16" height="16" alt="">16</span>
+        </div>
+      </div>
+    </article>
+    <article class="card">
+      <div class="stage">
+        <div class="light"><img class="hero" src="concepts/concept-2-modules.svg" alt="Modules concept on light background"></div>
+        <div class="dark"><img class="hero" src="concepts/concept-2-modules.svg" alt="Modules concept on dark background"></div>
+      </div>
+      <div class="meta">
+        <strong>2. Modules</strong>
+        <div class="sizes">
+          <span><img src="concepts/concept-2-modules.svg" width="64" height="64" alt="">64</span>
+          <span><img src="concepts/concept-2-modules.svg" width="32" height="32" alt="">32</span>
+          <span><img src="concepts/concept-2-modules.svg" width="16" height="16" alt="">16</span>
+        </div>
+      </div>
+    </article>
+    <article class="card">
+      <div class="stage">
+        <div class="light"><img class="hero" src="concepts/concept-3-gateway.svg" alt="Gateway concept on light background"></div>
+        <div class="dark"><img class="hero" src="concepts/concept-3-gateway.svg" alt="Gateway concept on dark background"></div>
+      </div>
+      <div class="meta">
+        <strong>3. Gateway</strong>
+        <div class="sizes">
+          <span><img src="concepts/concept-3-gateway.svg" width="64" height="64" alt="">64</span>
+          <span><img src="concepts/concept-3-gateway.svg" width="32" height="32" alt="">32</span>
+          <span><img src="concepts/concept-3-gateway.svg" width="16" height="16" alt="">16</span>
+        </div>
+      </div>
+    </article>
+  </main>
+</body>
+</html>

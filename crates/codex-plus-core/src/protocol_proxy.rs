@@ -317,7 +317,7 @@ pub fn upstream_stream_header_timeout() -> Duration {
 pub fn upstream_http_client() -> anyhow::Result<reqwest::Client> {
     reqwest::Client::builder()
         .connect_timeout(UPSTREAM_CONNECT_TIMEOUT)
-        .user_agent("CodexPlusPlus/ProtocolProxy")
+        .user_agent(crate::http_client::branded_user_agent("ProtocolProxy"))
         .build()
         .context("failed to build upstream HTTP client")
 }
@@ -481,21 +481,53 @@ pub async fn open_responses_proxy_request(
     original_user_agent: Option<&str>,
 ) -> anyhow::Result<UpstreamProxyResponse> {
     let settings = SettingsStore::default().load().unwrap_or_default();
-    open_responses_proxy_request_with_settings_and_user_agent(body, settings, original_user_agent)
-        .await
+    open_responses_proxy_request_with_settings_and_user_agent(
+        body,
+        settings,
+        original_user_agent,
+        None,
+    )
+    .await
+}
+
+#[doc(hidden)]
+pub async fn open_responses_proxy_request_with_client(
+    body: &str,
+    original_user_agent: Option<&str>,
+    client: &reqwest::Client,
+) -> anyhow::Result<UpstreamProxyResponse> {
+    let settings = SettingsStore::default().load().unwrap_or_default();
+    open_responses_proxy_request_with_settings_and_user_agent(
+        body,
+        settings,
+        original_user_agent,
+        Some(client),
+    )
+    .await
 }
 
 pub async fn open_responses_proxy_request_with_settings(
     body: &str,
     settings: crate::settings::BackendSettings,
 ) -> anyhow::Result<UpstreamProxyResponse> {
-    open_responses_proxy_request_with_settings_and_user_agent(body, settings, None).await
+    open_responses_proxy_request_with_settings_and_user_agent(body, settings, None, None).await
+}
+
+#[doc(hidden)]
+pub async fn open_responses_proxy_request_with_settings_and_client(
+    body: &str,
+    settings: crate::settings::BackendSettings,
+    client: &reqwest::Client,
+) -> anyhow::Result<UpstreamProxyResponse> {
+    open_responses_proxy_request_with_settings_and_user_agent(body, settings, None, Some(client))
+        .await
 }
 
 async fn open_responses_proxy_request_with_settings_and_user_agent(
     body: &str,
     settings: crate::settings::BackendSettings,
     original_user_agent: Option<&str>,
+    injected_client: Option<&reqwest::Client>,
 ) -> anyhow::Result<UpstreamProxyResponse> {
     let request_json: Value = serde_json::from_str(body)?;
     let is_stream = request_json
@@ -532,14 +564,15 @@ async fn open_responses_proxy_request_with_settings_and_user_agent(
         );
         let upstream = match send_upstream_request_for_responses(
             upstream_request_builder(
-                crate::http_client::proxied_client(&effective_user_agent(
-                    &relay.user_agent,
-                    original_user_agent,
-                ))?,
+                request_client(
+                    injected_client,
+                    &effective_user_agent(&relay.user_agent, original_user_agent),
+                )?,
                 &endpoint,
                 relay.api_key.trim(),
                 is_stream,
                 &upstream_body,
+                &effective_user_agent(&relay.user_agent, original_user_agent),
             ),
             is_stream,
         )
@@ -634,6 +667,21 @@ async fn open_responses_proxy_request_with_settings_and_user_agent(
 pub async fn open_models_proxy_request(
     original_user_agent: Option<&str>,
 ) -> anyhow::Result<UpstreamProxyResponse> {
+    open_models_proxy_request_with_optional_client(original_user_agent, None).await
+}
+
+#[doc(hidden)]
+pub async fn open_models_proxy_request_with_client(
+    original_user_agent: Option<&str>,
+    client: &reqwest::Client,
+) -> anyhow::Result<UpstreamProxyResponse> {
+    open_models_proxy_request_with_optional_client(original_user_agent, Some(client)).await
+}
+
+async fn open_models_proxy_request_with_optional_client(
+    original_user_agent: Option<&str>,
+    injected_client: Option<&reqwest::Client>,
+) -> anyhow::Result<UpstreamProxyResponse> {
     let settings = SettingsStore::default().load().unwrap_or_default();
     let relay = crate::relay_rotation::select_relay_for_probe(&settings)?;
     validate_upstream(&relay)?;
@@ -648,12 +696,12 @@ pub async fn open_models_proxy_request(
             "wireApi": UpstreamWireApi::Responses
         }),
     );
+    let user_agent = effective_user_agent(&relay.user_agent, original_user_agent);
     let upstream = send_upstream_request(
-        crate::http_client::proxied_client(&effective_user_agent(
-            &relay.user_agent,
-            original_user_agent,
-        ))?
-        .get(endpoint)
+        request_with_user_agent(
+            request_client(injected_client, &user_agent)?.get(endpoint),
+            &user_agent,
+        )
         .bearer_auth(relay.api_key.trim()),
     )
     .await?;
@@ -678,6 +726,28 @@ pub async fn open_chat_completions_proxy_request(
     body: &str,
     original_user_agent: Option<&str>,
 ) -> anyhow::Result<UpstreamProxyResponse> {
+    open_chat_completions_proxy_request_with_optional_client(body, original_user_agent, None).await
+}
+
+#[doc(hidden)]
+pub async fn open_chat_completions_proxy_request_with_client(
+    body: &str,
+    original_user_agent: Option<&str>,
+    client: &reqwest::Client,
+) -> anyhow::Result<UpstreamProxyResponse> {
+    open_chat_completions_proxy_request_with_optional_client(
+        body,
+        original_user_agent,
+        Some(client),
+    )
+    .await
+}
+
+async fn open_chat_completions_proxy_request_with_optional_client(
+    body: &str,
+    original_user_agent: Option<&str>,
+    injected_client: Option<&reqwest::Client>,
+) -> anyhow::Result<UpstreamProxyResponse> {
     let settings = SettingsStore::default().load().unwrap_or_default();
     let relay = settings.active_relay_profile();
     if relay.protocol != RelayProtocol::ChatCompletions {
@@ -695,11 +765,11 @@ pub async fn open_chat_completions_proxy_request(
         .get("stream")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let upstream = crate::http_client::proxied_client(&effective_user_agent(
-        &relay.user_agent,
-        original_user_agent,
-    ))?
-    .post(chat_completions_url(&relay.base_url))
+    let user_agent = effective_user_agent(&relay.user_agent, original_user_agent);
+    let upstream = request_with_user_agent(
+        request_client(injected_client, &user_agent)?.post(chat_completions_url(&relay.base_url)),
+        &user_agent,
+    )
     .bearer_auth(relay.api_key.trim())
     .header(reqwest::header::CONTENT_TYPE, "application/json")
     .json(&request_json)
@@ -754,9 +824,9 @@ fn upstream_request_builder(
     api_key: &str,
     is_stream: bool,
     upstream_body: &Value,
+    user_agent: &str,
 ) -> reqwest::RequestBuilder {
-    let mut builder = client
-        .post(endpoint)
+    let mut builder = request_with_user_agent(client.post(endpoint), user_agent)
         .bearer_auth(api_key)
         .header(reqwest::header::CONTENT_TYPE, "application/json");
     if is_stream {
@@ -765,6 +835,28 @@ fn upstream_request_builder(
             .header(reqwest::header::CACHE_CONTROL, "no-cache");
     }
     builder.json(upstream_body)
+}
+
+fn request_client(
+    injected_client: Option<&reqwest::Client>,
+    user_agent: &str,
+) -> anyhow::Result<reqwest::Client> {
+    match injected_client {
+        Some(client) => Ok(client.clone()),
+        None => crate::http_client::proxied_client(user_agent),
+    }
+}
+
+fn request_with_user_agent(
+    request: reqwest::RequestBuilder,
+    user_agent: &str,
+) -> reqwest::RequestBuilder {
+    let user_agent = user_agent.trim();
+    if user_agent.is_empty() {
+        request
+    } else {
+        request.header(reqwest::header::USER_AGENT, user_agent)
+    }
 }
 
 fn validate_upstream(relay: &crate::settings::RelayProfile) -> anyhow::Result<()> {

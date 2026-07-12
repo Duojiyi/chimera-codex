@@ -1,9 +1,11 @@
 # Chimera Codex 公开发行版设计规格
 
-> 状态：方案已收敛；公开仓库已创建并完成初始化，等待用户批准产品代码开工
+> **后续决策覆盖：** 2026-07-11 起，产品名、About/GitHub UI、图标和更新交互以 `2026-07-11-chimera-plus-product-refresh-design.md` 为准。本文件保留为上一阶段设计与审计依据。
+
+> 状态：本地产品实现、补救、全量自动化回归与双盲审计已完成；待远端 Actions、安装冒烟与首次公开 Release
 > 日期：2026-07-10
-> 初始化代码快照：`BigPizzaV3/CodexPlusPlus` @ `a0506ae646172d32b72652794411b4891c90dade`（main，含未发布提交）
-> 首发 Release 基线：正式 tag `v1.2.34` @ `c136029`；未发布的 `main` 提交不得伪装为 release-derived 版本
+> 初始化源码快照：`BigPizzaV3/CodexPlusPlus` @ `a0506ae646172d32b72652794411b4891c90dade`；`a0506ae` 是 `v1.2.34` 后 1 个未发布提交。
+> 基线说明：`c136029` 仅作为最近正式上游 Release 参照；首发 `1.2.34-chimera.1` 的源码快照是 `a0506ae` 加 Chimera 改动，不宣称源码等同 `v1.2.34` tag。
 > 发行仓库：`Duojiyi/chimera-codex`（公开）
 > 本地工作区：`D:\Desktop\codex plus plus`
 
@@ -145,8 +147,11 @@ public Release + latest.json + SHA-256
 - 更新比较使用标准 SemVer 库，不能继续截断 `-chimera.N`。
 - GitHub Release 虽使用带后缀 tag，但发布属性为正式 Release，不标记为 prerelease，以便 `/releases/latest/download/latest.json` 稳定工作。
 - `latest.json` 每个资产包含 `name`、`url`、`sha256`、`size`；客户端下载后先验证大小和 SHA-256，再启动安装器。
+- manifest 中的资产原始 URL 必须是 `https://github.com/Duojiyi/chimera-codex/releases/download/<tag>/<asset>`；只校验 manifest 给出的原始 URL，允许 HTTP 客户端继续跟随 GitHub 到其 CDN 的 302。
+- `latest.json` 与安装资产同属本项目 GitHub Release 这一信任根；manifest 内的 SHA-256 可发现传输/存储损坏和资产不一致，但不能在 Release 发布权限失陷时提供独立真实性。
 - 更新器只接受 `ChimeraCodex-<version>-<platform>-<arch>` 严格命名，并保留 macOS 原有 native-arch 排序逻辑。
 - 不回落到上游 URL；网络、JSON、哈希或资产选择失败时只报告错误，不启动任何文件。
+- manifest/资产独立签名作为后续加固事项另立项评估，一期不引入，也不作为当前发行阻断条件。
 
 ### 4.6 首次配置与升级保护
 
@@ -179,7 +184,7 @@ public Release + latest.json + SHA-256
 | 原版覆盖后出现重复入口 | Windows 清理 legacy shortcut；macOS 执行旧 App 迁移验收 |
 | macOS 未可信签名/未公证 | 仅 ad-hoc sign；Release 与 README 明示 Gatekeeper 放行步骤，不声称受信任安装 |
 | 下载损坏或资产与 manifest 不一致 | `latest.json` 携带 SHA-256 和大小，下载后强制验证 |
-| Release 账号或 manifest 同时被攻破 | SHA-256 不能提供独立真实性；启用 2FA、最小发布权限、branch protection 和不可复用 tag |
+| GitHub Release 信任根或发布权限被攻破 | `latest.json` 与资产同属该信任根，SHA-256 不提供独立真实性；启用 2FA、最小发布权限、branch protection 和不可复用 tag，独立签名另立项且不作为一期阻断 |
 | 自动默认中转覆盖旧用户 | 仅对未配置的全新 settings 引导；升级路径保持原值 |
 
 ## 6. 决策状态

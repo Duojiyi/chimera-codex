@@ -2,11 +2,12 @@
 use std::fs;
 #[cfg(target_os = "macos")]
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{
-    InstallOptions, MANAGER_BINARY, MANAGER_NAME, MacosAppBundle, SILENT_BINARY, SILENT_NAME,
-    install_root_or_default, option_or_current_exe,
+    InstallOptions, LEGACY_MANAGER_NAME, LEGACY_SILENT_NAME, LegacyMacosApps, MANAGER_BINARY,
+    MANAGER_NAME, MacosAppBundle, SILENT_BINARY, SILENT_NAME, install_root_or_default,
+    macos_short_version, option_or_current_exe,
 };
 
 pub fn build_app_bundle(options: &InstallOptions, manager: bool) -> MacosAppBundle {
@@ -41,6 +42,28 @@ pub fn build_app_bundle(options: &InstallOptions, manager: bool) -> MacosAppBund
         binary_source: Some(binary_source),
         binary_target_name: Some(binary.to_string()),
     }
+}
+
+/// 在给定根目录中查找原版 Codex++ App；仅报告，不删除。
+pub fn detect_legacy_apps(search_roots: &[PathBuf]) -> LegacyMacosApps {
+    let mut paths = Vec::new();
+    for root in search_roots {
+        for name in [LEGACY_SILENT_NAME, LEGACY_MANAGER_NAME] {
+            let candidate = root.join(format!("{name}.app"));
+            if candidate.exists() {
+                paths.push(candidate);
+            }
+        }
+    }
+    let message = if paths.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "检测到原版 {} / {}。请退出旧进程后，将新的 {}.app 与 {}.app 拖入 Applications，再手动删除旧 App。Chimera 不会自动删除旧 App。",
+            LEGACY_SILENT_NAME, LEGACY_MANAGER_NAME, SILENT_NAME, MANAGER_NAME
+        )
+    };
+    LegacyMacosApps { paths, message }
 }
 
 fn launch_script(binary: &str) -> String {
@@ -157,7 +180,8 @@ fn executable_name_from_plist(plist: &str) -> String {
 }
 
 fn info_plist(display_name: &str, executable_name: &str, identifier_suffix: &str) -> String {
-    let version = crate::version::VERSION;
+    let short_version = macos_short_version();
+    let build_number = crate::branding::MACOS_BUILD_NUMBER;
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -170,9 +194,9 @@ fn info_plist(display_name: &str, executable_name: &str, identifier_suffix: &str
   <key>CFBundleIdentifier</key>
   <string>com.bigpizzav3.codexplusplus{identifier_suffix}</string>
   <key>CFBundleVersion</key>
-  <string>{version}</string>
+  <string>{build_number}</string>
   <key>CFBundleShortVersionString</key>
-  <string>{version}</string>
+  <string>{short_version}</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleExecutable</key>

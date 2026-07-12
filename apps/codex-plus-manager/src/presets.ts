@@ -1,11 +1,18 @@
 /**
- * Codex++ 供应商预设
+ * Chimera++ 供应商预设
  * 基于 cc-switch (MIT) 的 codexProviderPresets.ts，作者 Jason Young
- * https://github.com/farion1231/cc-switch
+ * Compatible with cc-switch provider preset conventions.
  *
  * 提供一键填充供应商配置的预设模板，包括 Base URL、协议、模型列表等。
  * 去掉了 cc-switch 原始的商业合作标记（isPartner、partnerPromotionKey）。
  */
+
+import {
+  API_KEY_URL,
+  DEFAULT_RELAY_BASE_URL,
+  DEFAULT_RELAY_MODEL,
+  WEBSITE_URL,
+} from "./branding.generated";
 
 export type PresetCategory = "official" | "aggregator" | "third_party" | "cn_official";
 
@@ -59,7 +66,7 @@ export const PRESETS: ProviderPreset[] = [
     id: "zhipu-glm",
     name: "Zhipu GLM",
     websiteUrl: "https://open.bigmodel.cn",
-    apiKeyUrl: "https://www.bigmodel.cn/claude-code?ic=RRVJPB5SII",
+    apiKeyUrl: "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys",
     category: "cn_official",
     baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
     protocol: "chatCompletions",
@@ -163,24 +170,15 @@ export const PRESETS: ProviderPreset[] = [
 
   // ── 聚合/中转 ──
   {
-    id: "jojocode",
-    name: "JOJO Code",
-    websiteUrl: "https://jojocode.com/",
-    apiKeyUrl: "https://jojocode.com/",
+    id: "chimerahub",
+    name: "ChimeraHub",
+    websiteUrl: WEBSITE_URL,
+    apiKeyUrl: API_KEY_URL,
     category: "aggregator",
-    baseUrl: "https://jojocode.com/v1",
+    baseUrl: DEFAULT_RELAY_BASE_URL,
     protocol: "responses",
-    model: "gpt-5.5",
-  },
-  {
-    id: "jojocode-max",
-    name: "JOJO Code 包月",
-    websiteUrl: "https://max.jojocode.com/",
-    apiKeyUrl: "https://max.jojocode.com/",
-    category: "aggregator",
-    baseUrl: "https://max.jojocode.com/v1",
-    protocol: "responses",
-    model: "gpt-5.5",
+    model: DEFAULT_RELAY_MODEL,
+    modelList: [DEFAULT_RELAY_MODEL],
   },
   {
     id: "runapi",
@@ -196,7 +194,7 @@ export const PRESETS: ProviderPreset[] = [
     id: "siliconflow",
     name: "SiliconFlow",
     websiteUrl: "https://siliconflow.cn",
-    apiKeyUrl: "https://cloud.siliconflow.cn/i/drGuwc9k",
+    apiKeyUrl: "https://cloud.siliconflow.cn/account/ak",
     category: "aggregator",
     baseUrl: "https://api.siliconflow.cn/v1",
     protocol: "chatCompletions",

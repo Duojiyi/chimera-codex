@@ -10,6 +10,7 @@ use crate::settings::{RelayContextSelection, RelayProfile, RelayProtocol};
 
 const RELAY_PROVIDER: &str = "custom";
 const LEGACY_RELAY_PROVIDERS: &[&str] = &["CodexPlusPlus", "CodexPP"];
+pub const AGGREGATE_RELAY_BEARER_TOKEN: &str = "codex-plus-aggregate";
 const CHAT_UPSTREAM_BASE_URL_KEY: &str = "codex_plus_chat_base_url";
 const RESERVED_MODEL_PROVIDER_IDS: &[&str] = &[
     "amazon-bedrock",
@@ -226,6 +227,106 @@ pub fn relay_config_status_from_home(home: &Path) -> RelayConfigStatus {
     }
 }
 
+pub fn relay_profile_matches_live_config_from_home(home: &Path, profile: &RelayProfile) -> bool {
+    if !relay_config_status_from_home(home).configured {
+        return false;
+    }
+    let config_contents = match std::fs::read_to_string(home.join("config.toml")) {
+        Ok(contents) => contents,
+        Err(_) => return false,
+    };
+    let auth_contents = std::fs::read_to_string(home.join("auth.json")).unwrap_or_default();
+    let expected_config = match complete_relay_profile_config(profile) {
+        Ok(contents) => contents,
+        Err(_) => return false,
+    };
+
+    let identity = |contents: &str, auth: &str| {
+        let document = parse_toml_document(contents).ok()?;
+        let provider_id = document
+            .get("model_provider")
+            .and_then(Item::as_str)?
+            .trim()
+            .to_string();
+        let provider = document
+            .get("model_providers")
+            .and_then(Item::as_table)
+            .and_then(|providers| providers.get(&provider_id))
+            .and_then(Item::as_table)?;
+        if provider.get("requires_openai_auth").and_then(Item::as_bool) != Some(true) {
+            return None;
+        }
+        let base_url = provider
+            .get("base_url")
+            .and_then(Item::as_str)
+            .map(str::trim)
+            .map(str::to_string)
+            .filter(|value| !value.is_empty())?;
+        let key = provider
+            .get("experimental_bearer_token")
+            .and_then(Item::as_str)
+            .map(str::trim)
+            .map(str::to_string)
+            .filter(|value| !value.is_empty())
+            .or_else(|| codex_auth_api_key(auth));
+        Some((provider_id, base_url, key))
+    };
+
+    let expected_auth = if profile.auth_contents.trim().is_empty() {
+        serde_json::to_string(&json!({ "OPENAI_API_KEY": relay_profile_api_key(profile) }))
+            .unwrap_or_default()
+    } else {
+        profile.auth_contents.clone()
+    };
+    match (
+        identity(&expected_config, &expected_auth),
+        identity(&config_contents, &auth_contents),
+    ) {
+        (Some(expected), Some(live)) => expected == live && expected.2.is_some(),
+        _ => false,
+    }
+}
+
+pub fn aggregate_relay_matches_live_config_from_home(home: &Path) -> bool {
+    let contents = match std::fs::read_to_string(home.join("config.toml")) {
+        Ok(contents) => contents,
+        Err(_) => return false,
+    };
+    let document = match parse_toml_document(&contents) {
+        Ok(document) => document,
+        Err(_) => return false,
+    };
+    let Some(provider_id) = document.get("model_provider").and_then(Item::as_str) else {
+        return false;
+    };
+    let Some(provider) = document
+        .get("model_providers")
+        .and_then(Item::as_table)
+        .and_then(|providers| providers.get(provider_id))
+        .and_then(Item::as_table)
+    else {
+        return false;
+    };
+    let expected_base_url = crate::protocol_proxy::local_responses_proxy_base_url(
+        crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
+    );
+    let base_url_matches = provider
+        .get("base_url")
+        .and_then(Item::as_str)
+        .map(str::trim)
+        .is_some_and(|value| value == expected_base_url);
+    let token_matches = provider
+        .get("experimental_bearer_token")
+        .and_then(Item::as_str)
+        .map(str::trim)
+        .is_some_and(|value| value == AGGREGATE_RELAY_BEARER_TOKEN);
+    let requires_openai_auth = provider
+        .get("requires_openai_auth")
+        .and_then(Item::as_bool)
+        .unwrap_or(false);
+    requires_openai_auth && base_url_matches && token_matches
+}
+
 pub fn apply_relay_config_to_home(
     home: &Path,
     base_url: &str,
@@ -298,16 +399,33 @@ pub fn apply_relay_files_to_home_with_computer_use_guard(
     auth_contents: &str,
     preserve_computer_use_guard: bool,
 ) -> anyhow::Result<RelayApplyResult> {
+    apply_relay_files_to_home_with_computer_use_guard_and_catalog(
+        home,
+        config_contents,
+        auth_contents,
+        preserve_computer_use_guard,
+        None,
+    )
+}
+
+fn apply_relay_files_to_home_with_computer_use_guard_and_catalog(
+    home: &Path,
+    config_contents: &str,
+    auth_contents: &str,
+    preserve_computer_use_guard: bool,
+    catalog_update: Option<&PendingModelCatalog>,
+) -> anyhow::Result<RelayApplyResult> {
     if config_contents.trim().is_empty() {
         anyhow::bail!("config.toml 内容不能为空");
     }
     std::fs::create_dir_all(home)?;
 
-    let backup_path = write_codex_live_atomic(
+    let backup_path = write_codex_live_atomic_with_catalog(
         home,
         Some(config_contents),
         Some(auth_contents.as_bytes()),
         preserve_computer_use_guard,
+        catalog_update,
     )?;
 
     let status = relay_config_status_from_home(home);
@@ -365,8 +483,14 @@ pub fn apply_relay_profile_files_to_home_with_context(
         &profile.context_window,
         &profile.auto_compact_limit,
     )?;
-    let config_with_catalog = apply_model_catalog_to_config(home, profile, &config_with_limits)?;
-    apply_relay_files_to_home(home, &config_with_catalog, &profile.auth_contents)
+    let prepared = prepare_model_catalog_config(home, profile, &config_with_limits)?;
+    apply_relay_files_to_home_with_computer_use_guard_and_catalog(
+        home,
+        &prepared.config_text,
+        &profile.auth_contents,
+        false,
+        prepared.catalog.as_ref(),
+    )
 }
 
 pub fn apply_relay_profile_to_home_with_switch_rules(
@@ -402,22 +526,24 @@ pub fn apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard(
         &profile.context_window,
         &profile.auto_compact_limit,
     )?;
-    let config_with_catalog = apply_model_catalog_to_config(home, profile, &config_with_limits)?;
+    let prepared = prepare_model_catalog_config(home, profile, &config_with_limits)?;
 
     if profile.relay_mode == crate::settings::RelayMode::PureApi {
-        apply_relay_files_to_home_with_computer_use_guard(
+        apply_relay_files_to_home_with_computer_use_guard_and_catalog(
             home,
-            &config_with_catalog,
+            &prepared.config_text,
             &profile.auth_contents,
             preserve_computer_use_guard,
+            prepared.catalog.as_ref(),
         )
     } else {
         let auth_contents = official_profile_auth_for_switch(home, &profile.auth_contents)?;
-        apply_relay_files_to_home_with_computer_use_guard(
+        apply_relay_files_to_home_with_computer_use_guard_and_catalog(
             home,
-            &config_with_catalog,
+            &prepared.config_text,
             &auth_contents,
             preserve_computer_use_guard,
+            prepared.catalog.as_ref(),
         )
     }
 }
@@ -439,13 +565,25 @@ pub fn apply_relay_profile_config_to_home_with_context(
         &profile.context_window,
         &profile.auto_compact_limit,
     )?;
-    let config_with_catalog = apply_model_catalog_to_config(home, profile, &config_with_limits)?;
-    apply_relay_config_file_to_home(home, &config_with_catalog)
+    let prepared = prepare_model_catalog_config(home, profile, &config_with_limits)?;
+    apply_relay_config_file_to_home_with_catalog(
+        home,
+        &prepared.config_text,
+        prepared.catalog.as_ref(),
+    )
 }
 
 pub fn apply_relay_config_file_to_home(
     home: &Path,
     config_contents: &str,
+) -> anyhow::Result<RelayApplyResult> {
+    apply_relay_config_file_to_home_with_catalog(home, config_contents, None)
+}
+
+fn apply_relay_config_file_to_home_with_catalog(
+    home: &Path,
+    config_contents: &str,
+    catalog_update: Option<&PendingModelCatalog>,
 ) -> anyhow::Result<RelayApplyResult> {
     let config_contents = config_contents
         .strip_prefix('\u{feff}')
@@ -455,7 +593,13 @@ pub fn apply_relay_config_file_to_home(
     }
     std::fs::create_dir_all(home)?;
 
-    let backup_path = write_codex_live_atomic(home, Some(config_contents), None, false)?;
+    let backup_path = write_codex_live_atomic_with_catalog(
+        home,
+        Some(config_contents),
+        None,
+        false,
+        catalog_update,
+    )?;
 
     let status = relay_config_status_from_home(home);
     Ok(RelayApplyResult {
@@ -510,7 +654,8 @@ pub async fn test_relay_profile(
         anyhow::bail!("API Key 不能为空");
     }
 
-    let client = crate::http_client::proxied_client("CodexPlusPlus/RelayTest")?;
+    let client =
+        crate::http_client::proxied_client(&crate::http_client::branded_user_agent("RelayTest"))?;
     let endpoint = match profile.protocol {
         RelayProtocol::Responses => format!("{base_url}/responses"),
         RelayProtocol::ChatCompletions => format!("{base_url}/chat/completions"),
@@ -868,6 +1013,15 @@ pub fn sync_live_config_context_entries(
     Ok(normalize_optional_toml(live_doc))
 }
 
+pub fn write_relay_file_atomic(home: &Path, kind: &str, contents: &[u8]) -> anyhow::Result<()> {
+    let path = match kind {
+        "config" => home.join("config.toml"),
+        "auth" => home.join("auth.json"),
+        other => anyhow::bail!("unknown relay file kind: {other}"),
+    };
+    crate::settings::atomic_write(&path, contents)
+}
+
 fn preserve_unmanaged_live_context_entries(
     home: &Path,
     config_text: &str,
@@ -1049,6 +1203,46 @@ fn write_codex_live_atomic(
     auth_bytes: Option<&[u8]>,
     preserve_computer_use_guard: bool,
 ) -> anyhow::Result<Option<String>> {
+    write_codex_live_atomic_with_catalog(
+        home,
+        config_text,
+        auth_bytes,
+        preserve_computer_use_guard,
+        None,
+    )
+}
+
+fn write_codex_live_atomic_with_catalog(
+    home: &Path,
+    config_text: Option<&str>,
+    auth_bytes: Option<&[u8]>,
+    preserve_computer_use_guard: bool,
+    catalog_update: Option<&PendingModelCatalog>,
+) -> anyhow::Result<Option<String>> {
+    write_codex_live_atomic_with_catalog_and_ops(
+        home,
+        config_text,
+        auth_bytes,
+        preserve_computer_use_guard,
+        catalog_update,
+        crate::settings::atomic_write,
+        restore_optional_file,
+    )
+}
+
+fn write_codex_live_atomic_with_catalog_and_ops<W, R>(
+    home: &Path,
+    config_text: Option<&str>,
+    auth_bytes: Option<&[u8]>,
+    preserve_computer_use_guard: bool,
+    catalog_update: Option<&PendingModelCatalog>,
+    mut write_file: W,
+    mut restore_file: R,
+) -> anyhow::Result<Option<String>>
+where
+    W: FnMut(&Path, &[u8]) -> anyhow::Result<()>,
+    R: FnMut(&Path, Option<&[u8]>) -> anyhow::Result<()>,
+{
     std::fs::create_dir_all(home)?;
     let config_path = home.join("config.toml");
     let auth_path = home.join("auth.json");
@@ -1101,27 +1295,98 @@ fn write_codex_live_atomic(
 
     let old_config = read_optional_bytes(&config_path)?;
     let old_auth = read_optional_bytes(&auth_path)?;
+    let old_catalog = catalog_update
+        .map(|catalog| read_optional_bytes(&catalog.path))
+        .transpose()?
+        .flatten();
     let backup_path = create_live_backup(home, old_config.as_deref(), old_auth.as_deref())?;
-    let mut auth_written = false;
 
+    let mut updates = Vec::new();
+    if let Some(catalog) = catalog_update {
+        updates.push(AtomicFileUpdate {
+            label: "model catalog",
+            path: &catalog.path,
+            contents: &catalog.contents,
+            original: old_catalog.as_deref(),
+        });
+    }
     if let Some(auth_bytes) = auth_bytes {
-        if let Err(error) = crate::settings::atomic_write(&auth_path, auth_bytes) {
-            return Err(error.context("写入 auth.json 失败"));
-        }
-        auth_written = true;
+        updates.push(AtomicFileUpdate {
+            label: "auth.json",
+            path: &auth_path,
+            contents: auth_bytes,
+            original: old_auth.as_deref(),
+        });
     }
-
     if let Some(config_text) = config_text {
-        if let Err(error) = crate::settings::atomic_write(&config_path, config_text.as_bytes()) {
-            if auth_written {
-                let _ = restore_optional_file(&auth_path, old_auth.as_deref());
-            }
-            let _ = restore_optional_file(&config_path, old_config.as_deref());
-            return Err(error.context("写入 config.toml 失败"));
-        }
+        updates.push(AtomicFileUpdate {
+            label: "config.toml",
+            path: &config_path,
+            contents: config_text.as_bytes(),
+            original: old_config.as_deref(),
+        });
     }
+    commit_atomic_file_updates(&updates, &mut write_file, &mut restore_file)?;
 
     Ok(backup_path)
+}
+
+struct AtomicFileUpdate<'a> {
+    label: &'static str,
+    path: &'a Path,
+    contents: &'a [u8],
+    original: Option<&'a [u8]>,
+}
+
+fn commit_atomic_file_updates<W, R>(
+    updates: &[AtomicFileUpdate<'_>],
+    write_file: &mut W,
+    restore_file: &mut R,
+) -> anyhow::Result<()>
+where
+    W: FnMut(&Path, &[u8]) -> anyhow::Result<()>,
+    R: FnMut(&Path, Option<&[u8]>) -> anyhow::Result<()>,
+{
+    let mut completed = Vec::new();
+    for (index, update) in updates.iter().enumerate() {
+        if let Err(error) = write_file(update.path, update.contents) {
+            let error = error.context(format!("写入 {} 失败", update.label));
+            return Err(rollback_completed_atomic_updates(
+                error,
+                updates,
+                &completed,
+                restore_file,
+            ));
+        }
+        completed.push(index);
+    }
+    Ok(())
+}
+
+fn rollback_completed_atomic_updates<R>(
+    write_error: anyhow::Error,
+    updates: &[AtomicFileUpdate<'_>],
+    completed: &[usize],
+    restore_file: &mut R,
+) -> anyhow::Error
+where
+    R: FnMut(&Path, Option<&[u8]>) -> anyhow::Result<()>,
+{
+    let mut rollback_failures = Vec::new();
+    for &index in completed.iter().rev() {
+        let update = &updates[index];
+        if let Err(error) = restore_file(update.path, update.original) {
+            rollback_failures.push(format!("{}: {error:#}", update.label));
+        }
+    }
+    if rollback_failures.is_empty() {
+        write_error
+    } else {
+        write_error.context(format!(
+            "live 文件回滚未完整完成：{}",
+            rollback_failures.join("; ")
+        ))
+    }
 }
 
 fn preserve_live_marketplace_configs(home: &Path, config_text: &str) -> anyhow::Result<String> {
@@ -1434,20 +1699,35 @@ fn apply_context_limits_to_config(
     Ok(normalize_optional_toml(doc))
 }
 
-fn apply_model_catalog_to_config(
+struct PreparedModelCatalogConfig {
+    config_text: String,
+    catalog: Option<PendingModelCatalog>,
+}
+
+struct PendingModelCatalog {
+    path: PathBuf,
+    contents: Vec<u8>,
+}
+
+fn prepare_model_catalog_config(
     home: &Path,
     profile: &RelayProfile,
     config_text: &str,
-) -> anyhow::Result<String> {
-    let catalog_relative = format!(
-        "model-catalogs/{}.json",
-        sanitize_catalog_filename(&profile.id)
-    );
+) -> anyhow::Result<PreparedModelCatalogConfig> {
+    let catalog_path = generated_model_catalog_path(home, profile);
+    let catalog_relative = catalog_path
+        .strip_prefix(home)
+        .unwrap_or(&catalog_path)
+        .to_string_lossy()
+        .replace('\\', "/");
     // 用户已手写 model_catalog_json 指针时保留，不覆盖（保 preserves_user_model_catalog_json 测试）
     // 仅当现有指针指向本 profile 自己生成的 catalog 时才重新生成。
     if let Some(existing) = root_key_string(config_text, "model_catalog_json") {
         if existing != catalog_relative {
-            return Ok(config_text.to_string());
+            return Ok(PreparedModelCatalogConfig {
+                config_text: config_text.to_string(),
+                catalog: None,
+            });
         }
     }
     let (model_list, model_windows): (String, std::collections::HashMap<String, String>) =
@@ -1463,18 +1743,28 @@ fn apply_model_catalog_to_config(
         crate::model_suffix::collect_catalog_entries(&model_list, &model_windows, &profile.model);
     // 无后缀条目则 no-op，保持现有 per-profile 单值行为（保 does_not_write 测试）
     if !entries.iter().any(|entry| entry.suffix_window.is_some()) {
-        return Ok(config_text.to_string());
+        return Ok(PreparedModelCatalogConfig {
+            config_text: config_text.to_string(),
+            catalog: None,
+        });
     }
     let fallback = parse_optional_positive_u64(&profile.context_window, "上下文大小")?;
-    let catalog_path = home.join(&catalog_relative);
-    if let Some(parent) = catalog_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let catalog_json = crate::model_suffix::build_model_catalog_json(&entries, fallback);
-    std::fs::write(&catalog_path, catalog_json)?;
+    let catalog_json =
+        crate::model_suffix::build_model_catalog_json(&entries, fallback).into_bytes();
     let mut doc = parse_toml_document(config_text)?;
     doc["model_catalog_json"] = toml_edit::value(catalog_relative);
-    Ok(normalize_optional_toml(doc))
+    Ok(PreparedModelCatalogConfig {
+        config_text: normalize_optional_toml(doc),
+        catalog: Some(PendingModelCatalog {
+            path: catalog_path,
+            contents: catalog_json,
+        }),
+    })
+}
+
+pub(crate) fn generated_model_catalog_path(home: &Path, profile: &RelayProfile) -> PathBuf {
+    home.join("model-catalogs")
+        .join(format!("{}.json", sanitize_catalog_filename(&profile.id)))
 }
 
 fn sanitize_catalog_filename(id: &str) -> String {
@@ -2303,21 +2593,127 @@ fn create_live_backup(
     config: Option<&[u8]>,
     auth: Option<&[u8]>,
 ) -> anyhow::Result<Option<String>> {
+    create_live_backup_with_writer(home, config, auth, crate::settings::atomic_write)
+}
+
+fn create_live_backup_with_writer<F>(
+    home: &Path,
+    config: Option<&[u8]>,
+    auth: Option<&[u8]>,
+    mut write_file: F,
+) -> anyhow::Result<Option<String>>
+where
+    F: FnMut(&Path, &[u8]) -> anyhow::Result<()>,
+{
     if config.is_none() && auth.is_none() {
         return Ok(None);
     }
 
-    let backup_dir = home
-        .join("backups")
-        .join(format!("codex-plus-live-{}", timestamp_millis()));
-    std::fs::create_dir_all(&backup_dir)?;
-    if let Some(config) = config {
-        std::fs::write(backup_dir.join("config.toml"), config)?;
-    }
-    if let Some(auth) = auth {
-        std::fs::write(backup_dir.join("auth.json"), auth)?;
+    let backup_dir = create_unique_live_backup_dir(home)?;
+    let write_result = (|| -> anyhow::Result<()> {
+        if let Some(config) = config {
+            write_file(&backup_dir.join("config.toml"), config)
+                .context("failed to write live config backup")?;
+        }
+        if let Some(auth) = auth {
+            write_file(&backup_dir.join("auth.json"), auth)
+                .context("failed to write live auth backup")?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        let cleanup_errors = cleanup_incomplete_live_backup(&backup_dir);
+        if cleanup_errors.is_empty() {
+            return Err(error);
+        }
+        return Err(error.context(format!(
+            "failed to clean incomplete live backup: {}",
+            cleanup_errors.join("; ")
+        )));
     }
     Ok(Some(backup_dir.to_string_lossy().to_string()))
+}
+
+static NEXT_LIVE_BACKUP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn create_unique_live_backup_dir(home: &Path) -> anyhow::Result<PathBuf> {
+    const MAX_ATTEMPTS: usize = 128;
+    let backups_dir = home.join("backups");
+    std::fs::create_dir_all(&backups_dir).with_context(|| {
+        format!(
+            "failed to create backup directory {}",
+            backups_dir.display()
+        )
+    })?;
+
+    for _ in 0..MAX_ATTEMPTS {
+        let id = NEXT_LIVE_BACKUP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let backup_dir = backups_dir.join(format!(
+            "codex-plus-live-{}-{}-{id}",
+            timestamp_millis(),
+            std::process::id()
+        ));
+        match create_private_backup_dir(&backup_dir) {
+            Ok(()) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Err(error) = std::fs::set_permissions(
+                        &backup_dir,
+                        std::fs::Permissions::from_mode(0o700),
+                    ) {
+                        let _ = std::fs::remove_dir(&backup_dir);
+                        return Err(anyhow::Error::new(error).context(format!(
+                            "failed to secure backup directory {}",
+                            backup_dir.display()
+                        )));
+                    }
+                }
+                return Ok(backup_dir);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(anyhow::Error::new(error).context(format!(
+                    "failed to create unique backup directory {}",
+                    backup_dir.display()
+                )));
+            }
+        }
+    }
+
+    anyhow::bail!("failed to create unique live backup directory after {MAX_ATTEMPTS} attempts")
+}
+
+#[cfg(unix)]
+fn create_private_backup_dir(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o700);
+    builder.create(path)
+}
+
+#[cfg(not(unix))]
+fn create_private_backup_dir(path: &Path) -> std::io::Result<()> {
+    std::fs::DirBuilder::new().create(path)
+}
+
+fn cleanup_incomplete_live_backup(backup_dir: &Path) -> Vec<String> {
+    let mut errors = Vec::new();
+    for file_name in ["config.toml", "auth.json"] {
+        let path = backup_dir.join(file_name);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => errors.push(format!("{}: {error}", path.display())),
+        }
+    }
+    match std::fs::remove_dir(backup_dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => errors.push(format!("{}: {error}", backup_dir.display())),
+    }
+    errors
 }
 
 fn timestamp_millis() -> u128 {
@@ -2493,6 +2889,241 @@ mod tests {
             ..RelayProfile::default()
         };
         assert!(relay_profile_model(&empty).trim().is_empty());
+    }
+
+    #[test]
+    fn live_backups_are_unique_and_use_the_atomic_secret_writer() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = PathBuf::from(
+            create_live_backup(temp.path(), Some(b"first-config"), Some(b"first-auth"))
+                .unwrap()
+                .unwrap(),
+        );
+        let second = PathBuf::from(
+            create_live_backup(temp.path(), Some(b"second-config"), Some(b"second-auth"))
+                .unwrap()
+                .unwrap(),
+        );
+
+        assert_ne!(first, second);
+        assert_eq!(
+            std::fs::read(first.join("config.toml")).unwrap(),
+            b"first-config"
+        );
+        assert_eq!(
+            std::fs::read(first.join("auth.json")).unwrap(),
+            b"first-auth"
+        );
+        assert_eq!(
+            std::fs::read(second.join("config.toml")).unwrap(),
+            b"second-config"
+        );
+        assert_eq!(
+            std::fs::read(second.join("auth.json")).unwrap(),
+            b"second-auth"
+        );
+
+        let source = include_str!("relay_config.rs");
+        let backup_helper = source
+            .split("fn create_live_backup(")
+            .nth(1)
+            .and_then(|value| value.split("\nfn timestamp_millis").next())
+            .expect("live backup helper");
+        assert!(backup_helper.contains("create_unique_live_backup_dir"));
+        assert!(backup_helper.contains("crate::settings::atomic_write"));
+        assert!(!backup_helper.contains("std::fs::write"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            assert_eq!(
+                std::fs::metadata(&first).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            for path in [
+                first.join("config.toml"),
+                first.join("auth.json"),
+                second.join("config.toml"),
+                second.join("auth.json"),
+            ] {
+                assert_eq!(
+                    std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn live_backup_removes_partial_backup_when_second_write_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut calls = 0;
+        let mut written_paths = Vec::new();
+
+        let error = create_live_backup_with_writer(
+            temp.path(),
+            Some(b"config-written-first"),
+            Some(b"auth-fails-second"),
+            |path, contents| {
+                calls += 1;
+                if calls == 2 {
+                    anyhow::bail!("injected auth backup failure");
+                }
+                crate::settings::atomic_write(path, contents)?;
+                written_paths.push(path.to_path_buf());
+                Ok(())
+            },
+        )
+        .expect_err("the injected second write must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to write live auth backup")
+        );
+        assert_eq!(calls, 2);
+        assert_eq!(written_paths.len(), 1);
+        assert!(!written_paths[0].exists());
+        assert!(
+            std::fs::read_dir(temp.path().join("backups"))
+                .unwrap()
+                .next()
+                .is_none(),
+            "an incomplete backup directory must not remain"
+        );
+    }
+
+    #[test]
+    fn live_transaction_reports_all_completed_rollback_failures() {
+        let temp = tempfile::tempdir().unwrap();
+        let catalog_path = temp.path().join("catalog.json");
+        let auth_path = temp.path().join("auth.json");
+        let config_path = temp.path().join("config.toml");
+        let updates = [
+            AtomicFileUpdate {
+                label: "model catalog",
+                path: &catalog_path,
+                contents: b"new-catalog",
+                original: Some(b"old-catalog"),
+            },
+            AtomicFileUpdate {
+                label: "auth.json",
+                path: &auth_path,
+                contents: b"new-auth",
+                original: Some(b"old-auth"),
+            },
+            AtomicFileUpdate {
+                label: "config.toml",
+                path: &config_path,
+                contents: b"new-config",
+                original: Some(b"old-config"),
+            },
+        ];
+        let error = commit_atomic_file_updates(
+            &updates,
+            &mut |path, _| {
+                if path == config_path {
+                    anyhow::bail!("injected config write failure");
+                }
+                Ok(())
+            },
+            &mut |path, _| {
+                anyhow::bail!("injected restore failure for {}", path.display());
+            },
+        )
+        .expect_err("config write must fail");
+        let message = format!("{error:#}");
+
+        assert!(message.contains("injected config write failure"));
+        assert!(message.contains("auth.json"));
+        assert!(message.contains("model catalog"));
+        assert_eq!(message.matches("injected restore failure").count(), 2);
+    }
+
+    #[test]
+    fn model_catalog_update_rolls_back_when_live_config_write_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_path = temp.path().join("config.toml");
+        let auth_path = temp.path().join("auth.json");
+        let catalog_path = temp.path().join("model-catalogs").join("relay-a.json");
+        std::fs::create_dir_all(catalog_path.parent().unwrap()).unwrap();
+        std::fs::write(&config_path, "model = \"old-model\"\n").unwrap();
+        std::fs::write(&auth_path, "{\"OPENAI_API_KEY\":\"old-auth\"}\n").unwrap();
+        std::fs::write(&catalog_path, b"old-catalog").unwrap();
+        let profile = RelayProfile {
+            id: "relay-a".to_string(),
+            model: "new-model".to_string(),
+            relay_mode: crate::settings::RelayMode::PureApi,
+            config_contents: "model = \"new-model\"\nmodel_provider = \"custom\"\n\n[model_providers.custom]\nname = \"custom\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"https://relay.example.test/v1\"\n".to_string(),
+            auth_contents: "{\"OPENAI_API_KEY\":\"new-auth\"}\n".to_string(),
+            model_list: "new-model[1M]".to_string(),
+            ..RelayProfile::default()
+        };
+        let prepared =
+            prepare_model_catalog_config(temp.path(), &profile, &profile.config_contents).unwrap();
+        let catalog_update = prepared.catalog.as_ref().expect("catalog update");
+
+        assert_eq!(std::fs::read(&catalog_path).unwrap(), b"old-catalog");
+        let error = write_codex_live_atomic_with_catalog_and_ops(
+            temp.path(),
+            Some(&prepared.config_text),
+            Some(profile.auth_contents.as_bytes()),
+            false,
+            Some(catalog_update),
+            |path, contents| {
+                if path == config_path {
+                    anyhow::bail!("injected config write failure");
+                }
+                crate::settings::atomic_write(path, contents)
+            },
+            restore_optional_file,
+        )
+        .expect_err("config write must fail");
+
+        assert!(format!("{error:#}").contains("injected config write failure"));
+        assert_eq!(
+            std::fs::read_to_string(&config_path).unwrap(),
+            "model = \"old-model\"\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&auth_path).unwrap(),
+            "{\"OPENAI_API_KEY\":\"old-auth\"}\n"
+        );
+        assert_eq!(std::fs::read(&catalog_path).unwrap(), b"old-catalog");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn model_catalog_publish_replaces_symlink_without_following_it() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let catalog_dir = temp.path().join("model-catalogs");
+        std::fs::create_dir_all(&catalog_dir).unwrap();
+        let outside = temp.path().join("outside-catalog");
+        std::fs::write(&outside, b"outside-must-stay").unwrap();
+        let catalog_path = catalog_dir.join("relay-a.json");
+        symlink(&outside, &catalog_path).unwrap();
+        let profile = RelayProfile {
+            id: "relay-a".to_string(),
+            model: "new-model".to_string(),
+            relay_mode: crate::settings::RelayMode::PureApi,
+            config_contents: "model = \"new-model\"\nmodel_provider = \"custom\"\n\n[model_providers.custom]\nname = \"custom\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"https://relay.example.test/v1\"\n".to_string(),
+            auth_contents: "{\"OPENAI_API_KEY\":\"new-auth\"}\n".to_string(),
+            model_list: "new-model[1M]".to_string(),
+            ..RelayProfile::default()
+        };
+
+        apply_relay_profile_files_to_home_with_context(temp.path(), &profile, "").unwrap();
+
+        assert_eq!(std::fs::read(&outside).unwrap(), b"outside-must-stay");
+        assert!(
+            !std::fs::symlink_metadata(&catalog_path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 }
 

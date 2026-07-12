@@ -1,0 +1,339 @@
+name: Sync upstream
+
+# Watches BigPizzaV3/CodexPlusPlus formal Releases and opens a sync PR.
+# Does NOT create GitHub Releases; main publishes via release-assets.yml after merge.
+#
+# The PR job uses its short-lived GITHUB_TOKEN with job-scoped permissions. PRs
+# created by GITHUB_TOKEN do not emit recursive pull_request runs, so the job
+# explicitly dispatches pr-build.yml for the gated branch before enabling merge.
+
+on:
+  schedule:
+    # Twice daily (UTC)
+    - cron: "0 6 * * *"
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare and gate latest formal upstream Release
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    outputs:
+      action: ${{ steps.sync.outputs.action }}
+      exit_code: ${{ steps.sync.outputs.exit_code }}
+      upstream_tag: ${{ steps.sync.outputs.upstream_tag }}
+      sync_branch: ${{ steps.sync.outputs.sync_branch }}
+      chimera_version: ${{ steps.sync.outputs.chimera_version }}
+      gated_sha: ${{ steps.sync.outputs.gated_sha }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          components: rustfmt
+
+      - name: Ensure remotes
+        shell: pwsh
+        run: |
+          $originExpected = "https://github.com/Duojiyi/chimera-codex.git"
+          $upstreamExpected = "https://github.com/BigPizzaV3/CodexPlusPlus.git"
+          git remote set-url origin $originExpected
+          if (-not (git remote | Select-String -Pattern '^upstream$')) {
+            git remote add upstream $upstreamExpected
+          } else {
+            git remote set-url upstream $upstreamExpected
+          }
+          git remote set-url --push upstream "no_push://upstream"
+          git remote -v
+          git fetch origin --tags --force
+          git fetch upstream --tags --force
+
+      - name: Run sync script
+        id: sync
+        shell: pwsh
+        env:
+          # The gate only needs read access to the public upstream Release API.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $resultPath = Join-Path $env:RUNNER_TEMP "sync-result.json"
+          $exitFile = Join-Path $env:RUNNER_TEMP "sync-exit.txt"
+          pwsh -NoProfile -File scripts/sync-upstream.ps1 -ResultPath $resultPath
+          $code = $LASTEXITCODE
+          Set-Content -LiteralPath $exitFile -Value $code -Encoding ascii
+          Write-Host "sync-upstream.ps1 exit=$code"
+          if (Test-Path -LiteralPath $resultPath) {
+            Get-Content -LiteralPath $resultPath -Raw
+            $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "action=$($json.action)"
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "upstream_tag=$($json.upstream_tag)"
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "sync_branch=$($json.sync_branch)"
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "chimera_version=$($json.chimera_version)"
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "gated_sha=$($json.gated_sha)"
+          }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "exit_code=$code"
+          # Defer failure handling to later steps (Issue / summary).
+          if ($code -notin 0, 2, 3) {
+            exit $code
+          }
+          exit 0
+
+      - name: Package gated branch and result
+        if: always()
+        shell: pwsh
+        env:
+          ACTION: ${{ steps.sync.outputs.action }}
+          SYNC_BRANCH: ${{ steps.sync.outputs.sync_branch }}
+          GATED_SHA: ${{ steps.sync.outputs.gated_sha }}
+        run: |
+          $artifact = Join-Path $env:RUNNER_TEMP "sync-artifact"
+          New-Item -ItemType Directory -Path $artifact -Force | Out-Null
+          $resultPath = Join-Path $env:RUNNER_TEMP "sync-result.json"
+          $exitPath = Join-Path $env:RUNNER_TEMP "sync-exit.txt"
+          if (Test-Path -LiteralPath $resultPath) {
+            Copy-Item -LiteralPath $resultPath -Destination (Join-Path $artifact "sync-result.json")
+          }
+          if (Test-Path -LiteralPath $exitPath) {
+            Copy-Item -LiteralPath $exitPath -Destination (Join-Path $artifact "sync-exit.txt")
+          }
+          if ($env:ACTION -in @('prepared', 'resume')) {
+            if ($env:GATED_SHA -notmatch '^[0-9a-f]{40}$') {
+              throw "unsafe gated SHA"
+            }
+          }
+          if ($env:ACTION -eq 'prepared') {
+            $branch = $env:SYNC_BRANCH
+            if ($branch -notmatch '^sync/upstream-v\d+\.\d+\.\d+$') {
+              throw "unsafe sync branch output"
+            }
+            $actual = (git rev-parse "refs/heads/$branch").Trim()
+            if ($LASTEXITCODE -ne 0 -or $actual -ne $env:GATED_SHA) {
+              throw "prepared branch does not match gated SHA"
+            }
+            $bundle = Join-Path $artifact "sync.bundle"
+            git bundle create $bundle "refs/heads/$branch"
+            if ($LASTEXITCODE -ne 0) { throw "failed to create gated sync bundle" }
+            git bundle verify $bundle
+            if ($LASTEXITCODE -ne 0) { throw "gated sync bundle verification failed" }
+          }
+
+      - name: Upload gated sync artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: gated-upstream-sync
+          path: ${{ runner.temp }}/sync-artifact
+          if-no-files-found: error
+
+  publish-sync-pr:
+    name: Push gated branch and open PR
+    needs: prepare
+    if: github.ref == 'refs/heads/main' && needs.prepare.outputs.exit_code == '0' && (needs.prepare.outputs.action == 'prepared' || needs.prepare.outputs.action == 'resume')
+    runs-on: windows-latest
+    environment: upstream-sync
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+      issues: write
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download gated sync artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: gated-upstream-sync
+          path: ${{ runner.temp }}/sync-artifact
+
+      - name: Push sync branch and open PR
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SYNC_BRANCH: ${{ needs.prepare.outputs.sync_branch }}
+          UPSTREAM_TAG: ${{ needs.prepare.outputs.upstream_tag }}
+          CHIMERA_VERSION: ${{ needs.prepare.outputs.chimera_version }}
+          GATED_SHA: ${{ needs.prepare.outputs.gated_sha }}
+          ACTION: ${{ needs.prepare.outputs.action }}
+          TRUSTED_MAIN_SHA: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if (-not $env:GH_TOKEN) { throw "GITHUB_TOKEN is not available" }
+          $branch = $env:SYNC_BRANCH
+          $tag = $env:UPSTREAM_TAG
+          $ver = $env:CHIMERA_VERSION
+          $gatedSha = $env:GATED_SHA
+          $action = $env:ACTION
+          $trustedMainSha = $env:TRUSTED_MAIN_SHA
+          if ($branch -notmatch '^sync/upstream-v\d+\.\d+\.\d+$') { throw "unsafe sync branch" }
+          if ($tag -notmatch '^v?\d+\.\d+\.\d+$') { throw "unsafe upstream tag" }
+          if ($ver -notmatch '^\d+\.\d+\.\d+-chimera\.\d+$') { throw "unsafe Chimera version" }
+          if ($gatedSha -notmatch '^[0-9a-f]{40}$') { throw "unsafe gated SHA" }
+          if ($trustedMainSha -notmatch '^[0-9a-f]{40}$') { throw "unsafe trusted main SHA" }
+          if ($action -notin @('prepared', 'resume')) { throw "unsafe sync action" }
+
+          $resultPath = Join-Path $env:RUNNER_TEMP "sync-artifact/sync-result.json"
+          $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+          if ($result.action -ne $action -or $result.sync_branch -ne $branch -or
+              $result.upstream_tag -ne $tag -or $result.chimera_version -ne $ver -or
+              $result.gated_sha -ne $gatedSha) {
+            throw "sync result artifact does not match trusted job outputs"
+          }
+
+          if ($action -eq 'prepared') {
+            $bundle = Join-Path $env:RUNNER_TEMP "sync-artifact/sync.bundle"
+            if (-not (Test-Path -LiteralPath $bundle -PathType Leaf)) { throw "missing gated sync bundle" }
+            git bundle verify $bundle
+            if ($LASTEXITCODE -ne 0) { throw "gated sync bundle verification failed" }
+            git fetch $bundle "refs/heads/${branch}:refs/heads/${branch}"
+            if ($LASTEXITCODE -ne 0) { throw "failed to import gated sync bundle" }
+            $actual = (git rev-parse "refs/heads/$branch").Trim()
+            if ($actual -ne $gatedSha) { throw "gated sync bundle SHA mismatch" }
+          }
+          elseif ($action -eq 'resume') {
+            git fetch origin "+refs/heads/${branch}:refs/heads/${branch}"
+            if ($LASTEXITCODE -ne 0) { throw "failed to fetch remote sync branch" }
+            $actual = (git rev-parse "refs/heads/$branch").Trim()
+            if ($actual -ne $gatedSha) { throw "remote sync branch changed after gates" }
+          }
+
+          git cat-file -e "${trustedMainSha}^{commit}"
+          if ($LASTEXITCODE -ne 0) { throw "trusted main commit is unavailable" }
+          git diff --quiet $trustedMainSha "refs/heads/$branch" -- .github/workflows
+          if ($LASTEXITCODE -eq 1) { throw "candidate changes protected workflow tree" }
+          if ($LASTEXITCODE -ne 0) { throw "failed to verify protected workflow tree" }
+
+          gh auth setup-git
+          if ($LASTEXITCODE -ne 0) { throw "failed to configure Git authentication" }
+          if ($action -eq 'prepared') {
+            git push -u origin "refs/heads/${branch}:refs/heads/${branch}"
+            if ($LASTEXITCODE -ne 0) { throw "failed to publish gated sync branch" }
+          }
+
+          $existing = gh pr list --head $branch --state open --json number --jq '.[0].number'
+          $body = @"
+          ## Upstream sync
+
+          - Upstream tag: ``$tag``
+          - Chimera version: ``$ver``
+          - Sync branch: ``$branch``
+          - Script gates: branding generate/check, lock validation, no-promo scan, ``cargo fmt --check``, ``cargo test --locked``
+          - PR required checks (Task 8) must pass before auto-merge
+
+          This PR was opened by ``sync-upstream.yml``. It does **not** create a Release;
+          publishing happens from ``main`` via ``release-assets.yml`` after merge.
+          "@
+
+          if ($existing) {
+            Write-Host "Updating PR #$existing"
+            gh pr edit $existing --title "sync: $tag -> $ver" --body $body
+            $pr = $existing
+          } else {
+            $url = gh pr create --base main --head $branch --title "sync: $tag -> $ver" --body $body
+            Write-Host "Created PR: $url"
+            $pr = gh pr list --head $branch --state open --json number --jq '.[0].number'
+          }
+
+          gh workflow run pr-build.yml --ref $branch
+          if ($LASTEXITCODE -ne 0) { throw "failed to dispatch PR checks" }
+
+          # Enable auto-merge once checks are green (branch protection enforces required checks).
+          gh pr merge $pr --auto --squash
+          Write-Host "Auto-merge enabled for PR #$pr"
+
+          # Close any prior blocked Issue for this upstream version on success path.
+          $version = ($tag -replace '^v','')
+          $title = "[sync:v$version] upstream sync blocked"
+          $issues = gh issue list --state open --search "$title in:title" --json number,title
+          $issues | ConvertFrom-Json | ForEach-Object {
+            if ($_.title -eq $title) {
+              gh issue close $_.number --comment "Sync PR prepared and auto-merge enabled; closing blocked Issue."
+            }
+          }
+
+  report-blocked:
+    name: Report blocked upstream sync
+    needs: prepare
+    if: always() && (needs.prepare.outputs.exit_code == '2' || needs.prepare.outputs.exit_code == '3')
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Download sync result
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: gated-upstream-sync
+          path: ${{ runner.temp }}/sync-artifact
+
+      - name: Upsert blocked Issue (conflict or gate failure)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXIT_CODE: ${{ needs.prepare.outputs.exit_code }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $resultPath = Join-Path $env:RUNNER_TEMP "sync-artifact/sync-result.json"
+          $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+          $tag = [string]$json.upstream_tag
+          $ver = [string]$json.chimera_version
+          $msg = [string]$json.message
+          $code = $env:EXIT_CODE
+          if ($tag -notmatch '^v?\d+\.\d+\.\d+$') { throw "unsafe upstream tag" }
+          if ($ver -and $ver -notmatch '^\d+\.\d+\.\d+-chimera\.\d+$') { throw "unsafe Chimera version" }
+          $version = ($tag -replace '^v','')
+          $title = "[sync:v$version] upstream sync blocked"
+
+          $kind = if ($code -eq '2') { 'merge conflict' } else { 'gate failure' }
+          $body = @"
+          ## Upstream sync blocked ($kind)
+
+          - Upstream tag: ``$tag``
+          - Intended Chimera version: ``$ver``
+          - Exit code: ``$code`` (2=conflict, 3=gates)
+          - Detail: $msg
+
+          Manual resolution required. Do not force-push ``main``.
+          After fixing, re-run **Sync upstream** (workflow_dispatch) or wait for the next schedule.
+
+          This Issue is deduplicated by exact title; the body must never contain secrets or tokens.
+          "@
+
+          $open = gh issue list --state open --search "$title in:title" --json number,title
+          $hit = ($open | ConvertFrom-Json) | Where-Object { $_.title -eq $title } | Select-Object -First 1
+          if ($hit) {
+            gh issue edit $hit.number --body $body
+            Write-Host "Updated Issue #$($hit.number)"
+          } else {
+            gh issue create --title $title --body $body
+          }
+
+      - name: Fail job on conflict or gate failure
+        shell: pwsh
+        run: |
+          throw "sync-upstream blocked with exit $($env:EXIT) — see Issue"
+        env:
+          EXIT: ${{ needs.prepare.outputs.exit_code }}

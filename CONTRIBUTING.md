@@ -1,20 +1,20 @@
-# Contributing to CodexPlusPlus
+# Contributing to Chimera++
 
-Thank you for your interest in contributing to CodexPlusPlus!
+Thank you for your interest in contributing to Chimera++.
 
 ## Development Setup
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/BigPizzaV3/CodexPlusPlus.git
-   cd CodexPlusPlus
+   git clone https://github.com/Duojiyi/chimera-codex.git
+   cd chimera-codex
    ```
 
 2. **Install Rust toolchain**
-   Ensure you have Rust 1.70+ installed:
+   Install Rust from the official rustup instructions, inspect the installer before running it,
+   and then verify the toolchain:
    ```bash
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   rustc --version  # Should be 1.70+
+   rustc --version
    ```
 
 3. **Build the project**
@@ -30,10 +30,10 @@ Thank you for your interest in contributing to CodexPlusPlus!
 ## Project Structure
 
 ```
-CodexPlusPlus/
+chimera-codex/
 ├── crates/
 │   ├── codex-plus-data/    # Data handling and provider sync
-│   └── codex-plus-core/    # Core Codex++ logic
+│   └── codex-plus-core/    # Core Chimera++ logic
 └── README.md               # Project documentation
 ```
 

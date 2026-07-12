@@ -1,9 +1,11 @@
+use std::cell::RefCell;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
 
 const APP_STATE_DIR: &str = ".codex-session-delete";
 const SETTINGS_FILE: &str = "settings.json";
 const LATEST_STATUS_FILE: &str = "latest-status.json";
+const UPDATE_STATE_FILE: &str = "update-state.json";
+const UPDATE_CONTINUATION_FILE: &str = "update-continuation.json";
 const DIAGNOSTIC_LOG_FILE: &str = "codex-plus.log";
 const PENDING_PROVIDER_IMPORT_FILE: &str = "pending-provider-import.json";
 
@@ -26,6 +28,14 @@ pub fn default_latest_status_path() -> PathBuf {
     default_app_state_dir().join(LATEST_STATUS_FILE)
 }
 
+pub fn default_update_state_path() -> PathBuf {
+    default_app_state_dir().join(UPDATE_STATE_FILE)
+}
+
+pub fn default_update_continuation_path() -> PathBuf {
+    default_app_state_dir().join(UPDATE_CONTINUATION_FILE)
+}
+
 pub fn default_diagnostic_log_path() -> PathBuf {
     default_app_state_dir().join(DIAGNOSTIC_LOG_FILE)
 }
@@ -35,21 +45,15 @@ pub fn default_pending_provider_import_path() -> PathBuf {
 }
 
 fn settings_path_for_tests() -> Option<PathBuf> {
-    SETTINGS_PATH_FOR_TESTS
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .ok()
-        .and_then(|path| path.clone())
+    SETTINGS_PATH_FOR_TESTS.with(|path| path.borrow().clone())
 }
 
-static SETTINGS_PATH_FOR_TESTS: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+thread_local! {
+    static SETTINGS_PATH_FOR_TESTS: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
 
 pub fn set_settings_path_for_tests(path: Option<PathBuf>) -> Option<PathBuf> {
-    SETTINGS_PATH_FOR_TESTS
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .ok()
-        .and_then(|mut current| std::mem::replace(&mut *current, path))
+    SETTINGS_PATH_FOR_TESTS.with(|current| std::mem::replace(&mut *current.borrow_mut(), path))
 }
 
 #[cfg(test)]
@@ -68,6 +72,13 @@ mod tests {
         let path = default_latest_status_path();
 
         assert!(path.ends_with(".codex-session-delete/latest-status.json"));
+    }
+
+    #[test]
+    fn default_update_state_path_uses_app_state_directory() {
+        let path = default_update_state_path();
+
+        assert!(path.ends_with(".codex-session-delete/update-state.json"));
     }
 
     #[test]
