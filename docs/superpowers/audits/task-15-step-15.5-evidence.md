@@ -35,3 +35,19 @@
 This validates the conflict path. A future non-conflicting upstream formal release is
 still expected to exercise the successful sync-PR path; that does not weaken the
 verified fail-closed behavior recorded here.
+
+## Processed-tag idempotency Green
+
+- PR #6 passed the complete hosted gate and three platform builds, then was normally
+  squash-merged as `eeb62316a1421813d4c6e4c5b98bf6048f40c361`.
+- Manual run `29215957730` executed on that main SHA with
+  `UPSTREAM_TAG: v1.2.34`, an upstream formal Release already represented by
+  `v1.2.34-chimera.1`.
+- The prepare job and overall run succeeded. Both `Report blocked upstream sync` and
+  `Push gated branch and open PR` were skipped.
+- After the run there were no open PRs, no remote `sync/*` branch, no new or modified
+  Issue, and no additional Release. Existing conflict Issue #5 retained its previous
+  update time.
+
+This closes the processed-tag remote idempotency requirement without weakening the
+default scheduled behavior, which continues to select the latest formal Release.
