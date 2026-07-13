@@ -68,6 +68,10 @@ jobs:
         working-directory: apps/codex-plus-manager
         run: npm run check
 
+      - name: Frontend behavior tests
+        working-directory: apps/codex-plus-manager
+        run: npm test
+
       - name: Build frontend
         working-directory: apps/codex-plus-manager
         run: npm run vite:build
