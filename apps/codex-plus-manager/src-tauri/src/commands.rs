@@ -63,6 +63,7 @@ pub struct PathState {
 pub struct OverviewPayload {
     pub codex_app: PathState,
     pub codex_version: Option<String>,
+    pub single_entrypoint: bool,
     pub silent_shortcut: PathState,
     pub management_shortcut: PathState,
     pub latest_launch: Option<LaunchStatus>,
@@ -423,6 +424,7 @@ pub async fn load_overview() -> CommandResult<OverviewPayload> {
             OverviewPayload {
                 codex_app: path_state(None),
                 codex_version: None,
+                single_entrypoint: cfg!(windows),
                 silent_shortcut: path_state(None),
                 management_shortcut: path_state(None),
                 latest_launch: None,
@@ -460,13 +462,17 @@ fn overview_payload_from_parts(
     settings_path: &Path,
     logs_path: &Path,
 ) -> OverviewPayload {
+    let single_entrypoint = cfg!(windows);
+    let (primary_shortcut, management_shortcut) =
+        overview_entrypoint_states(&entrypoints, single_entrypoint);
     OverviewPayload {
         codex_version: codex_app_path
             .as_deref()
             .and_then(codex_plus_core::app_paths::codex_app_version),
         codex_app: path_state(codex_app_path),
-        silent_shortcut: shortcut_state(entrypoints.silent_shortcut),
-        management_shortcut: shortcut_state(entrypoints.management_shortcut),
+        single_entrypoint,
+        silent_shortcut: shortcut_state(primary_shortcut),
+        management_shortcut: shortcut_state(management_shortcut),
         latest_launch,
         current_version: codex_plus_core::version::VERSION.to_string(),
         update_status: "not_checked".to_string(),
@@ -480,6 +486,19 @@ fn overview_payload_from_parts(
         legacy_macos_migration_hint: (!legacy_macos.message.is_empty())
             .then_some(legacy_macos.message),
     }
+}
+
+fn overview_entrypoint_states(
+    entrypoints: &install::EntryPointState,
+    single_desktop_entrypoint: bool,
+) -> (install::ShortcutState, install::ShortcutState) {
+    let primary = entrypoints.silent_shortcut.clone();
+    let management = if single_desktop_entrypoint {
+        primary.clone()
+    } else {
+        entrypoints.management_shortcut.clone()
+    };
+    (primary, management)
 }
 
 #[tauri::command]
@@ -3745,13 +3764,16 @@ fn diagnostics_overview_summary(
     latest_launch: Option<&LaunchStatus>,
     legacy_macos: &codex_plus_core::install::LegacyMacosApps,
 ) -> Value {
+    let (primary_shortcut, management_shortcut) =
+        overview_entrypoint_states(entrypoints, cfg!(windows));
     json!({
         "codexAppDetected": codex_app_path.is_some(),
         "codexVersionDetected": codex_app_path
             .and_then(codex_plus_core::app_paths::codex_app_version)
             .is_some(),
-        "silentShortcutInstalled": entrypoints.silent_shortcut.installed,
-        "managementShortcutInstalled": entrypoints.management_shortcut.installed,
+        "singleEntrypoint": cfg!(windows),
+        "silentShortcutInstalled": primary_shortcut.installed,
+        "managementShortcutInstalled": management_shortcut.installed,
         "latestLaunchPresent": latest_launch.is_some(),
         "latestLaunchRunning": latest_launch.is_some_and(|launch| launch.status == "running"),
         "latestLaunchFailed": latest_launch.is_some_and(|launch| launch.status == "failed"),
@@ -4013,6 +4035,47 @@ mod tests {
             payload.silent_shortcut.status.as_str(),
             "installed" | "missing"
         ));
+        assert_eq!(payload.single_entrypoint, cfg!(windows));
+    }
+
+    #[test]
+    fn single_desktop_entrypoint_is_the_management_entrypoint() {
+        let entrypoints = install::EntryPointState {
+            silent_shortcut: install::ShortcutState {
+                installed: true,
+                path: Some(r"C:\Users\A\Desktop\Chimera++.lnk".to_string()),
+            },
+            management_shortcut: install::ShortcutState {
+                installed: false,
+                path: Some(r"C:\Users\A\Desktop\Chimera++ 管理工具.lnk".to_string()),
+            },
+        };
+
+        let (primary, management) = overview_entrypoint_states(&entrypoints, true);
+
+        assert!(primary.installed);
+        assert!(management.installed);
+        assert_eq!(management.path, primary.path);
+    }
+
+    #[test]
+    fn separate_entrypoints_keep_independent_health_states() {
+        let entrypoints = install::EntryPointState {
+            silent_shortcut: install::ShortcutState {
+                installed: true,
+                path: Some("/Applications/Chimera++.app".to_string()),
+            },
+            management_shortcut: install::ShortcutState {
+                installed: false,
+                path: Some("/Applications/Chimera++ 管理工具.app".to_string()),
+            },
+        };
+
+        let (primary, management) = overview_entrypoint_states(&entrypoints, false);
+
+        assert!(primary.installed);
+        assert!(!management.installed);
+        assert_ne!(management.path, primary.path);
     }
 
     #[test]

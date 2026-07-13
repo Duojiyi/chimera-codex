@@ -68,6 +68,7 @@ import {
   serializeModelWindowRows,
   type ModelWindowRow,
 } from "./model-windows";
+import { entrypointHealthRows } from "./entrypoint-health";
 import { getLanguage, t, tf, toggleLanguage } from "@/i18n";
 import {
   API_KEY_URL,
@@ -100,6 +101,7 @@ type LaunchStatus = {
 type OverviewResult = CommandResult<{
   codex_app: PathState;
   codex_version: string | null;
+  single_entrypoint: boolean;
   silent_shortcut: PathState;
   management_shortcut: PathState;
   latest_launch: LaunchStatus | null;
@@ -3420,8 +3422,14 @@ function MaintenanceScreen({
         <CardContent>
           <div className="status-table">
             <StatusRow title={t("Codex 应用")} status={overview?.codex_app.status} path={overview?.codex_app.path} />
-            <StatusRow title={t("静默启动入口")} status={overview?.silent_shortcut.status} path={overview?.silent_shortcut.path} />
-            <StatusRow title={t("管理控制台入口")} status={overview?.management_shortcut.status} path={overview?.management_shortcut.path} />
+            {entrypointHealthRows(overview).map((row) => (
+              <StatusRow
+                key={row.kind}
+                title={entrypointRowTitle(row.kind)}
+                status={row.status}
+                path={row.path}
+              />
+            ))}
             <StatusRow title={t("Watcher 自动接管")} status={watcher?.enabled ? "ok" : "disabled"} path={watcher?.disabled_flag} />
           </div>
           <Toolbar>
@@ -6086,19 +6094,23 @@ function healthItems(overview: OverviewResult | null) {
       ok: overview?.codex_app.status === "found",
       detail: overview?.codex_app.path || t("尚未检查 Codex 应用路径。"),
     },
-    {
-      title: t("静默启动入口"),
-      status: overview?.silent_shortcut.status ?? "not_checked",
-      ok: overview?.silent_shortcut.status === "installed",
-      detail: overview?.silent_shortcut.path || t("缺少 Chimera++ 静默启动快捷方式时可在安装维护页修复。"),
-    },
-    {
-      title: t("管理工具入口"),
-      status: overview?.management_shortcut.status ?? "not_checked",
-      ok: overview?.management_shortcut.status === "installed",
-      detail: overview?.management_shortcut.path || t("缺少管理工具快捷方式时可在安装维护页修复。"),
-    },
+    ...entrypointHealthRows(overview).map((row) => ({
+      title: entrypointRowTitle(row.kind),
+      status: row.status,
+      ok: row.status === "installed",
+      detail: row.path || entrypointMissingDetail(row.kind),
+    })),
   ];
+}
+
+function entrypointRowTitle(kind: "primary" | "management") {
+  return kind === "primary" ? t("Chimera++ 主入口") : t("管理工具入口");
+}
+
+function entrypointMissingDetail(kind: "primary" | "management") {
+  return kind === "primary"
+    ? t("缺少 Chimera++ 主快捷方式时可在安装维护页修复。")
+    : t("缺少管理工具快捷方式时可在安装维护页修复。");
 }
 
 function isChimeraKeyFirstState(settings: BackendSettings): boolean {

@@ -937,6 +937,37 @@ fn release_gate_builds_frontend_before_rust_tests() {
 }
 
 #[test]
+fn frontend_behavior_tests_are_required_by_pr_and_release_gates() {
+    let package = std::fs::read_to_string("../../apps/codex-plus-manager/package.json")
+        .expect("read manager package.json");
+    assert!(
+        package.contains(
+            r#""test": "node --test src/entrypoint-health.test.ts src/model-windows.test.ts""#
+        ),
+        "manager package must expose the deterministic frontend behavior suite"
+    );
+
+    for workflow in [
+        "../../.github/workflows/pr-build.yml",
+        "../../.github/workflows/release-assets.yml",
+    ] {
+        let source = std::fs::read_to_string(workflow).expect("read workflow");
+        let typecheck = source.find("      - name: TypeScript check").unwrap();
+        let frontend_tests = source
+            .find("      - name: Frontend behavior tests")
+            .unwrap();
+        let frontend_build = source.find("      - name: Build frontend").unwrap();
+        assert!(
+            typecheck < frontend_tests && frontend_tests < frontend_build,
+            "frontend behavior tests must run between type checking and the production build: {workflow}"
+        );
+        let test_step = &source[frontend_tests..frontend_build];
+        assert!(test_step.contains("        working-directory: apps/codex-plus-manager\n"));
+        assert!(test_step.contains("        run: npm test\n"));
+    }
+}
+
+#[test]
 fn first_release_publish_job_is_build_first_and_environment_gated() {
     let workflow = std::fs::read_to_string("../../.github/workflows/release-assets.yml")
         .expect("read release-assets workflow");
