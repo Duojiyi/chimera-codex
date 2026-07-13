@@ -432,7 +432,7 @@ metadata_backup_complete:
 
   ; 新入口和注册表全部成功后，才清理 legacy 入口和备份。
   ClearErrors
-  CreateShortcut "$DESKTOP\Chimera++.lnk" "$INSTDIR\codex-plus-plus.exe" "" "$INSTDIR\codex-plus-plus.exe"
+  CreateShortcut "$DESKTOP\Chimera++.lnk" "$INSTDIR\codex-plus-plus-manager.exe" "" "$INSTDIR\codex-plus-plus-manager.exe"
   IfErrors install_metadata_failed
   !insertmacro DeleteInstallShortcut "$DESKTOP\Chimera++ 管理工具.lnk" "DesktopManager"
   ClearErrors
