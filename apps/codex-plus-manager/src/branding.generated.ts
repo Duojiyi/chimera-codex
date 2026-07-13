@@ -8,6 +8,6 @@ export const LATEST_JSON_URL = 'https://github.com/Duojiyi/chimera-codex/release
 export const DEFAULT_RELAY_BASE_URL = 'https://api.chimerahub.org/v1';
 export const DEFAULT_RELAY_MODEL = 'gpt-5.5';
 export const ARTIFACT_PREFIX = 'ChimeraPlusPlus';
-export const MACOS_BUILD_NUMBER = 4;
+export const MACOS_BUILD_NUMBER = 5;
 export const WEBSITE_URL = 'https://api.chimerahub.org/';
 export const API_KEY_URL = 'https://api.chimerahub.org/';

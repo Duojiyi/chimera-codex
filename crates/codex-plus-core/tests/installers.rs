@@ -185,6 +185,7 @@ fn windows_installers_share_current_arp_key_and_remove_only_the_legacy_entry() {
         "ClearErrors",
         "EnumRegKey $1 HKCU \"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\" $0",
         "IfErrors install_complete",
+        "StrCmp $1 \"\" install_complete",
         "StrCmp $1 \"Codex++\" install_legacy_cleanup_found",
         "IntOp $0 $0 + 1",
         "Goto install_legacy_cleanup_probe",
@@ -1117,6 +1118,17 @@ fn windows_uninstall_keeps_recovery_entries_when_program_files_cannot_be_removed
         .expect("conservative registry key cleanup macro");
     assert!(uninstall_reg_key_macro.contains("DeleteRegKey /ifempty HKCU \"${KEY}\""));
     assert!(!uninstall_reg_key_macro.contains("DeleteRegKey HKCU \"${KEY}\""));
+    assert!(
+        !uninstall_reg_key_macro.contains("IfErrors uninstall_metadata_failed"),
+        "missing or non-empty registry keys are valid best-effort cleanup outcomes"
+    );
+    let key_delete = uninstall_reg_key_macro
+        .find("DeleteRegKey /ifempty HKCU \"${KEY}\"")
+        .expect("idempotent registry key cleanup");
+    assert!(
+        uninstall_reg_key_macro[key_delete..].contains("ClearErrors"),
+        "best-effort registry cleanup must not leak an error flag"
+    );
 
     let mut previous_protocol_value_delete = shortcut_delete;
     for value in [
