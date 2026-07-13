@@ -89,6 +89,8 @@ pub struct WindowsEntrypointPlan {
     pub manager_shortcut: String,
     pub launcher_path: String,
     pub manager_path: String,
+    pub primary_shortcut_target: String,
+    pub primary_shortcut_icon: String,
     pub icon_path: String,
     pub silent_icon_path: String,
     pub manager_icon_path: String,
@@ -126,6 +128,8 @@ pub fn build_windows_entrypoint_plan(options: &InstallOptions) -> WindowsEntrypo
         install_root: install_root.to_string_lossy().to_string(),
         launcher_path: launcher_path.to_string_lossy().to_string(),
         manager_path: manager_path.to_string_lossy().to_string(),
+        primary_shortcut_target: manager_path.to_string_lossy().to_string(),
+        primary_shortcut_icon: manager_path.to_string_lossy().to_string(),
         icon_path: icon_path.to_string_lossy().to_string(),
         silent_icon_path: launcher_path.to_string_lossy().to_string(),
         manager_icon_path: manager_path.to_string_lossy().to_string(),
@@ -156,9 +160,9 @@ pub fn install_shortcuts(options: &InstallOptions) -> anyhow::Result<()> {
             }
             create_entrypoint_shortcut(
                 PathBuf::from(&plan.silent_shortcut),
-                PathBuf::from(&plan.launcher_path),
-                &format!("Launch {SILENT_NAME} silently"),
-                PathBuf::from(&plan.silent_icon_path),
+                PathBuf::from(&plan.primary_shortcut_target),
+                &format!("Open {MANAGER_NAME}"),
+                PathBuf::from(&plan.primary_shortcut_icon),
             )?;
             register_url_protocol(&plan.manager_path)?;
             write_uninstall_registration(&plan)

@@ -79,6 +79,14 @@ fn windows_entrypoint_plan_creates_chimera_shortcuts_not_legacy() {
     assert!(!plan.silent_shortcut.contains("Codex++.lnk"));
     assert_eq!(plan.launcher_path, "C:/Tools/codex-plus-plus.exe");
     assert_eq!(plan.manager_path, "C:/Tools/codex-plus-plus-manager.exe");
+    assert_eq!(
+        plan.primary_shortcut_target,
+        "C:/Tools/codex-plus-plus-manager.exe"
+    );
+    assert_eq!(
+        plan.primary_shortcut_icon,
+        "C:/Tools/codex-plus-plus-manager.exe"
+    );
     assert_eq!(plan.silent_icon_path, "C:/Tools/codex-plus-plus.exe");
     assert_eq!(
         plan.manager_icon_path,
@@ -486,7 +494,14 @@ fn windows_nsi_uses_chimera_branding_keeps_install_dir_and_cleans_legacy() {
     assert!(nsi.contains("!insertmacro DeleteInstallShortcut \"$DESKTOP\\Codex++.lnk\""));
     assert!(nsi.contains("!insertmacro DeleteInstallShortcut \"$DESKTOP\\Codex++ 管理工具.lnk\""));
     assert!(nsi.contains("!insertmacro UninstallShortcut \"$DESKTOP\\Chimera++.lnk\""));
-    assert!(nsi.contains("CreateShortcut \"$DESKTOP\\Chimera++.lnk\""));
+    assert!(nsi.contains(
+        "CreateShortcut \"$DESKTOP\\Chimera++.lnk\" \"$INSTDIR\\codex-plus-plus-manager.exe\""
+    ));
+    assert!(
+        !nsi.contains(
+            "CreateShortcut \"$DESKTOP\\Chimera++.lnk\" \"$INSTDIR\\codex-plus-plus.exe\""
+        )
+    );
     assert!(!nsi.contains("CreateShortcut \"$DESKTOP\\Chimera++ 管理工具.lnk\""));
     assert_eq!(
         nsi.lines()
