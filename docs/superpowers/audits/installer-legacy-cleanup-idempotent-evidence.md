@@ -37,3 +37,21 @@ Per user direction, no local Cargo compilation, NSIS build, or platform build
 was run. GitHub Actions must provide the complete Rust, frontend, Windows x64,
 macOS x64, and macOS arm64 build evidence. This record does not claim Task 16
 real-machine install or upgrade acceptance.
+
+## First cloud Red and remediation
+
+PR #9 run `29230762055` passed branding generation but failed the fail-closed
+upstream-ad scanner with 16 findings: eight current legacy shortcut references
+were not matched and the corresponding eight old allowlist entries were unused.
+The NSIS probe added ten lines before those references.
+
+The remediation changes only the eight affected `lineNumber` values by `+10`;
+the paths, patterns, exact source lines, and compatibility-only reasons remain
+unchanged. The PowerShell 7 scanner then returned:
+
+```text
+verify-no-upstream-ads: OK
+```
+
+Independent remediation audits A and B both pass. The complete cloud build must
+still be rerun on the new commit.
