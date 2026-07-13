@@ -22,6 +22,27 @@ function Assert-Equal {
     }
 }
 
+function Assert-RequestedReleaseError {
+    param(
+        [Parameter(Mandatory)][string]$Tag,
+        [Parameter(Mandatory)][scriptblock]$RequestPage,
+        [Parameter(Mandatory)][string]$Context
+    )
+    $fail = {
+        param([int]$Code, [string]$Message, [string]$Action)
+        throw "SYNC_FAILURE|$Code|$Action|$Message"
+    }
+    try {
+        Get-LatestFormalUpstreamRelease -RequestedTag $Tag -RequestPage $RequestPage -Fail $fail | Out-Null
+        throw "${Context}: selection unexpectedly succeeded"
+    }
+    catch {
+        if ([string]$_.Exception.Message -notmatch '^SYNC_FAILURE\|4\|error\|') {
+            throw "${Context}: expected code 4/action error, got $($_.Exception.Message)"
+        }
+    }
+}
+
 function New-ReleaseFixture {
     param(
         [Parameter(Mandatory)][string]$Tag,
@@ -64,6 +85,24 @@ $nonEnumeratedRequest = {
 }
 $nonEnumerated = Get-LatestFormalUpstreamRelease -RequestPage $nonEnumeratedRequest
 Assert-Equal $nonEnumerated.Tag 'v3.10.0' 'Invoke-RestMethod array response expansion'
+
+$requestedRelease = Get-LatestFormalUpstreamRelease -RequestedTag 'v3.9.0' -RequestPage $nonEnumeratedRequest
+Assert-Equal $requestedRelease.Tag 'v3.9.0' 'manual validation selects the requested formal Release'
+$emptyRequestedRelease = Get-LatestFormalUpstreamRelease -RequestedTag '' -RequestPage $nonEnumeratedRequest
+Assert-Equal $emptyRequestedRelease.Tag 'v3.10.0' 'empty manual tag preserves latest Release selection'
+
+$invalidRequestedRelease = {
+    param([string]$Uri, [hashtable]$Headers)
+    @(
+        (New-ReleaseFixture -Tag 'v4.0.0' -Draft $true),
+        (New-ReleaseFixture -Tag 'v4.1.0' -Prerelease $true),
+        (New-ReleaseFixture -Tag 'not-semver')
+    )
+}
+Assert-RequestedReleaseError -Tag 'v4.0.0' -RequestPage $invalidRequestedRelease -Context 'requested draft Release'
+Assert-RequestedReleaseError -Tag 'v4.1.0' -RequestPage $invalidRequestedRelease -Context 'requested prerelease'
+Assert-RequestedReleaseError -Tag 'not-semver' -RequestPage $invalidRequestedRelease -Context 'requested non-SemVer tag'
+Assert-RequestedReleaseError -Tag 'v4.2.0' -RequestPage $invalidRequestedRelease -Context 'requested missing Release'
 
 $pageOne = @(1..100 | ForEach-Object { New-ReleaseFixture -Tag 'v9.0.0' })
 $pageTwo = @(

@@ -28,3 +28,26 @@ Do not create the tag or Release until PR #1 passes all four App-bound required 
 - Green: the release gate now runs `npm run vite:build` after TypeScript check and before Rust formatting/tests. It does not invoke the full Tauri `npm run build` packaging command.
 - The focused contract passes 1/1, installer workflow tests pass 29/29, the Vite production build succeeds, and formatting/diff checks pass.
 - Independent remediation audits A and B both pass after the step-boundary and mutation-test remediation. Hosted CI Green remains required before the Release workflow is retried.
+
+## Final Green
+
+- PR #3 merged normally after required checks as
+  `28e46af1bffaba01b391dae244a29b8b702cd3ec`.
+- Release run `29210400288` completed successfully for Windows x64, macOS x64 and
+  macOS arm64, then published through the protected `public-release` environment.
+- Tag and Release `v1.2.34-chimera.1` both resolve to the merge SHA above; the Release
+  is neither draft nor prerelease.
+- The Release contains exactly the expected eight assets: Windows setup/zip, two
+  macOS DMGs, two macOS zips, corresponding source tarball and `latest.json`.
+- Every asset was fetched through its anonymous public download URL. GitHub size and
+  digest, downloaded size and locally calculated SHA-256 matched for all eight assets.
+- `latest.json` declares version and minimum supported version
+  `v1.2.34-chimera.1`, and its six platform download entries match the published
+  asset URLs, sizes and SHA-256 values.
+- The reviewer required only for the first publish was removed after verification.
+  The environment remains restricted to protected branches, while `main` still
+  enforces the four App-bound checks, admin enforcement, no force pushes and no
+  deletions.
+
+Task 16 Windows/macOS installation and upgrade smoke testing is intentionally not
+claimed by this evidence.

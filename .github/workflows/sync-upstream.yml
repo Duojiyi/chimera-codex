@@ -13,6 +13,12 @@ on:
     - cron: "0 6 * * *"
     - cron: "0 18 * * *"
   workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "Formal upstream Release tag to validate; empty selects latest"
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: sync-upstream
@@ -73,10 +79,11 @@ jobs:
         env:
           # The gate only needs read access to the public upstream Release API.
           GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
         run: |
           $resultPath = Join-Path $env:RUNNER_TEMP "sync-result.json"
           $exitFile = Join-Path $env:RUNNER_TEMP "sync-exit.txt"
-          pwsh -NoProfile -File scripts/sync-upstream.ps1 -ResultPath $resultPath
+          pwsh -NoProfile -File scripts/sync-upstream.ps1 -ResultPath $resultPath -UpstreamTag "$env:UPSTREAM_TAG"
           $code = $LASTEXITCODE
           Set-Content -LiteralPath $exitFile -Value $code -Encoding ascii
           Write-Host "sync-upstream.ps1 exit=$code"

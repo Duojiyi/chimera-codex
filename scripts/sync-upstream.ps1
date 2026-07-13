@@ -31,7 +31,8 @@ param(
     [switch]$DryRun,
     [switch]$SkipGates,
     [string]$ResultPath = '',
-    [switch]$SkipMain
+    [switch]$SkipMain,
+    [string]$UpstreamTag = ''
 )
 
 Set-StrictMode -Version Latest
@@ -261,7 +262,18 @@ function Select-LatestFormalRelease {
 }
 
 function Get-LatestFormalUpstreamRelease {
-    param([scriptblock]$RequestPage = $null)
+    param(
+        [string]$RequestedTag = '',
+        [scriptblock]$RequestPage = $null,
+        [scriptblock]$Fail = $null
+    )
+
+    if ($null -eq $Fail) {
+        $Fail = {
+            param([int]$Code, [string]$Message, [string]$Action)
+            Set-ResultAndExit -Code $Code -Message $Message -Action $Action
+        }
+    }
 
     $headers = @{
         'Accept'               = 'application/vnd.github+json'
@@ -307,9 +319,25 @@ function Get-LatestFormalUpstreamRelease {
         $page++
     }
 
-    $selected = Select-LatestFormalRelease -Releases ($allReleases.ToArray())
+    $candidateReleases = $allReleases.ToArray()
+    if (-not [string]::IsNullOrWhiteSpace($RequestedTag)) {
+        $candidateReleases = @($candidateReleases | Where-Object {
+                [string]$_.tag_name -ceq $RequestedTag
+            })
+    }
+    $selected = if ($candidateReleases.Count -gt 0) {
+        Select-LatestFormalRelease -Releases $candidateReleases
+    }
+    else {
+        $null
+    }
     if ($null -ne $selected) { return $selected }
-    Set-ResultAndExit -Code 4 -Message 'No formal (non-draft/non-prerelease) upstream Release found' -Action 'error'
+    if (-not [string]::IsNullOrWhiteSpace($RequestedTag)) {
+        & $Fail 4 "Requested tag is not a formal upstream Release: $RequestedTag" 'error'
+        return $null
+    }
+    & $Fail 4 'No formal (non-draft/non-prerelease) upstream Release found' 'error'
+    return $null
 }
 
 function Normalize-UpstreamVersion([string]$Tag) {
@@ -721,7 +749,7 @@ if ($DryRun) {
     $before = Get-Snapshot
 }
 
-$release = Get-LatestFormalUpstreamRelease
+$release = Get-LatestFormalUpstreamRelease -RequestedTag $UpstreamTag
 $version = Normalize-UpstreamVersion -Tag $release.Tag
 $workspaceVersion = Get-WorkspaceCargoVersion -Root $root
 if (-not $workspaceVersion) {
