@@ -211,7 +211,7 @@ FunctionEnd
 !macro UninstallRegKey KEY SLOT
   ClearErrors
   DeleteRegKey /ifempty HKCU "${KEY}"
-  IfErrors uninstall_metadata_failed
+  ClearErrors
 !macroend
 
 !macro BackupUninstallShortcut PATH SLOT
@@ -521,6 +521,7 @@ install_legacy_cleanup_probe:
   ClearErrors
   EnumRegKey $1 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall" $0
   IfErrors install_complete
+  StrCmp $1 "" install_complete
   StrCmp $1 "Codex++" install_legacy_cleanup_found
   IntOp $0 $0 + 1
   Goto install_legacy_cleanup_probe
