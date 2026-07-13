@@ -1,7 +1,7 @@
 # Chimera++ 客户发行版刷新 TODO
 
 > 日期：2026-07-11
-> 状态：T30-T33 已完成；T34-T35 进行中
+> 状态：T30-T34 已完成；T35 进行中
 
 ## 决策门
 
@@ -23,7 +23,7 @@
 - [x] T31. 删除 About/GitHub UI 与注入菜单残留，迁移日志/诊断
 - [x] T32. 启动自动更新、`minimum_supported_version` 与平台安装策略
 - [x] T33. 原创 Chimera++ 图标及全平台资源替换
-- [ ] T34. GitHub 同步/Release 上线与远端全绿
+- [x] T34. GitHub 同步/Release 上线与远端全绿
 - [ ] T35. Windows/macOS 安装升级冒烟与最终聚合双盲审计
 
 ## 当前阻断事实

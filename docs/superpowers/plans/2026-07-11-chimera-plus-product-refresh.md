@@ -90,8 +90,8 @@ Files：`.github/workflows/pr-build.yml`、`.github/workflows/release-assets.yml
 - [x] Step 15.1：Red 补 workflow 合约，要求 required checks、build-first、最低版本字段、首发 `public-release` environment 和不降低 main 保护；Green 修复 workflows/脚本并完成 A/B 审计。
 - [x] Step 15.2（远端验证）：保存“远端 SHA 落后且 checks 失败”的前置证据；取得用户对远端写入与首发的确认后推送已审计提交，以当前 SHA 跑 Windows x64 与 macOS x64/arm64，关闭失败并完成 A/B 审计。
 - [x] Step 15.3（治理验证）：保存长期 token/审批策略不可满足的前置证据；使用 job-scoped `GITHUB_TOKEN`，保护可信 main workflow 树后显式 dispatch required checks，配置可满足的审批/auto-merge 策略与 check App 来源绑定，完成策略读取回验与 A/B 审计。
-- [ ] Step 15.4（首发验证）：保存 Release/latest 404 前置证据；首发经受保护环境人工确认，验证 tag、三个构建目标、匿名 latest/asset 和发布回滚；通过后才启用后续正式版本全自动发布，并完成 A/B 审计。
-- [ ] Step 15.5（同步验证）：保存远端 sync workflow 未部署的前置证据；手动触发 sync，验证已处理 tag 幂等和冲突 Issue；不发行 upstream main 未发布提交，完成 A/B 审计。
+- [x] Step 15.4（首发验证）：保存 Release/latest 404 前置证据；首发经受保护环境人工确认，验证 tag、三个构建目标、匿名 latest/asset 和发布回滚；通过后才启用后续正式版本全自动发布，并完成 A/B 审计。
+- [x] Step 15.5（同步验证）：保存远端 sync workflow 未部署的前置证据；手动触发 sync，验证已处理 tag 幂等和冲突 Issue；不发行 upstream main 未发布提交，完成 A/B 审计。
 
 **Task 15 Gate：** 完成 `task-15-aggregate` A/B 审计后才勾选 T34。
 
