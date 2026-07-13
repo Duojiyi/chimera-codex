@@ -10,6 +10,6 @@ pub const LATEST_JSON_URL: &str =
 pub const DEFAULT_RELAY_BASE_URL: &str = "https://api.chimerahub.org/v1";
 pub const DEFAULT_RELAY_MODEL: &str = "gpt-5.5";
 pub const ARTIFACT_PREFIX: &str = "ChimeraPlusPlus";
-pub const MACOS_BUILD_NUMBER: u32 = 3;
+pub const MACOS_BUILD_NUMBER: u32 = 4;
 pub const WEBSITE_URL: &str = "https://api.chimerahub.org/";
 pub const API_KEY_URL: &str = "https://api.chimerahub.org/";

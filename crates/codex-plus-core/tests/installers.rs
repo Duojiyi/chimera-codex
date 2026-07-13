@@ -170,11 +170,50 @@ fn windows_installers_share_current_arp_key_and_remove_only_the_legacy_entry() {
     let legacy_delete = install_success
         .find("DeleteRegKey HKCU \"${LEGACY_UNINSTALL_KEY}\"")
         .expect("legacy ARP cleanup");
+    let legacy_init = install_success
+        .find("StrCpy $0 0")
+        .expect("legacy ARP probe index initialization");
+    let legacy_probe = install_success
+        .find("install_legacy_cleanup_probe:")
+        .expect("legacy ARP existence probe");
+    let legacy_found = install_success
+        .find("install_legacy_cleanup_found:")
+        .expect("legacy ARP found branch");
+    let probe_block = &install_success[legacy_probe..legacy_found];
+    let probe_steps = [
+        "install_legacy_cleanup_probe:",
+        "ClearErrors",
+        "EnumRegKey $1 HKCU \"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\" $0",
+        "IfErrors install_complete",
+        "StrCmp $1 \"Codex++\" install_legacy_cleanup_found",
+        "IntOp $0 $0 + 1",
+        "Goto install_legacy_cleanup_probe",
+    ];
+    let mut probe_offset = 0;
+    for step in probe_steps {
+        let step_offset = probe_block[probe_offset..]
+            .find(step)
+            .unwrap_or_else(|| panic!("legacy ARP probe must contain ordered step: {step}"));
+        probe_offset += step_offset + step.len();
+    }
     assert!(
         current_write < legacy_delete,
         "legacy entry must be removed only after current registration succeeds"
     );
-    assert!(install_success[legacy_delete..].contains("IfErrors install_legacy_cleanup_failed"));
+    assert!(
+        current_write < legacy_init
+            && legacy_init < legacy_probe
+            && legacy_probe < legacy_found
+            && legacy_found < legacy_delete
+    );
+    let delete_block = &install_success[legacy_delete..];
+    let delete_failure = delete_block
+        .find("IfErrors install_legacy_cleanup_failed")
+        .expect("real legacy ARP deletion failures must remain fatal");
+    let install_complete = delete_block
+        .find("Goto install_complete")
+        .expect("successful legacy ARP deletion must complete installation");
+    assert!(delete_failure < install_complete);
 
     let rollback = nsi
         .split("install_metadata_rollback:")

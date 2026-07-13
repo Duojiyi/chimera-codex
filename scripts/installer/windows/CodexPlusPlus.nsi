@@ -516,6 +516,16 @@ cleanup_notice_backup_done:
 cleanup_source_code_backup_done:
   ; legacy ARP 整键可能包含未知值/类型/子键。仅在所有可回滚步骤完成后原子删除，
   ; 删除成功后不再执行任何可失败的元数据操作，避免伪造不完整的值级恢复。
+  StrCpy $0 0
+install_legacy_cleanup_probe:
+  ClearErrors
+  EnumRegKey $1 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall" $0
+  IfErrors install_complete
+  StrCmp $1 "Codex++" install_legacy_cleanup_found
+  IntOp $0 $0 + 1
+  Goto install_legacy_cleanup_probe
+
+install_legacy_cleanup_found:
   ClearErrors
   DeleteRegKey HKCU "${LEGACY_UNINSTALL_KEY}"
   IfErrors install_legacy_cleanup_failed
