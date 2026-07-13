@@ -816,6 +816,69 @@ fn upstream_sync_semver_fixture_contract_passes() {
 }
 
 #[test]
+fn upstream_sync_manual_dispatch_can_select_a_formal_release() {
+    fn has_manual_tag_contract(workflow: &str) -> bool {
+        let dispatch = workflow
+            .split("  workflow_dispatch:\n")
+            .nth(1)
+            .and_then(|rest| rest.split("\nconcurrency:").next())
+            .unwrap_or_default();
+        let run_sync = workflow
+            .split("      - name: Run sync script\n")
+            .nth(1)
+            .and_then(|rest| {
+                rest.split("      - name: Package gated branch and result\n")
+                    .next()
+            })
+            .unwrap_or_default();
+        let has_line =
+            |block: &str, expected: &str| block.lines().any(|line| line.trim() == expected);
+
+        has_line(dispatch, "upstream_tag:")
+            && has_line(dispatch, "required: false")
+            && has_line(dispatch, "default: \"\"")
+            && has_line(run_sync, "UPSTREAM_TAG: ${{ inputs.upstream_tag }}")
+            && has_line(
+                run_sync,
+                "pwsh -NoProfile -File scripts/sync-upstream.ps1 -ResultPath $resultPath -UpstreamTag \"$env:UPSTREAM_TAG\"",
+            )
+    }
+
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .and_then(std::path::Path::parent)
+        .unwrap();
+    let workflow = std::fs::read_to_string(root.join(".github/workflows/sync-upstream.yml"))
+        .expect("read sync workflow")
+        .replace("\r\n", "\n");
+    let script = std::fs::read_to_string(root.join("scripts/sync-upstream.ps1"))
+        .expect("read sync script")
+        .replace("\r\n", "\n");
+
+    assert!(has_manual_tag_contract(&workflow));
+    assert!(script.contains("[string]$UpstreamTag = ''"));
+    assert!(script.contains("Get-LatestFormalUpstreamRelease -RequestedTag $UpstreamTag"));
+
+    let commented_env = workflow.replace(
+        "          UPSTREAM_TAG: ${{ inputs.upstream_tag }}",
+        "          # UPSTREAM_TAG: ${{ inputs.upstream_tag }}",
+    );
+    assert!(!has_manual_tag_contract(&commented_env));
+    let commented_command = workflow.replace(
+        "          pwsh -NoProfile -File scripts/sync-upstream.ps1 -ResultPath $resultPath -UpstreamTag \"$env:UPSTREAM_TAG\"",
+        "          # pwsh -NoProfile -File scripts/sync-upstream.ps1 -ResultPath $resultPath -UpstreamTag \"$env:UPSTREAM_TAG\"",
+    );
+    assert!(!has_manual_tag_contract(&commented_command));
+    let wrong_step_decoy = commented_env.replace(
+        "      - name: Package gated branch and result",
+        "      - name: Package gated branch and result\n        env:\n          UPSTREAM_TAG: ${{ inputs.upstream_tag }}",
+    );
+    assert!(!has_manual_tag_contract(&wrong_step_decoy));
+}
+
+#[test]
 fn ci_pins_rust_and_nsis_toolchains() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let root = manifest_dir
