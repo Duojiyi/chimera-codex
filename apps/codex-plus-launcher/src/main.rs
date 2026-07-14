@@ -10,8 +10,6 @@ use codex_plus_core::models::{DeleteResult, ExportResult, SessionRef};
 use codex_plus_core::routes::{BridgeContext, BridgeDataService, BridgeRuntimeService};
 use codex_plus_core::user_scripts::UserScriptManager;
 use serde_json::{Value, json};
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -289,17 +287,9 @@ fn manager_start_argument(route: LaunchRoute) -> Option<&'static str> {
 }
 
 fn open_manager_for_route(route: LaunchRoute) -> anyhow::Result<()> {
-    let manager_path = manager_exe_path();
-    let mut command = std::process::Command::new(&manager_path);
     let argument = manager_start_argument(route)
         .ok_or_else(|| anyhow::anyhow!("Codex launch route cannot open the manager"))?;
-    command.arg(argument);
-    #[cfg(windows)]
-    {
-        command.creation_flags(codex_plus_core::windows_create_no_window());
-    }
-    command
-        .spawn()
+    codex_plus_core::install::spawn_companion(codex_plus_core::install::MANAGER_BINARY, [argument])
         .map(|_| ())
         .map_err(|error| anyhow::anyhow!("启动管理工具失败：{error}"))
 }
@@ -448,6 +438,12 @@ impl LaunchHooks for LauncherHooks {
 
     async fn inject(&self, debug_port: u16, helper_port: u16) -> anyhow::Result<()> {
         self.core.inject(debug_port, helper_port).await
+    }
+
+    async fn start_bridge_watchdog(&self, debug_port: u16, helper_port: u16) -> anyhow::Result<()> {
+        self.core
+            .start_bridge_watchdog(debug_port, helper_port)
+            .await
     }
 
     async fn start_computer_use_guard_watchdog(
@@ -660,23 +656,14 @@ impl BridgeRuntimeService for LauncherRuntimeService {
     }
 
     async fn open_manager(&self) -> anyhow::Result<Value> {
-        let manager_path = manager_exe_path();
-        #[cfg(windows)]
-        {
-            std::process::Command::new(&manager_path)
-                .creation_flags(codex_plus_core::windows_create_no_window())
-                .spawn()
-                .map_err(|error| anyhow::anyhow!("启动管理工具失败：{error}"))?;
-        }
-        #[cfg(not(windows))]
-        {
-            std::process::Command::new(&manager_path)
-                .spawn()
-                .map_err(|error| anyhow::anyhow!("启动管理工具失败：{error}"))?;
-        }
+        let target = codex_plus_core::install::spawn_companion(
+            codex_plus_core::install::MANAGER_BINARY,
+            std::iter::empty::<&str>(),
+        )
+        .map_err(|error| anyhow::anyhow!("启动管理工具失败：{error}"))?;
         Ok(json!({
             "status": "ok",
-            "path": manager_path.to_string_lossy()
+            "path": target
         }))
     }
 
@@ -840,10 +827,6 @@ fn open_url(url: &str) -> anyhow::Result<()> {
     }
 }
 
-fn manager_exe_path() -> PathBuf {
-    codex_plus_core::install::companion_binary_path(codex_plus_core::install::MANAGER_BINARY)
-}
-
 fn default_user_script_manager() -> UserScriptManager {
     let config_dir = default_user_scripts_config_dir();
     UserScriptManager::new(
@@ -907,9 +890,11 @@ mod tests {
     }
 
     #[test]
-    fn launcher_hooks_forward_computer_use_guard_methods() {
+    fn launcher_hooks_forward_runtime_watchdogs_and_computer_use_guard_methods() {
         let source = include_str!("main.rs");
 
+        assert!(source.contains("async fn start_bridge_watchdog"));
+        assert!(source.contains(".start_bridge_watchdog(debug_port, helper_port)"));
         assert!(source.contains("async fn ensure_computer_use_config"));
         assert!(source.contains("self.core.ensure_computer_use_config(settings).await"));
         assert!(source.contains("async fn ensure_plugin_marketplace_config"));
@@ -918,18 +903,6 @@ mod tests {
         assert!(source.contains("self.core"));
         assert!(source.contains(".start_computer_use_guard_watchdog(settings)"));
     }
-
-    #[test]
-    fn manager_update_prompt_uses_sidecar_manager_binary_name() {
-        let path = manager_exe_path();
-
-        assert!(
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.contains(codex_plus_core::install::MANAGER_BINARY))
-        );
-    }
-
     #[test]
     fn manager_start_arguments_cover_every_non_codex_route() {
         assert_eq!(

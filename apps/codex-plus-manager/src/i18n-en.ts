@@ -49,6 +49,8 @@ export const EN_PLAIN: Record<string, string> = {
   "Watcher 状态": "Watcher status",
   "Watcher 用于保持 Chimera++ 接管状态": "The watcher keeps Chimera++ in control",
   "Watcher 自动接管": "Watcher auto-takeover",
+  "仅支持 V2 桌宠；不会修改宠物文件。将 V2 的 Computer Use 光标朝向动作映射到真实鼠标，V1 开启后安全不生效；拖拽、原生悬停或 Computer Use 活跃时自动让步。":
+    "V2 pets only; pet files are never modified. Maps the V2 Computer Use cursor-look animation to the real mouse cursor. V1 pets safely remain unchanged, while dragging, native hover, and active Computer Use take priority.",
   "Zed 远程打开": "Zed remote open",
   "Zed 远程项目": "Zed remote projects",
   "Zed 项目记录": "Zed project history",
@@ -367,6 +369,7 @@ export const EN_PLAIN: Record<string, string> = {
   "日志已刷新": "Logs refreshed",
   "日志已复制。": "Logs copied.",
   "时间": "Time",
+  "桌宠跟随真实鼠标": "Real-mouse pet look",
   "释放并注册内置缓存": "Extract and register embedded cache",
   "显示服务模式切换按钮；Fast 仅支持 gpt-5.4 / gpt-5.5，其他模型按 Standard 发送。":
     "Show the service-tier toggle button; Fast only supports gpt-5.4 / gpt-5.5, other models are sent as Standard.",
@@ -676,6 +679,7 @@ export const EN_TEMPLATE: Record<string, string> = {
   "删除选中的 {0} 个会话？此操作会删除本地数据库记录和 rollout 文件，并为每个会话创建备份。\n\n{1}{2}":
     "Delete the {0} selected session(s)? This deletes the local database records and rollout files, and creates a backup for each session.\n\n{1}{2}",
   "发现 {0} 个 Codex 供应商": "Found {0} Codex provider(s)",
+  "发现新版本 {0}": "New version {0} available",
   "检测到 TUN 模式已开启，请在 Clash Verge Rev 中关闭。配置：{0}":
     "TUN mode is enabled. Disable it in Clash Verge Rev. Configuration: {0}",
   "TUN 模式已关闭。配置：{0}": "TUN mode is disabled. Configuration: {0}",
