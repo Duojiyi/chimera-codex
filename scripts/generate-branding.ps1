@@ -6,10 +6,14 @@
 .PARAMETER Check
   Regenerate into a temp directory and byte-compare against the working tree.
   Does not modify tracked generated files.
+
+.PARAMETER SelfTest
+  Run fail-closed macOS build-number progression tests without modifying files.
 #>
 [CmdletBinding()]
 param(
-    [switch]$Check
+    [switch]$Check,
+    [switch]$SelfTest
 )
 
 Set-StrictMode -Version Latest
@@ -285,30 +289,152 @@ function Assert-BrandTouchpoints {
     }
 }
 
-function Get-PreviousMacosBuildNumber {
-    param([Parameter(Mandatory)][string]$Root)
+function ConvertTo-ChimeraVersionParts {
+    param([Parameter(Mandatory)][string]$Version)
+
+    if ($Version -notmatch '^(?<major>0|[1-9]\d*)\.(?<minor>0|[1-9]\d*)\.(?<patch>0|[1-9]\d*)-chimera\.(?<revision>0|[1-9]\d*)$') {
+        return $null
+    }
+    return @(
+        $Matches['major'],
+        $Matches['minor'],
+        $Matches['patch'],
+        $Matches['revision']
+    )
+}
+
+function Compare-DecimalStrings {
+    param(
+        [Parameter(Mandatory)][string]$Left,
+        [Parameter(Mandatory)][string]$Right
+    )
+
+    $normalizedLeft = $Left.TrimStart('0')
+    $normalizedRight = $Right.TrimStart('0')
+    if ($normalizedLeft.Length -eq 0) { $normalizedLeft = '0' }
+    if ($normalizedRight.Length -eq 0) { $normalizedRight = '0' }
+    if ($normalizedLeft.Length -lt $normalizedRight.Length) { return -1 }
+    if ($normalizedLeft.Length -gt $normalizedRight.Length) { return 1 }
+    return [Math]::Sign([string]::CompareOrdinal($normalizedLeft, $normalizedRight))
+}
+
+function ConvertFrom-ChimeraReleaseMetadata {
+    param(
+        [Parameter(Mandatory)][string]$Tag,
+        [Parameter(Mandatory)][string]$ProductToml
+    )
+
+    if (-not $Tag.StartsWith('v')) {
+        throw "Invalid Chimera Release tag: $Tag"
+    }
+    $version = $Tag.Substring(1)
+    if ($null -eq (ConvertTo-ChimeraVersionParts -Version $version)) {
+        throw "Invalid Chimera Release tag: $Tag"
+    }
+    $buildLines = @(
+        $ProductToml -split "`n" |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -match '^(?:macos_build_number|"macos_build_number"|''macos_build_number'')\s*=' }
+    )
+    if ($buildLines.Count -ne 1) {
+        throw "Latest Chimera Release $Tag must contain exactly one macos_build_number"
+    }
+    if ($buildLines[0] -notmatch '^macos_build_number\s*=\s*(\d+)\s*$') {
+        throw "Invalid macos_build_number in latest Chimera Release $Tag"
+    }
+    try {
+        $build = [int]$Matches[1]
+    }
+    catch {
+        throw "Invalid macos_build_number in latest Chimera Release ${Tag}: $($Matches[1])"
+    }
+    if ($build -lt 1) {
+        throw "Invalid macos_build_number in latest Chimera Release ${Tag}: $build"
+    }
+    return [pscustomobject]@{
+        Version = $version
+        Build   = $build
+    }
+}
+
+function Invoke-BrandMetadataGit {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][ValidateSet('list-tags', 'show-product')][string]$Operation,
+        [AllowNull()][string]$Reference
+    )
 
     Push-Location $Root
     try {
-        $tags = @(git tag -l 'v*-chimera.*' --sort=-v:refname 2>$null)
-        if (-not $tags -or $tags.Count -eq 0) {
-            return $null
+        if ($Operation -eq 'list-tags') {
+            $output = @(git tag -l 'v*-chimera.*' --sort=-v:refname 2>$null)
         }
-        foreach ($tag in $tags) {
-            $content = git show "${tag}:brand/product.toml" 2>$null
-            if (-not $content) { continue }
-            foreach ($raw in ($content -split "`n")) {
-                $line = $raw.Trim()
-                if ($line -match '^macos_build_number\s*=\s*(\d+)\s*$') {
-                    return [int]$Matches[1]
-                }
-            }
+        else {
+            $output = @(git show "${Reference}:brand/product.toml" 2>$null)
         }
-        return $null
+        return [pscustomobject]@{
+            ExitCode = $LASTEXITCODE
+            Output   = $output
+        }
     }
     finally {
         Pop-Location
     }
+}
+
+function Get-LatestChimeraReleaseMetadata {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [AllowNull()][scriptblock]$GitRunner
+    )
+
+    if ($null -eq $GitRunner) {
+        $GitRunner = ${function:Invoke-BrandMetadataGit}
+    }
+    $tagResult = & $GitRunner $Root 'list-tags' $null
+    if ($tagResult.ExitCode -ne 0) {
+        throw 'Unable to enumerate Chimera Release tags'
+    }
+    $tags = @($tagResult.Output | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+    if ($tags.Count -eq 0) {
+        return $null
+    }
+    $tag = $tags[0]
+    $productResult = & $GitRunner $Root 'show-product' $tag
+    if ($productResult.ExitCode -ne 0) {
+        throw "Unable to read brand/product.toml from latest Chimera Release $tag"
+    }
+    return ConvertFrom-ChimeraReleaseMetadata `
+        -Tag $tag `
+        -ProductToml (@($productResult.Output) -join "`n")
+}
+
+function Test-MacosBuildNumberProgress {
+    param(
+        [Parameter(Mandatory)][string]$CurrentVersion,
+        [Parameter(Mandatory)][int]$CurrentBuild,
+        [AllowNull()][string]$PreviousVersion,
+        [AllowNull()][object]$PreviousBuild
+    )
+
+    if ($CurrentBuild -lt 1) { return $false }
+    if ([string]::IsNullOrWhiteSpace($PreviousVersion) -or $null -eq $PreviousBuild) {
+        return $true
+    }
+    $currentParts = ConvertTo-ChimeraVersionParts -Version $CurrentVersion
+    $previousParts = ConvertTo-ChimeraVersionParts -Version $PreviousVersion
+    if ($null -eq $currentParts -or $null -eq $previousParts) {
+        return $false
+    }
+    for ($i = 0; $i -lt $currentParts.Count; $i++) {
+        $comparison = Compare-DecimalStrings -Left $currentParts[$i] -Right $previousParts[$i]
+        if ($comparison -lt 0) { return $false }
+        if ($comparison -gt 0) { return $CurrentBuild -gt [int]$PreviousBuild }
+    }
+    if ($CurrentVersion -eq $PreviousVersion) {
+        return $CurrentBuild -eq [int]$PreviousBuild
+    }
+    return $false
 }
 
 function Assert-MacosBuildNumberProgress {
@@ -322,9 +448,18 @@ function Assert-MacosBuildNumberProgress {
         throw 'macos_build_number must be a positive integer'
     }
 
-    $previous = Get-PreviousMacosBuildNumber -Root $Root
-    if ($null -ne $previous -and $current -le [int]$previous) {
-        throw "macos_build_number ($current) must be greater than previous release tag value ($previous)"
+    $currentVersion = Get-WorkspaceCargoVersion -Root $Root
+    $previous = Get-LatestChimeraReleaseMetadata -Root $Root
+    if ($null -eq $previous) { return }
+    if (-not (Test-MacosBuildNumberProgress `
+            -CurrentVersion $currentVersion `
+            -CurrentBuild $current `
+            -PreviousVersion $previous.Version `
+            -PreviousBuild $previous.Build)) {
+        if ($currentVersion -eq $previous.Version) {
+            throw "macos_build_number ($current) must equal released $($previous.Version) value ($($previous.Build))"
+        }
+        throw "macos_build_number ($current) must be greater than previous release $($previous.Version) value ($($previous.Build))"
     }
 }
 
@@ -409,6 +544,97 @@ function Compare-FilesExact {
     if ($expected -cne $actual) {
         throw "Generated drift: $ActualPath"
     }
+}
+
+if ($SelfTest) {
+    $cases = @(
+        [pscustomobject]@{ Name = 'released baseline'; CurrentVersion = '1.2.35-chimera.4'; CurrentBuild = 6; PreviousVersion = '1.2.35-chimera.4'; PreviousBuild = 6; Expected = $true },
+        [pscustomobject]@{ Name = 'new version increments build'; CurrentVersion = '1.2.36-chimera.1'; CurrentBuild = 7; PreviousVersion = '1.2.35-chimera.4'; PreviousBuild = 6; Expected = $true },
+        [pscustomobject]@{ Name = 'new version reuses build'; CurrentVersion = '1.2.36-chimera.1'; CurrentBuild = 6; PreviousVersion = '1.2.35-chimera.4'; PreviousBuild = 6; Expected = $false },
+        [pscustomobject]@{ Name = 'released version changes build'; CurrentVersion = '1.2.35-chimera.4'; CurrentBuild = 7; PreviousVersion = '1.2.35-chimera.4'; PreviousBuild = 6; Expected = $false },
+        [pscustomobject]@{ Name = 'released version regresses build'; CurrentVersion = '1.2.35-chimera.4'; CurrentBuild = 5; PreviousVersion = '1.2.35-chimera.4'; PreviousBuild = 6; Expected = $false },
+        [pscustomobject]@{ Name = 'older upstream version with higher build'; CurrentVersion = '1.2.34-chimera.99'; CurrentBuild = 7; PreviousVersion = '1.2.35-chimera.4'; PreviousBuild = 6; Expected = $false },
+        [pscustomobject]@{ Name = 'older Chimera revision with higher build'; CurrentVersion = '1.2.35-chimera.3'; CurrentBuild = 7; PreviousVersion = '1.2.35-chimera.4'; PreviousBuild = 6; Expected = $false },
+        [pscustomobject]@{ Name = 'invalid current version'; CurrentVersion = 'not-a-version'; CurrentBuild = 7; PreviousVersion = '1.2.35-chimera.4'; PreviousBuild = 6; Expected = $false },
+        [pscustomobject]@{ Name = 'first release positive build'; CurrentVersion = '1.0.0-chimera.1'; CurrentBuild = 1; PreviousVersion = $null; PreviousBuild = $null; Expected = $true },
+        [pscustomobject]@{ Name = 'non-positive build'; CurrentVersion = '1.0.0-chimera.1'; CurrentBuild = 0; PreviousVersion = $null; PreviousBuild = $null; Expected = $false }
+    )
+    foreach ($case in $cases) {
+        $actual = Test-MacosBuildNumberProgress `
+            -CurrentVersion $case.CurrentVersion `
+            -CurrentBuild $case.CurrentBuild `
+            -PreviousVersion $case.PreviousVersion `
+            -PreviousBuild $case.PreviousBuild
+        if ($actual -ne $case.Expected) {
+            throw "macOS build-number self-test '$($case.Name)' expected $($case.Expected), got $actual"
+        }
+    }
+
+    $metadata = ConvertFrom-ChimeraReleaseMetadata `
+        -Tag 'v1.2.35-chimera.4' `
+        -ProductToml "display_silent_name = `"Chimera++`"`nmacos_build_number = 6`n"
+    if ($metadata.Version -ne '1.2.35-chimera.4' -or $metadata.Build -ne 6) {
+        throw 'macOS release metadata self-test failed to parse a valid latest tag'
+    }
+    foreach ($invalid in @(
+            [pscustomobject]@{ Name = 'invalid tag'; Tag = 'v1.2.35'; ProductToml = 'macos_build_number = 6' },
+            [pscustomobject]@{ Name = 'missing build'; Tag = 'v1.2.35-chimera.4'; ProductToml = 'display_silent_name = "Chimera++"' },
+            [pscustomobject]@{ Name = 'duplicate build'; Tag = 'v1.2.35-chimera.4'; ProductToml = "macos_build_number = 6`nmacos_build_number = 7" },
+            [pscustomobject]@{ Name = 'mixed valid and invalid duplicate build'; Tag = 'v1.2.35-chimera.4'; ProductToml = "macos_build_number = 6`nmacos_build_number = `"invalid`"" }
+        )) {
+        $rejected = $false
+        try {
+            ConvertFrom-ChimeraReleaseMetadata -Tag $invalid.Tag -ProductToml $invalid.ProductToml | Out-Null
+        }
+        catch {
+            $rejected = $true
+        }
+        if (-not $rejected) {
+            throw "macOS release metadata self-test '$($invalid.Name)' must fail closed"
+        }
+    }
+
+    $gitCalls = [System.Collections.Generic.List[string]]::new()
+    $validGitRunner = {
+        param($Root, $Operation, $Reference)
+        $gitCalls.Add("${Operation}|${Reference}")
+        if ($Operation -eq 'list-tags') {
+            return [pscustomobject]@{ ExitCode = 0; Output = @('v1.2.35-chimera.4', 'v1.2.35-chimera.3') }
+        }
+        return [pscustomobject]@{ ExitCode = 0; Output = @('macos_build_number = 6') }
+    }.GetNewClosure()
+    $discovered = Get-LatestChimeraReleaseMetadata -Root '.' -GitRunner $validGitRunner
+    if ($discovered.Version -ne '1.2.35-chimera.4' -or $discovered.Build -ne 6) {
+        throw 'latest Chimera Release discovery self-test returned incorrect metadata'
+    }
+    if (($gitCalls -join ',') -ne 'list-tags|,show-product|v1.2.35-chimera.4') {
+        throw "latest Chimera Release discovery must read only the newest tag, got: $($gitCalls -join ',')"
+    }
+
+    foreach ($failure in @('list-tags', 'show-product')) {
+        $failingGitRunner = {
+            param($Root, $Operation, $Reference)
+            if ($Operation -eq $failure) {
+                return [pscustomobject]@{ ExitCode = 1; Output = @() }
+            }
+            if ($Operation -eq 'list-tags') {
+                return [pscustomobject]@{ ExitCode = 0; Output = @('v1.2.35-chimera.4', 'v1.2.35-chimera.3') }
+            }
+            return [pscustomobject]@{ ExitCode = 0; Output = @('macos_build_number = 6') }
+        }.GetNewClosure()
+        $rejected = $false
+        try {
+            Get-LatestChimeraReleaseMetadata -Root '.' -GitRunner $failingGitRunner | Out-Null
+        }
+        catch {
+            $rejected = $true
+        }
+        if (-not $rejected) {
+            throw "latest Chimera Release discovery '$failure' failure must fail closed"
+        }
+    }
+    Write-Host 'generate-branding self-test: PASS'
+    exit 0
 }
 
 $root = Get-RepoRoot

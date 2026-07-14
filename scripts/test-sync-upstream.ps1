@@ -182,6 +182,68 @@ if (-not (Test-BuiltInTokenWorkflowContract -Workflow $syncWorkflow)) {
 }
 
 $normalizedWorkflow = $syncWorkflow.Replace("`r`n", "`n").Replace("`r", "`n")
+
+function Test-TwoHourlyScheduleContract {
+    param([Parameter(Mandatory)][string]$Workflow)
+
+    $text = $Workflow.Replace("`r`n", "`n").Replace("`r", "`n")
+    $match = [regex]::Match(
+        $text,
+        '(?ms)^on:\s*$\n  schedule:\s*$\n(?<schedule>.*?)(?=^  workflow_dispatch:)'
+    )
+    if (-not $match.Success) { return $false }
+    [string[]]$activeLines = @(
+        $match.Groups['schedule'].Value -split "`n" |
+            ForEach-Object { $_.TrimEnd() } |
+            Where-Object { $_.Trim().Length -gt 0 -and -not $_.TrimStart().StartsWith('#') }
+    )
+    return $activeLines.Count -eq 1 -and
+        $activeLines[0] -ceq '    - cron: "23 */2 * * *"'
+}
+
+if (-not (Test-TwoHourlyScheduleContract -Workflow $normalizedWorkflow)) {
+    throw 'sync workflow must poll every two hours at minute 23 UTC'
+}
+$slowScheduleMutation = $normalizedWorkflow.Replace('23 */2 * * *', '0 6 * * *')
+if (Test-TwoHourlyScheduleContract -Workflow $slowScheduleMutation) {
+    throw 'twice-daily schedule mutation must fail the workflow contract'
+}
+$extraScheduleMutation = $normalizedWorkflow.Replace(
+    '    - cron: "23 */2 * * *"',
+    "    - cron: `"23 */2 * * *`"`n    - cron: `"0 18 * * *`""
+)
+if (Test-TwoHourlyScheduleContract -Workflow $extraScheduleMutation) {
+    throw 'extra schedule mutation must fail the workflow contract'
+}
+$singleQuotedExtraScheduleMutation = $normalizedWorkflow.Replace(
+    '    - cron: "23 */2 * * *"',
+    "    - cron: `"23 */2 * * *`"`n    - cron: '0 18 * * *'"
+)
+if (Test-TwoHourlyScheduleContract -Workflow $singleQuotedExtraScheduleMutation) {
+    throw 'single-quoted extra schedule mutation must fail the workflow contract'
+}
+$unquotedExtraScheduleMutation = $normalizedWorkflow.Replace(
+    '    - cron: "23 */2 * * *"',
+    "    - cron: `"23 */2 * * *`"`n    - cron: 0 18 * * *"
+)
+if (Test-TwoHourlyScheduleContract -Workflow $unquotedExtraScheduleMutation) {
+    throw 'unquoted extra schedule mutation must fail the workflow contract'
+}
+$quotedKeyExtraScheduleMutation = $normalizedWorkflow.Replace(
+    '    - cron: "23 */2 * * *"',
+    "    - cron: `"23 */2 * * *`"`n    - 'cron': '0 18 * * *'"
+)
+if (Test-TwoHourlyScheduleContract -Workflow $quotedKeyExtraScheduleMutation) {
+    throw 'quoted-key extra schedule mutation must fail the workflow contract'
+}
+$flowMapExtraScheduleMutation = $normalizedWorkflow.Replace(
+    '    - cron: "23 */2 * * *"',
+    "    - cron: `"23 */2 * * *`"`n    - { cron: `"0 18 * * *`" }"
+)
+if (Test-TwoHourlyScheduleContract -Workflow $flowMapExtraScheduleMutation) {
+    throw 'flow-map extra schedule mutation must fail the workflow contract'
+}
+
 $secretMutation = $normalizedWorkflow.Replace('${{ github.token }}', '${{ secrets.CHIMERA_AUTOMATION_TOKEN }}')
 if (Test-BuiltInTokenWorkflowContract -Workflow $secretMutation) {
     throw 'external-token mutation must fail the workflow contract'

@@ -33,6 +33,10 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
 
+      - name: Branding gate self-test
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/generate-branding.ps1 -SelfTest
+
       - name: Branding generate check
         shell: pwsh
         run: pwsh -File scripts/generate-branding.ps1 -Check
@@ -40,6 +44,10 @@ jobs:
       - name: Verify no upstream ads
         shell: pwsh
         run: pwsh -File scripts/verify-no-upstream-ads.ps1
+
+      - name: Sync workflow contract tests
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/test-sync-upstream.ps1
 
       - name: Verify license and corresponding source contract
         shell: pwsh
