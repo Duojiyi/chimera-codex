@@ -138,6 +138,61 @@ Assert-Equal (
     Get-UpstreamVersionDisposition -CandidateVersion '2.10.1' -BaselineVersion '2.10.0'
 ) 'advance' 'accept advance'
 
+$streamProbe = Invoke-Git -Args @(
+    '-c',
+    'alias.stream-probe=!f() { echo out; echo warning:advisory >&2; }; f',
+    'stream-probe'
+)
+Assert-Equal $streamProbe.Code 0 'Git stream probe exit code'
+Assert-Equal ($streamProbe.StdoutLines -join ',') 'out' 'Git stdout separation'
+Assert-Equal ($streamProbe.Lines -join ',') 'out' 'Git compatibility Lines contain stdout only'
+Assert-Equal ($streamProbe.StderrLines -join ',') 'warning:advisory' 'Git stderr separation'
+if (-not ($streamProbe.Text.Contains('out') -and $streamProbe.Text.Contains('warning:advisory'))) {
+    throw 'Git combined diagnostic text must preserve stdout and stderr'
+}
+
+$identifiedMergeArgs = Get-IdentifiedGitArgs -Arguments @('merge', '--no-ff', '--no-edit', 'v1.2.36')
+Assert-Equal (
+    $identifiedMergeArgs -join '|'
+) '-c|user.name=github-actions[bot]|-c|user.email=41898282+github-actions[bot]@users.noreply.github.com|merge|--no-ff|--no-edit|v1.2.36' 'merge command identity'
+$identifiedCommitArgs = Get-IdentifiedGitArgs -Arguments @('commit', '-m', 'sync: merge upstream v1.2.36')
+Assert-Equal (
+    $identifiedCommitArgs -join '|'
+) '-c|user.name=github-actions[bot]|-c|user.email=41898282+github-actions[bot]@users.noreply.github.com|commit|-m|sync: merge upstream v1.2.36' 'candidate commit identity'
+
+$mergeConflict = Get-MergeFailureDisposition `
+    -MergeResult ([pscustomobject]@{ Code = 1; Text = 'Automatic merge failed'; Lines = @(); StdoutLines = @(); StderrLines = @() }) `
+    -ConflictResult ([pscustomobject]@{ Code = 0; Text = 'Cargo.toml'; Lines = @('Cargo.toml'); StdoutLines = @('Cargo.toml'); StderrLines = @() })
+Assert-Equal $mergeConflict.Kind 'conflict' 'merge failure with unmerged paths'
+Assert-Equal ($mergeConflict.Files -join ',') 'Cargo.toml' 'merge conflict path preservation'
+Assert-Equal $mergeConflict.ExitCode 2 'merge conflict exit code'
+Assert-Equal $mergeConflict.Action 'conflict' 'merge conflict action'
+Assert-Equal $mergeConflict.ShouldAbort $true 'merge conflict abort requirement'
+
+$mergeExecutionError = Get-MergeFailureDisposition `
+    -MergeResult ([pscustomobject]@{ Code = 128; Text = 'Committer identity unknown'; Lines = @(); StdoutLines = @(); StderrLines = @('Committer identity unknown') }) `
+    -ConflictResult ([pscustomobject]@{ Code = 0; Text = ''; Lines = @(); StdoutLines = @(); StderrLines = @() })
+Assert-Equal $mergeExecutionError.Kind 'error' 'merge failure without unmerged paths'
+Assert-Equal $mergeExecutionError.ExitCode 4 'merge execution error exit code'
+Assert-Equal $mergeExecutionError.Action 'error' 'merge execution error action'
+Assert-Equal $mergeExecutionError.ShouldAbort $false 'merge execution error abort requirement'
+if (-not $mergeExecutionError.Message.Contains('Committer identity unknown')) {
+    throw 'merge execution error must retain the original git merge diagnostic'
+}
+
+$mergeProbeError = Get-MergeFailureDisposition `
+    -MergeResult ([pscustomobject]@{ Code = 1; Text = 'merge failed'; Lines = @(); StdoutLines = @(); StderrLines = @('merge failed') }) `
+    -ConflictResult ([pscustomobject]@{ Code = 128; Text = 'index unavailable'; Lines = @(); StdoutLines = @(); StderrLines = @('index unavailable') })
+Assert-Equal $mergeProbeError.Kind 'error' 'failed unmerged-path probe'
+if (-not $mergeProbeError.Message.Contains('index unavailable')) {
+    throw 'merge probe error must retain the conflict-probe diagnostic'
+}
+
+$warningOnlyProbe = Get-MergeFailureDisposition `
+    -MergeResult ([pscustomobject]@{ Code = 128; Text = 'merge failed'; Lines = @(); StdoutLines = @(); StderrLines = @('merge failed') }) `
+    -ConflictResult ([pscustomobject]@{ Code = 0; Text = 'warning: advisory'; Lines = @('warning: advisory'); StdoutLines = @(); StderrLines = @('warning: advisory') })
+Assert-Equal $warningOnlyProbe.Kind 'error' 'warning-only conflict probe'
+
 function Test-BuiltInTokenWorkflowContract {
     param([Parameter(Mandatory)][string]$Workflow)
 
@@ -289,6 +344,46 @@ function Test-ProtectedScriptContract {
 }
 
 $syncScriptSource = (Get-Content -LiteralPath $syncScript -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+
+function Test-MergeExecutionSourceContract {
+    param([Parameter(Mandatory)][string]$Source)
+
+    $text = $Source.Replace("`r`n", "`n").Replace("`r", "`n")
+    return $text.Contains("`$mergeArgs = Get-IdentifiedGitArgs -Arguments @('merge', '--no-ff', '--no-edit', `$upstreamTag)") -and
+        $text.Contains('$merge = Invoke-Git -WorkDir $worktreePath -Args $mergeArgs') -and
+        $text.Contains("`$commitArgs = Get-IdentifiedGitArgs -Arguments @('commit', '-m', `$commitMsg)") -and
+        $text.Contains('$commit = Invoke-Git -WorkDir $worktreePath -Args $commitArgs') -and
+        $text.Contains('$files = @($ConflictResult.StdoutLines | Where-Object') -and
+        $text.Contains('if ($disposition.ShouldAbort)') -and
+        $text.Contains('Set-ResultAndExit -Code $disposition.ExitCode -Message $disposition.Message -Action $disposition.Action') -and
+        $text.Contains('Set-ResultAndExit -Code $disposition.ExitCode -Message "Merge conflict syncing $upstreamTag (aborted). Files: $($files -join '', '')" -Action $disposition.Action')
+}
+
+if (-not (Test-MergeExecutionSourceContract -Source $syncScriptSource)) {
+    throw 'sync merge execution must use identity, separated stdout, and disposition code/action wiring'
+}
+$mergeIdentityMutation = $syncScriptSource.Replace(
+    '$merge = Invoke-Git -WorkDir $worktreePath -Args $mergeArgs',
+    '$merge = Invoke-Git -WorkDir $worktreePath -Args @(''merge'', ''--no-ff'', ''--no-edit'', $upstreamTag)'
+)
+if (Test-MergeExecutionSourceContract -Source $mergeIdentityMutation) {
+    throw 'merge identity callsite mutation must fail the script contract'
+}
+$commitIdentityMutation = $syncScriptSource.Replace(
+    '$commit = Invoke-Git -WorkDir $worktreePath -Args $commitArgs',
+    '$commit = Invoke-Git -WorkDir $worktreePath -Args @(''commit'', ''-m'', $commitMsg)'
+)
+if (Test-MergeExecutionSourceContract -Source $commitIdentityMutation) {
+    throw 'commit identity callsite mutation must fail the script contract'
+}
+$errorActionMutation = $syncScriptSource.Replace(
+    'Set-ResultAndExit -Code $disposition.ExitCode -Message $disposition.Message -Action $disposition.Action',
+    'Set-ResultAndExit -Code 2 -Message $disposition.Message -Action ''conflict'''
+)
+if (Test-MergeExecutionSourceContract -Source $errorActionMutation) {
+    throw 'merge execution error mapping mutation must fail the script contract'
+}
+
 if (-not (Test-ProtectedScriptContract -Source $syncScriptSource)) {
     throw 'sync candidate construction must restore and verify the trusted workflow tree'
 }

@@ -16,9 +16,9 @@
 {"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":912,"line":"base_url: \"https://jojocode.com/v1\".to_string(),","reason":"cfg(test) confirm pending import fixture"}
 
 # Legacy display names used only for detection/cleanup (Task 6)
-{"path":"crates/codex-plus-core/src/install/mod.rs","pattern":"Codex++ 管理工具","lineNumber":16,"line":"pub const LEGACY_MANAGER_NAME: &str = \"Codex++ 管理工具\";","reason":"legacy display name used only for detection and cleanup"}
-{"path":"crates/codex-plus-core/src/install/mod.rs","pattern":"Codex++ 管理工具","lineNumber":90,"line":"(\"Codex++.lnk\", \"Codex++ 管理工具.lnk\")","reason":"legacy shortcut names used only for cleanup"}
-{"path":"crates/codex-plus-core/src/install/mod.rs","pattern":"Codex++ 管理工具","lineNumber":98,"line":"(\"Codex++.app\", \"Codex++ 管理工具.app\")","reason":"legacy app bundle names used only for detection"}
+{"path":"crates/codex-plus-core/src/install/mod.rs","pattern":"Codex++ 管理工具","lineNumber":20,"line":"pub const LEGACY_MANAGER_NAME: &str = \"Codex++ 管理工具\";","reason":"legacy display name used only for detection and cleanup"}
+{"path":"crates/codex-plus-core/src/install/mod.rs","pattern":"Codex++ 管理工具","lineNumber":94,"line":"(\"Codex++.lnk\", \"Codex++ 管理工具.lnk\")","reason":"legacy shortcut names used only for cleanup"}
+{"path":"crates/codex-plus-core/src/install/mod.rs","pattern":"Codex++ 管理工具","lineNumber":102,"line":"(\"Codex++.app\", \"Codex++ 管理工具.app\")","reason":"legacy app bundle names used only for detection"}
 
 # Root README migration guidance for users still on upstream app names
 {"path":"README.md","pattern":"Codex++ 管理工具","lineNumber":67,"line":"1. 退出旧的 `Codex++.app` / `Codex++ 管理工具.app` 以及新的 Chimera 进程。","reason":"documents legacy macOS app cleanup"}

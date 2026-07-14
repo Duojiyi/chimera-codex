@@ -77,6 +77,8 @@ import {
   DISPLAY_SILENT_NAME,
 } from "./branding.generated";
 
+const isWindowsPlatform = /\bWindows\b/i.test(navigator.userAgent);
+
 type Status = "ok" | "failed" | "not_implemented" | "not_checked" | string;
 
 type CommandResult<T> = T & {
@@ -167,6 +169,7 @@ type BackendSettings = {
   codexAppNativeMenuPlacement: boolean;
   codexAppNativeMenuLocalization: boolean;
   codexAppServiceTierControls: boolean;
+  codexAppPetRealMouseLook: boolean;
   codexAppStepwiseEnabled: boolean;
   codexAppStepwiseDirectSend: boolean;
   codexAppStepwiseBaseUrl: string;
@@ -469,7 +472,6 @@ type RelayLatencyResult = CommandResult<{
   latencyMs: number | null;
   httpStatus: number | null;
 }>;
-
 type RelayEnvironmentResult = CommandResult<{
   clashVergeTun: {
     enabled: boolean;
@@ -700,6 +702,7 @@ const defaultSettings: BackendSettings = {
   codexAppNativeMenuPlacement: true,
   codexAppNativeMenuLocalization: true,
   codexAppServiceTierControls: false,
+  codexAppPetRealMouseLook: false,
   codexAppStepwiseEnabled: false,
   codexAppStepwiseDirectSend: false,
   codexAppStepwiseBaseUrl: "",
@@ -2712,6 +2715,7 @@ function RelayScreen({
               <strong>{t("启用供应商配置切换")}</strong>
               <small>{t("关闭后本工具不会在手动切换时写入 Codex 的 config.toml / auth.json；启动 Codex 时始终不会自动改这些文件。")}</small>
             </span>
+            <ToggleVisual />
           </label>
           <div className="relay-add-row">
             <Button
@@ -2839,6 +2843,11 @@ function EnhanceScreen({
   actions: Actions;
 }) {
   const setEnhanceFlag = (key: keyof BackendSettings, value: boolean) => onFormChange({ ...form, [key]: value });
+  const setPersistedEnhanceFlag = (key: keyof BackendSettings, value: boolean) => {
+    const next = { ...form, [key]: value };
+    onFormChange(next);
+    void actions.saveSettingsValue(next, true);
+  };
   const masterEnabled = form.enhancementsEnabled;
   const patchMode = form.launchMode === "patch";
   const remoteMarketplaceStatus = remotePluginMarketplace?.marketplaceRoot
@@ -2867,6 +2876,7 @@ function EnhanceScreen({
               <strong>{t("启用 Codex增强")}</strong>
               <small>{t("关闭后会停用删除、导出、项目移动、插件相关和菜单位置增强。")}</small>
             </span>
+            <ToggleVisual />
           </label>
           <label className="switch-row">
             <input
@@ -2878,6 +2888,7 @@ function EnhanceScreen({
               <strong>{t("启用 Windows Computer Use Guard")}</strong>
               <small>{t("默认关闭；开启后启动 Codex 时会自动保留官方 Computer Use 插件所需的 config.toml、bundled 插件和 notify 配置。")}</small>
             </span>
+            <ToggleVisual />
           </label>
           <ModeSelector launchMode={form.launchMode} actions={actions} />
           {form.launchMode === "relay" ? (
@@ -2930,6 +2941,7 @@ function EnhanceScreen({
               <FeatureToggle title={t("Stepwise 直接发送")} detail={t("点击建议后自动发送；关闭时只填入输入框。")} checked={form.codexAppStepwiseDirectSend} disabled={!masterEnabled || !form.codexAppStepwiseEnabled} onChange={(value) => setEnhanceFlag("codexAppStepwiseDirectSend", value)} />
             </FeatureGroup>
             <FeatureGroup title={t("界面与启动")} detail={t("控制语言、启动速度和 Codex 原生界面调整。")}>
+              {isWindowsPlatform ? <FeatureToggle title={t("桌宠跟随真实鼠标")} detail={t("仅支持 V2 桌宠；不会修改宠物文件。将 V2 的 Computer Use 光标朝向动作映射到真实鼠标，V1 开启后安全不生效；拖拽、原生悬停或 Computer Use 活跃时自动让步。")} checked={form.codexAppPetRealMouseLook} disabled={!masterEnabled} onChange={(value) => setPersistedEnhanceFlag("codexAppPetRealMouseLook", value)} /> : null}
               <FeatureToggle title={t("强制中文界面")} detail={t("强制启用 Codex App 内置 zh-CN 语言包，避免 Statsig/VPN 不通时回退英文。需重启 Codex 才能完整生效。")} checked={form.codexAppForceChineseLocale} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppForceChineseLocale", value)} />
               <FeatureToggle title={t("快速启动")} detail={t("默认关闭；无 VPN 时可开启，让 Statsig 初始化快速失败，减少启动时长。需重启 Codex 才生效。")} checked={form.codexAppFastStartup} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppFastStartup", value)} />
               <FeatureToggle title={t("原生菜单栏位置")} detail={t("把 Chimera++ 菜单插入 Codex 顶部原生菜单栏。")} checked={form.codexAppNativeMenuPlacement} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppNativeMenuPlacement", value)} />
@@ -3037,6 +3049,7 @@ function ZedRemoteScreen({
                 <strong>{t("记录最近打开")}</strong>
                 <small>{t("保存到 Chimera++ state，不改写 Zed settings。")}</small>
               </span>
+              <ToggleVisual />
             </label>
           </div>
           <Toolbar>
@@ -3320,6 +3333,7 @@ function SessionsScreen({
               <strong>{t("启动前自动修复历史会话")}</strong>
               <small>{t("开启后，通过 Chimera++ 启动 Codex 前自动整理一次旧对话的归属标记。")}</small>
             </span>
+            <ToggleVisual />
           </label>
           <Toolbar>
             <Button onClick={() => void actions.saveSettings()}>{t("保存自动修复设置")}</Button>
@@ -5187,8 +5201,16 @@ function FeatureToggle({
         <strong>{title}</strong>
         <small>{detail}</small>
       </span>
-      <Badge status={!disabled && checked ? "ok" : "disabled"} />
+      <ToggleVisual />
     </label>
+  );
+}
+
+function ToggleVisual() {
+  return (
+    <span aria-hidden="true" className="toggle-switch-visual">
+      <span className="toggle-switch-thumb" />
+    </span>
   );
 }
 

@@ -6,6 +6,7 @@ use std::path::Path;
 use crate::settings::BackendSettings;
 
 const RENDERER_SCRIPT: &str = include_str!("../../../assets/inject/renderer-inject.js");
+const PET_REAL_MOUSE_SCRIPT: &str = include_str!("../../../assets/inject/pet-real-mouse-inject.js");
 const STEPWISE_SCRIPT: &str = include_str!("../../../assets/inject/stepwise-inject.js");
 pub const DIAGNOSTIC_BUILD_ID: &str = "diag-20260518-1";
 
@@ -15,6 +16,119 @@ pub fn renderer_script() -> &'static str {
 
 pub fn stepwise_script() -> &'static str {
     STEPWISE_SCRIPT
+}
+
+pub fn pet_real_mouse_script() -> &'static str {
+    PET_REAL_MOUSE_SCRIPT
+}
+
+const PET_V2_SPRITE_DETECTION_SCRIPT: &str = r#"
+  const isV2Sprite = async (mascot) => {
+    if (!mascot) return false;
+    if (Array.from(mascot.querySelectorAll("img")).some((image) =>
+      image.naturalWidth === 1536 && image.naturalHeight === 2288
+    )) return true;
+    for (const element of [mascot, ...mascot.querySelectorAll("*")]) {
+      const background = getComputedStyle(element).backgroundImage || "";
+      const match = background.match(/url\(["']?([^"')]+)/i);
+      if (!match) continue;
+      const source = match[1];
+      const cacheKey = "__codexPlusPetV2SpriteProbe";
+      let probe = window[cacheKey];
+      if (!probe || probe.source !== source) {
+        probe = { source, valid: false, pending: true };
+        probe.promise = (async () => {
+          try {
+            const image = new Image();
+            image.src = source;
+            await image.decode();
+            return image.naturalWidth === 1536 && image.naturalHeight === 2288;
+          } catch {
+            return false;
+          }
+        })().then((valid) => {
+          probe.valid = valid;
+          probe.pending = false;
+          return valid;
+        });
+        window[cacheKey] = probe;
+      }
+      const wasPending = probe.pending;
+      const valid = wasPending ? await probe.promise : probe.valid;
+      if (wasPending) {
+        const currentBackground = getComputedStyle(element).backgroundImage || "";
+        const currentMatch = currentBackground.match(/url\(["']?([^"')]+)/i);
+        if (currentMatch?.[1] !== source) continue;
+      }
+      if (window[cacheKey] === probe && valid) return true;
+    }
+    return false;
+  };
+"#;
+
+pub fn pet_real_mouse_capability_probe_script() -> String {
+    let mut script = String::from(
+        r#"
+(async () => {
+  const mascot = document.querySelector('[data-avatar-mascot="true"]');
+"#,
+    );
+    script.push_str(PET_V2_SPRITE_DETECTION_SCRIPT);
+    script.push_str(
+        r#"
+  if (!await isV2Sprite(mascot)) return false;
+  const urls = [
+    ...Array.from(document.scripts || []).map((script) => script.src),
+    ...Array.from(document.querySelectorAll("link[href]") || []).map((link) => link.href),
+    ...performance.getEntriesByType("resource").map((entry) => entry.name),
+  ].filter((url) => url && url.includes("/assets/") && url.split("?")[0].endsWith(".js"));
+  let dispatcherUrl = urls.find((url) => url.includes("vscode-api-"));
+  if (!dispatcherUrl) {
+    for (const url of urls) {
+      try {
+        const source = await fetch(url).then((response) => response.ok ? response.text() : "");
+        const match = source.match(/["'](\.\/(?:assets\/)?vscode-api-[^"']+\.js)["']/);
+        if (match) {
+          dispatcherUrl = new URL(match[1], url).href;
+          break;
+        }
+      } catch {
+      }
+    }
+  }
+  if (!dispatcherUrl) return false;
+  try {
+    const module = await import(dispatcherUrl);
+    return Object.values(module || {}).some((value) => value
+      && typeof value.dispatchHostMessage === "function"
+      && typeof value.subscribe === "function");
+  } catch {
+    return false;
+  }
+})()
+"#,
+    );
+    script
+}
+
+pub fn pet_real_mouse_update_script(x: i32, y: i32) -> String {
+    let mut script = String::from(
+        r#"(async () => {
+  const mascot = document.querySelector('[data-avatar-mascot="true"]');
+"#,
+    );
+    script.push_str(PET_V2_SPRITE_DETECTION_SCRIPT);
+    script.push_str(&format!(
+        r#"
+  return await isV2Sprite(mascot)
+    && window.__codexPlusPetRealMouseLook?.updateScreenPoint?.({{ x: {x}, y: {y} }}) === true;
+}})()"#
+    ));
+    script
+}
+
+pub fn pet_real_mouse_stop_script() -> &'static str {
+    "window.__codexPlusPetRealMouseLook?.stop?.();"
 }
 
 pub fn injection_script(helper_port: u16) -> String {

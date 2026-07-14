@@ -12,7 +12,7 @@ fn main() {
                             "queued": true
                         }),
                     );
-                    focus_existing_manager_window();
+                    codex_plus_manager_lib::focus_existing_manager_window();
                 }
                 Err(_error) => {
                     let _ = codex_plus_core::diagnostic_log::append_diagnostic_log(
@@ -47,23 +47,3 @@ fn main() {
     }
     codex_plus_manager_lib::run();
 }
-
-#[cfg(windows)]
-fn focus_existing_manager_window() {
-    let current_process_id = std::process::id();
-    for process in codex_plus_core::windows_enumerate_processes() {
-        if process.process_id == current_process_id {
-            continue;
-        }
-        if process
-            .exe_file
-            .eq_ignore_ascii_case("codex-plus-plus-manager.exe")
-        {
-            let _ = codex_plus_core::windows_activate_process_window(process.process_id);
-            break;
-        }
-    }
-}
-
-#[cfg(not(windows))]
-fn focus_existing_manager_window() {}

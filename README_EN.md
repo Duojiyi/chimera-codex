@@ -22,9 +22,9 @@ Get the installer for your computer from ChimeraHub support or your customer del
 - macOS Intel: `ChimeraPlusPlus-*-macos-x64.dmg`
 - macOS Apple Silicon: `ChimeraPlusPlus-*-macos-arm64.dmg`
 
-On the target Windows release, the installer creates only one `Chimera++` desktop shortcut for launching Codex. `Chimera++ 管理工具` remains available from the Start Menu for setup, diagnostics, and maintenance. The macOS package contains both apps; use `Chimera++.app` for daily launches.
+On the target Windows release, the installer creates only one `Chimera++` desktop shortcut. The desktop `Chimera++` shortcut opens the manager, and you can launch Codex from the manager. `Chimera++ 管理工具` also remains available from the Start Menu for setup, diagnostics, and maintenance. The macOS package contains both apps; use `Chimera++.app` for daily launches.
 
-- `Chimera++`: the daily launch entry.
+- `Chimera++`: the everyday manager and launch entry on Windows, and the daily launch entry on macOS.
 - `Chimera++ 管理工具`: the Key setup, diagnostics, repair, and advanced settings entry.
 
 ## First-run setup (ChimeraHub Key-first)

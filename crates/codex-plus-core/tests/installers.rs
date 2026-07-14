@@ -2,10 +2,11 @@ use codex_plus_core::branding::{
     DISPLAY_MANAGER_NAME, DISPLAY_SILENT_NAME, MACOS_BUILD_NUMBER, PUBLISHER,
 };
 use codex_plus_core::install::{
-    InstallOptions, LEGACY_MANAGER_NAME, LEGACY_SILENT_NAME, MANAGER_BINARY, MANAGER_NAME,
-    SILENT_BINARY, SILENT_NAME, app_bundle_names, build_macos_app_bundle,
-    build_windows_entrypoint_plan, companion_binary_path_from_exe, default_install_root_strategy,
-    detect_legacy_macos_apps, legacy_app_bundle_names, legacy_shortcut_names, shortcut_names,
+    InstallOptions, LEGACY_MANAGER_NAME, LEGACY_SILENT_NAME, MANAGER_BINARY, MANAGER_BUNDLE_ID,
+    MANAGER_NAME, SILENT_BINARY, SILENT_BUNDLE_ID, SILENT_NAME, app_bundle_names,
+    build_macos_app_bundle, build_windows_entrypoint_plan, companion_binary_path_from_exe,
+    default_install_root_strategy, detect_legacy_macos_apps, legacy_app_bundle_names,
+    legacy_shortcut_names, macos_companion_bundle_identifier_from_exe, shortcut_names,
     windows_legacy_shortcut_paths,
 };
 
@@ -475,6 +476,46 @@ fn companion_binary_path_resolves_macos_manager_app_next_to_silent_app() {
         std::path::PathBuf::from(
             "/Applications/Chimera++ 管理工具.app/Contents/MacOS/CodexPlusPlusManager"
         )
+    );
+}
+
+#[test]
+fn macos_companion_launch_uses_bundle_ids_from_app_translocation() {
+    let manager_exe = std::path::Path::new(
+        "/private/var/folders/x/AppTranslocation/manager-id/d/Chimera++ 管理工具.app/Contents/MacOS/CodexPlusPlusManager",
+    );
+    let silent_exe = std::path::Path::new(
+        "/private/var/folders/x/AppTranslocation/silent-id/d/Chimera++.app/Contents/MacOS/CodexPlusPlus",
+    );
+
+    assert_eq!(
+        macos_companion_bundle_identifier_from_exe(manager_exe, SILENT_BINARY),
+        Some(SILENT_BUNDLE_ID)
+    );
+    assert_eq!(
+        macos_companion_bundle_identifier_from_exe(
+            silent_exe,
+            codex_plus_core::install::MANAGER_BINARY,
+        ),
+        Some(MANAGER_BUNDLE_ID)
+    );
+
+    let legacy_manager_exe = std::path::Path::new(
+        "/private/var/folders/x/AppTranslocation/legacy-id/d/Codex++ 管理工具.app/Contents/MacOS/CodexPlusPlusManager",
+    );
+    assert_eq!(
+        macos_companion_bundle_identifier_from_exe(legacy_manager_exe, SILENT_BINARY),
+        None
+    );
+}
+
+#[test]
+fn macos_companion_launch_keeps_bare_binary_development_mode() {
+    let manager_exe = std::path::Path::new("/tmp/target/debug/codex-plus-plus-manager");
+
+    assert_eq!(
+        macos_companion_bundle_identifier_from_exe(manager_exe, SILENT_BINARY),
+        None
     );
 }
 
@@ -1474,6 +1515,8 @@ fn customer_readmes_are_key_first_and_do_not_use_github_or_manual_update_paths()
     assert!(chinese_customer.contains("只需要填写 API Key"));
     assert!(chinese_customer.contains("自动检查并安装更新"));
     assert!(chinese_customer.contains("桌面只创建一个 `Chimera++` 入口"));
+    assert!(chinese_customer.contains("桌面 `Chimera++` 入口会打开管理工具"));
+    assert!(chinese_customer.contains("从管理工具启动 Codex"));
     assert!(chinese_customer.contains(
         "当前开发快照尚未完成单桌面入口和自动更新强制策略验收，不得作为客户正式发行版交付"
     ));
@@ -1481,6 +1524,8 @@ fn customer_readmes_are_key_first_and_do_not_use_github_or_manual_update_paths()
     assert!(english_customer.contains("only need to enter your API Key"));
     assert!(english_customer.contains("checks for and installs updates automatically"));
     assert!(english_customer.contains("creates only one `Chimera++` desktop shortcut"));
+    assert!(english_customer.contains("desktop `Chimera++` shortcut opens the manager"));
+    assert!(english_customer.contains("launch Codex from the manager"));
     assert!(english_customer.contains("This development snapshot has not completed single-desktop-entry or automatic-update enforcement acceptance and must not be delivered as a customer release"));
 
     assert!(contains_ascii_token(
