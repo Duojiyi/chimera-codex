@@ -114,10 +114,77 @@ function Invoke-Git {
     if ($WorkDir) {
         $argList = @('-C', $WorkDir) + $Args
     }
-    $output = & git @argList 2>&1
-    $code = $LASTEXITCODE
-    $text = ($output | ForEach-Object { "$_" }) -join "`n"
-    return [pscustomobject]@{ Code = $code; Text = $text; Lines = @($output | ForEach-Object { "$_" }) }
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+    try {
+        $stdout = @(& git @argList 2> $stderrPath)
+        $code = $LASTEXITCODE
+        $stderr = @()
+        if ((Get-Item -LiteralPath $stderrPath).Length -gt 0) {
+            $stderr = @(Get-Content -LiteralPath $stderrPath -Encoding UTF8)
+        }
+        $stdoutLines = @($stdout | ForEach-Object { "$_" })
+        $stderrLines = @($stderr | ForEach-Object { "$_" })
+        $text = (@($stdoutLines) + @($stderrLines)) -join "`n"
+        return [pscustomobject]@{
+            Code        = $code
+            Text        = $text
+            Lines       = $stdoutLines
+            StdoutLines = $stdoutLines
+            StderrLines = $stderrLines
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $stderrPath -PathType Leaf) {
+            Remove-Item -LiteralPath $stderrPath -Force
+        }
+    }
+}
+
+function Get-IdentifiedGitArgs {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+
+    return @(
+        '-c', 'user.name=github-actions[bot]',
+        '-c', 'user.email=41898282+github-actions[bot]@users.noreply.github.com'
+    ) + $Arguments
+}
+
+function Get-MergeFailureDisposition {
+    param(
+        [Parameter(Mandatory)]$MergeResult,
+        [Parameter(Mandatory)]$ConflictResult
+    )
+
+    $files = @()
+    if ($ConflictResult.Code -eq 0) {
+        $files = @($ConflictResult.StdoutLines | Where-Object { $_ -match '\S' })
+    }
+    if ($files.Count -gt 0) {
+        return [pscustomobject]@{
+            Kind    = 'conflict'
+            Files   = $files
+            Message = "Merge conflict in: $($files -join ', ')"
+            ExitCode = 2
+            Action   = 'conflict'
+            ShouldAbort = $true
+        }
+    }
+
+    $message = "git merge failed (exit $($MergeResult.Code)): $($MergeResult.Text)"
+    if ($ConflictResult.Code -ne 0) {
+        $message += " | unable to inspect unmerged paths (exit $($ConflictResult.Code)): $($ConflictResult.Text)"
+    }
+    else {
+        $message += ' | no unmerged paths were recorded'
+    }
+    return [pscustomobject]@{
+        Kind    = 'error'
+        Files   = @()
+        Message = $message
+        ExitCode = 4
+        Action   = 'error'
+        ShouldAbort = $false
+    }
 }
 
 function Require-GitOk {
@@ -905,20 +972,29 @@ $cleanupWorktree = {
 
 try {
     Write-Info "Merging $upstreamTag into $syncBranch..."
-    $merge = Invoke-Git -WorkDir $worktreePath -Args @('merge', '--no-ff', '--no-edit', $upstreamTag)
+    $mergeArgs = Get-IdentifiedGitArgs -Arguments @('merge', '--no-ff', '--no-edit', $upstreamTag)
+    $merge = Invoke-Git -WorkDir $worktreePath -Args $mergeArgs
     if ($merge.Code -ne 0) {
         $conflicts = Invoke-Git -WorkDir $worktreePath -Args @('diff', '--name-only', '--diff-filter=U')
-        $files = @($conflicts.Lines | Where-Object { $_ -match '\S' })
+        $disposition = Get-MergeFailureDisposition -MergeResult $merge -ConflictResult $conflicts
+        if ($disposition.Kind -eq 'error') {
+            & $cleanupWorktree
+            Invoke-Git -Args @('branch', '-D', $syncBranch) | Out-Null
+            Set-ResultAndExit -Code $disposition.ExitCode -Message $disposition.Message -Action $disposition.Action
+        }
+        $files = @($disposition.Files)
         $script:Result.conflict_files = $files
-        Write-Err "Merge conflict in: $($files -join ', ')"
-        $abort = Invoke-Git -WorkDir $worktreePath -Args @('merge', '--abort')
-        if ($abort.Code -ne 0) {
-            Write-Err "git merge --abort failed: $($abort.Text)"
+        Write-Err $disposition.Message
+        if ($disposition.ShouldAbort) {
+            $abort = Invoke-Git -WorkDir $worktreePath -Args @('merge', '--abort')
+            if ($abort.Code -ne 0) {
+                Write-Err "git merge --abort failed: $($abort.Text)"
+            }
         }
         & $cleanupWorktree
         # Keep the sync branch deleted so a failed conflict does not leave a half branch
         Invoke-Git -Args @('branch', '-D', $syncBranch) | Out-Null
-        Set-ResultAndExit -Code 2 -Message "Merge conflict syncing $upstreamTag (aborted). Files: $($files -join ', ')" -Action 'conflict'
+        Set-ResultAndExit -Code $disposition.ExitCode -Message "Merge conflict syncing $upstreamTag (aborted). Files: $($files -join ', ')" -Action $disposition.Action
     }
 
     Restore-ProtectedWorkflowTree -Root $worktreePath -TrustedRef $mainSha
@@ -962,7 +1038,8 @@ Upstream: $upstreamTag ($tagSha)
 Sync branch: $syncBranch
 Gates: branding, lock validation, no-promo scan, cargo fmt --check, cargo test --locked
 "@
-    $commit = Invoke-Git -WorkDir $worktreePath -Args @('commit', '-m', $commitMsg)
+    $commitArgs = Get-IdentifiedGitArgs -Arguments @('commit', '-m', $commitMsg)
+    $commit = Invoke-Git -WorkDir $worktreePath -Args $commitArgs
     if ($commit.Code -ne 0) {
         # Possibly nothing to commit if merge already brought identical tree + version
         $porcelain = Invoke-Git -WorkDir $worktreePath -Args @('status', '--porcelain')
