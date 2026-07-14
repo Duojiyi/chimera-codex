@@ -13,3 +13,7 @@ Upstream portable companion arguments, macOS bundle-id launch with safe fallback
 README behavior now matches the NSIS contract: the only desktop shortcut targets the manager, the silent launcher is not a second desktop target, and both Start Menu entries remain available. Version values are aligned at `1.2.36-chimera.1` with macOS build `7`; the line-ending-only `src-tauri/Cargo.toml` working-tree entry is excluded from the index.
 
 No open diff or regression finding remains. Cloud required checks and Task 16 real-platform acceptance are the declared residual gates.
+
+## Cloud Red Follow-up
+
+The watcher diff now removes the broad `openai.chatgpt-desktop_` exception and relies on the structured, case-insensitive Codex package parser. Slash normalization, main-process executable matching, resources exclusion, and unrelated-package rejection remain intact. Existing fixtures cover the positive and negative boundaries that failed in the first PR run. Final result: PASS.

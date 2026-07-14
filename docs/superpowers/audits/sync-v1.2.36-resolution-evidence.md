@@ -41,3 +41,10 @@ No local dependency installation, frontend build, Rust workspace build, or packa
 - GitHub required checks must compile/test/package the Windows x64 and macOS x64/arm64 candidates.
 - The release must still be validated for tag target, exact eight assets, manifest metadata, digests, sizes, SHA-256 values, and anonymous downloads.
 - Task 16 real Windows/macOS install, upgrade, shortcut/icon-cache, launch, and uninstall acceptance remains user-side work and is not claimed complete.
+
+## Cloud Red Closure: Standalone ChatGPT Process Boundary
+
+- Red: PR #14 run `29355290937` reached the complete Rust suite and failed `codex_process_filter_keeps_openai_codex_package_processes`; actual IDs were `[21, 22]` instead of `[22]`. The merged upstream branch had widened the watcher to accept `OpenAI.ChatGPT-Desktop`, so an independent ChatGPT installation could be stopped as if it were Codex.
+- Green implementation: removed the extra `openai.chatgpt-desktop_` package match. The watcher now delegates exclusively to the existing Codex package parser, which accepts structured `OpenAI.Codex` and `OpenAI.CodexBeta` identities.
+- Lightweight regression: the dependency-free package-boundary contract, rustfmt, and scoped diff check passed. The unchanged Rust fixture covers standalone ChatGPT negative, Codex-package `ChatGPT.exe` positive, resources negative, and unrelated package negative cases.
+- The complete Green result remains the replacement cloud required-check run; no local Rust build was started.
