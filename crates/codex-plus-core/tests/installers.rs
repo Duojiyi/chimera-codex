@@ -968,6 +968,161 @@ fn frontend_behavior_tests_are_required_by_pr_and_release_gates() {
 }
 
 #[test]
+fn sync_workflow_contract_tests_are_required_by_pr_and_release_gates() {
+    fn job_section<'a>(workflow: &'a str, job_id: &str) -> &'a str {
+        let marker = format!("\n  {job_id}:");
+        let rest = workflow
+            .split_once(&marker)
+            .unwrap_or_else(|| panic!("missing workflow job {job_id}"))
+            .1;
+        let end = rest
+            .match_indices("\n  ")
+            .find_map(|(index, _)| {
+                let line = rest[index + 1..].lines().next()?;
+                let header = line.strip_prefix("  ")?;
+                if header.starts_with(' ') {
+                    return None;
+                }
+                let (candidate, suffix) = header.split_once(':')?;
+                let valid_id = !candidate.is_empty()
+                    && candidate
+                        .chars()
+                        .all(|character| character.is_ascii_alphanumeric() || character == '-');
+                let suffix = suffix.trim();
+                (valid_id && (suffix.is_empty() || suffix.starts_with('#'))).then_some(index)
+            })
+            .unwrap_or(rest.len());
+        &rest[..end]
+    }
+
+    fn job_level_values<'a>(job: &'a str, key: &str) -> Vec<&'a str> {
+        job.lines()
+            .filter_map(|line| {
+                let entry = line.strip_prefix("    ")?;
+                if matches!(entry.chars().next(), Some(character) if character.is_whitespace()) {
+                    return None;
+                }
+                let (raw_key, value) = entry.split_once(':')?;
+                let raw_key = raw_key.trim();
+                let normalized_key = if raw_key.len() >= 2
+                    && ((raw_key.starts_with('\'') && raw_key.ends_with('\''))
+                        || (raw_key.starts_with('"') && raw_key.ends_with('"')))
+                {
+                    &raw_key[1..raw_key.len() - 1]
+                } else {
+                    raw_key
+                };
+                (normalized_key == key).then(|| value.trim())
+            })
+            .collect()
+    }
+
+    fn has_trusted_gate_contract(
+        workflow: &str,
+        is_release: bool,
+        test_step: &str,
+        branding_self_test: &str,
+    ) -> bool {
+        let gates = job_section(workflow, "gates");
+        let expected_if = if is_release {
+            vec!["needs.resolve-version.outputs.should_publish == 'true'"]
+        } else {
+            Vec::new()
+        };
+        job_level_values(gates, "if") == expected_if
+            && job_level_values(gates, "continue-on-error").is_empty()
+            && gates.contains(test_step)
+            && gates.contains(branding_self_test)
+    }
+
+    let test_step = "      - name: Sync workflow contract tests\n        shell: pwsh\n        run: pwsh -NoProfile -File scripts/test-sync-upstream.ps1\n";
+    let branding_self_test = "      - name: Branding gate self-test\n        shell: pwsh\n        run: pwsh -NoProfile -File scripts/generate-branding.ps1 -SelfTest\n";
+
+    for workflow in [
+        "../../.github/workflows/pr-build.yml",
+        "../../.github/workflows/release-assets.yml",
+    ] {
+        let source = std::fs::read_to_string(workflow).expect("read workflow");
+        let is_release = workflow.ends_with("release-assets.yml");
+        assert!(
+            has_trusted_gate_contract(&source, is_release, test_step, branding_self_test),
+            "sync and branding self-tests must run in the blocking trusted gate: {workflow}"
+        );
+
+        for required_step in [test_step, branding_self_test] {
+            let missing = source.replacen(required_step, "", 1);
+            let decoy =
+                format!("{missing}\n  decoy-contract:\n    if: false\n    steps:\n{required_step}");
+            assert!(
+                !has_trusted_gate_contract(&decoy, is_release, test_step, branding_self_test),
+                "a non-required decoy job must not satisfy the trusted gate contract: {workflow}"
+            );
+
+            let commented_header_decoy = missing.replacen(
+                "\n  resolve-version:",
+                &format!("\n  resolve-version: # decoy\n{required_step}"),
+                1,
+            );
+            assert!(
+                !has_trusted_gate_contract(
+                    &commented_header_decoy,
+                    is_release,
+                    test_step,
+                    branding_self_test,
+                ),
+                "a commented next-job header must still terminate the trusted gate: {workflow}"
+            );
+        }
+
+        let skipped_gate = source.replacen(
+            "    name: Branding / ads / Rust / frontend\n",
+            "    name: Branding / ads / Rust / frontend\n    if: false\n",
+            1,
+        );
+        assert!(!has_trusted_gate_contract(
+            &skipped_gate,
+            is_release,
+            test_step,
+            branding_self_test,
+        ));
+
+        let non_blocking_gate = source.replacen(
+            "    name: Branding / ads / Rust / frontend\n",
+            "    name: Branding / ads / Rust / frontend\n    continue-on-error: true\n",
+            1,
+        );
+        assert!(!has_trusted_gate_contract(
+            &non_blocking_gate,
+            is_release,
+            test_step,
+            branding_self_test,
+        ));
+
+        for control in [
+            "    'if': false\n",
+            "    if : false\n",
+            "    \"continue-on-error\": true\n",
+            "    continue-on-error : true\n",
+        ] {
+            let equivalent_control = source.replacen(
+                "    name: Branding / ads / Rust / frontend\n",
+                &format!("    name: Branding / ads / Rust / frontend\n{control}"),
+                1,
+            );
+            assert!(
+                !has_trusted_gate_contract(
+                    &equivalent_control,
+                    is_release,
+                    test_step,
+                    branding_self_test,
+                ),
+                "equivalent YAML gate controls must fail closed: {control:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn first_release_publish_job_is_build_first_and_environment_gated() {
     let workflow = std::fs::read_to_string("../../.github/workflows/release-assets.yml")
         .expect("read release-assets workflow");
