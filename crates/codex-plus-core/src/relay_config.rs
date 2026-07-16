@@ -1804,7 +1804,10 @@ fn prepare_model_catalog_config(
     if let Some(external_catalog) = live_external_model_catalog(home) {
         let mut doc = parse_toml_document(config_text)?;
         doc["model_catalog_json"] = toml_edit::value(external_catalog);
-        return Ok(normalize_optional_toml(doc));
+        return Ok(PreparedModelCatalogConfig {
+            config_text: normalize_optional_toml(doc),
+            catalog: None,
+        });
     }
     let (model_list, model_windows): (String, std::collections::HashMap<String, String>) =
         if profile.model_windows.trim().is_empty() && profile.model_list.contains('[') {

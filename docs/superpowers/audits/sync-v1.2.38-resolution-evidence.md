@@ -35,6 +35,8 @@ No local dependency installation, Cargo/npm build, Rust test, frontend build, or
 
 Cloud run `29509860794` passed TypeScript, frontend behavior tests, and the frontend build, then reported one Rustfmt-only import ordering diff in `tests/protocol_proxy.rs`. The candidate was updated to the exact cloud formatter output with no behavior change.
 
+Cloud run `29510126822` passed Rustfmt and reached Rust compilation. It exposed one merged API mismatch: the external-model-catalog branch returned the upstream `String` instead of Chimera's `PreparedModelCatalogConfig`. The branch now wraps the unchanged config text with `catalog: None`, preserving the external pointer without scheduling a generated catalog write.
+
 ## Cloud Gates
 
 - Branding / ads / Rust / frontend required check.
