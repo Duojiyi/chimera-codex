@@ -39,6 +39,8 @@ Cloud run `29510126822` passed Rustfmt and reached Rust compilation. It exposed 
 
 Cloud run `29510605436` compiled production targets and exposed two test-only merge gaps: missing `Mutex`/`OnceLock` imports for the new paths test guard, and one session-list test still calling an upstream environment restore helper removed by Chimera. The imports are now test-gated, and the relation-only database test uses the same explicit home/backup injection contract as adjacent session tests.
 
+Cloud run `29511260941` compiled all tests and ran the core suite: 219 passed and one source-contract test failed because it split on the old `pub(crate) fn atomic_write` signature. The implementation still uses `create_new(true)` and all behavioral atomic-write safety tests passed. The source contract now anchors on visibility-independent `fn atomic_write(` and retains the same security assertion.
+
 ## Cloud Gates
 
 - Branding / ads / Rust / frontend required check.

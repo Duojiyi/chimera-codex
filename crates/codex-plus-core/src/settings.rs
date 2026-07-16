@@ -2082,7 +2082,7 @@ mod tests {
     fn atomic_write_opens_temp_with_create_new() {
         let source = include_str!("settings.rs");
         let atomic_write_source = source
-            .split("pub(crate) fn atomic_write")
+            .split("fn atomic_write(")
             .nth(1)
             .and_then(|source| source.split("fn cleanup_atomic_temp_after_error").next())
             .expect("atomic_write source");
