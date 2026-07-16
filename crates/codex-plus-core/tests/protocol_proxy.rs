@@ -1,8 +1,8 @@
 use codex_plus_core::protocol_proxy::{
     ChatSseToResponsesConverter, audio_transcriptions_url, chat_completion_to_response,
     chat_completion_to_response_with_request, chat_completions_url, chat_sse_to_responses_sse,
-    chat_sse_to_responses_sse_with_request, is_chat_completions_proxy_path, is_models_proxy_path,
-    is_audio_transcriptions_proxy_path, is_responses_proxy_path, models_url,
+    chat_sse_to_responses_sse_with_request, is_audio_transcriptions_proxy_path,
+    is_chat_completions_proxy_path, is_models_proxy_path, is_responses_proxy_path, models_url,
     open_audio_transcriptions_proxy_request, open_chat_completions_proxy_request_with_client,
     open_models_proxy_request_with_client, open_responses_proxy_request_with_client,
     open_responses_proxy_request_with_settings_and_client, responses_error_from_upstream,

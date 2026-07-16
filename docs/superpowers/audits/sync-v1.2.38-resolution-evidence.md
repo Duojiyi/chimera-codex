@@ -33,6 +33,8 @@ Date: 2026-07-16
 
 No local dependency installation, Cargo/npm build, Rust test, frontend build, or packaging build ran. Rustfmt was not available without rustup downloading the pinned toolchain, and the TypeScript i18n verifier requires uninstalled node modules; both remain cloud gates.
 
+Cloud run `29509860794` passed TypeScript, frontend behavior tests, and the frontend build, then reported one Rustfmt-only import ordering diff in `tests/protocol_proxy.rs`. The candidate was updated to the exact cloud formatter output with no behavior change.
+
 ## Cloud Gates
 
 - Branding / ads / Rust / frontend required check.
