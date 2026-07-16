@@ -37,6 +37,18 @@ fn protocol_proxy_tests_do_not_mutate_process_environment() {
 }
 
 #[test]
+fn settings_path_guard_tests_do_not_lock_the_guard_mutex_twice() {
+    let source = include_str!("protocol_proxy.rs");
+    assert!(
+        !source.contains(concat!(
+            "let _lock = settings_path_test_lock()",
+            ".lock()"
+        )),
+        "SettingsPathGuard::set owns the settings-path mutex; callers must not lock it first"
+    );
+}
+
+#[test]
 fn responses_request_converts_to_chat_completions() {
     let converted = responses_to_chat_completions(json!({
         "model": "gpt-5-mini",
@@ -1540,7 +1552,6 @@ fn aggregate_proxy_settings(
 }
 #[tokio::test]
 async fn audio_transcriptions_proxy_forwards_multipart_body() {
-    let _lock = settings_path_test_lock().lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let _guard = SettingsPathGuard::set(temp.path().join("settings.json"));
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
