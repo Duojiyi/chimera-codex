@@ -160,6 +160,25 @@ Assert-Equal (
     $identifiedCommitArgs -join '|'
 ) '-c|user.name=github-actions[bot]|-c|user.email=41898282+github-actions[bot]@users.noreply.github.com|commit|-m|sync: merge upstream v1.2.36' 'candidate commit identity'
 
+$baselineCommit = (Invoke-Git -Args @(
+    'log', 'HEAD', '--format=%H', '--grep=^release: v1.2.36$', '-1'
+)).Text.Trim()
+if ($baselineCommit -notmatch '^[0-9a-f]{40}$') {
+    throw 'test fixture must resolve the upstream v1.2.36 release commit from candidate history'
+}
+
+$squashedBaseline = Get-UpstreamBaselineAncestryDisposition `
+    -Root $repoRoot `
+    -BaselineTag $baselineCommit `
+    -CandidateRef 'origin/main'
+Assert-Equal $squashedBaseline 'stitch' 'squash-merged main requires baseline ancestry stitch'
+
+$upstreamBaseline = Get-UpstreamBaselineAncestryDisposition `
+    -Root $repoRoot `
+    -BaselineTag $baselineCommit `
+    -CandidateRef 'HEAD'
+Assert-Equal $upstreamBaseline 'present' 'upstream descendant already contains baseline ancestry'
+
 $mergeConflict = Get-MergeFailureDisposition `
     -MergeResult ([pscustomobject]@{ Code = 1; Text = 'Automatic merge failed'; Lines = @(); StdoutLines = @(); StderrLines = @() }) `
     -ConflictResult ([pscustomobject]@{ Code = 0; Text = 'Cargo.toml'; Lines = @('Cargo.toml'); StdoutLines = @('Cargo.toml'); StderrLines = @() })
@@ -359,6 +378,25 @@ function Test-MergeExecutionSourceContract {
         $text.Contains('Set-ResultAndExit -Code $disposition.ExitCode -Message "Merge conflict syncing $upstreamTag (aborted). Files: $($files -join '', '')" -Action $disposition.Action')
 }
 
+function Test-BaselineAncestrySourceContract {
+    param([Parameter(Mandatory)][string]$Source)
+
+    $text = $Source.Replace("`r`n", "`n").Replace("`r", "`n")
+    $fetch = '$baselineFetch = Invoke-Git -Args @('
+    $stitch = '    Ensure-UpstreamBaselineAncestry -Root $worktreePath -BaselineTag $baselineTag'
+    $candidate = '    Write-Info "Merging $upstreamTag into $syncBranch..."'
+    $fetchIndex = $text.IndexOf($fetch, [System.StringComparison]::Ordinal)
+    $stitchIndex = $text.IndexOf($stitch, [System.StringComparison]::Ordinal)
+    $candidateIndex = $text.IndexOf($candidate, [System.StringComparison]::Ordinal)
+
+    return $text.Contains('function Get-UpstreamBaselineAncestryDisposition') -and
+        $text.Contains('function Ensure-UpstreamBaselineAncestry') -and
+        $text.Contains("'merge', '--no-ff', '--no-edit', '-s', 'ours', `$BaselineTag") -and
+        $fetchIndex -ge 0 -and
+        $fetchIndex -lt $stitchIndex -and
+        $stitchIndex -lt $candidateIndex
+}
+
 if (-not (Test-MergeExecutionSourceContract -Source $syncScriptSource)) {
     throw 'sync merge execution must use identity, separated stdout, and disposition code/action wiring'
 }
@@ -382,6 +420,24 @@ $errorActionMutation = $syncScriptSource.Replace(
 )
 if (Test-MergeExecutionSourceContract -Source $errorActionMutation) {
     throw 'merge execution error mapping mutation must fail the script contract'
+}
+
+if (-not (Test-BaselineAncestrySourceContract -Source $syncScriptSource)) {
+    throw 'sync candidate construction must stitch the fetched upstream baseline before candidate merge'
+}
+$missingStitchMutation = $syncScriptSource.Replace(
+    '    Ensure-UpstreamBaselineAncestry -Root $worktreePath -BaselineTag $baselineTag',
+    '    # baseline ancestry stitch removed'
+)
+if (Test-BaselineAncestrySourceContract -Source $missingStitchMutation) {
+    throw 'missing baseline ancestry stitch mutation must fail the script contract'
+}
+$lateStitchMutation = $syncScriptSource.Replace(
+    "    Ensure-UpstreamBaselineAncestry -Root `$worktreePath -BaselineTag `$baselineTag`n`n    Write-Info `"Merging `$upstreamTag into `$syncBranch...`"",
+    "    Write-Info `"Merging `$upstreamTag into `$syncBranch...`"`n    Ensure-UpstreamBaselineAncestry -Root `$worktreePath -BaselineTag `$baselineTag"
+)
+if (Test-BaselineAncestrySourceContract -Source $lateStitchMutation) {
+    throw 'post-candidate baseline ancestry stitch mutation must fail the script contract'
 }
 
 if (-not (Test-ProtectedScriptContract -Source $syncScriptSource)) {

@@ -87,6 +87,18 @@ pub struct RelayProfile {
         skip_serializing_if = "String::is_empty"
     )]
     pub model_windows: String,
+    #[serde(rename = "modelVlm", default, skip_serializing_if = "String::is_empty")]
+    pub model_vlm: String,
+    #[serde(
+        rename = "vlmApiKey",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub vlm_api_key: String,
+    #[serde(rename = "vlmModel", default)]
+    pub vlm_model: String,
+    #[serde(rename = "vlmBaseUrl", default)]
+    pub vlm_base_url: String,
     #[serde(
         rename = "userAgent",
         default,
@@ -148,6 +160,10 @@ impl Default for RelayProfile {
             model_insert_mode: RelayModelInsertMode::Patch,
             model_list: String::new(),
             model_windows: String::new(),
+            model_vlm: String::new(),
+            vlm_api_key: String::new(),
+            vlm_model: String::new(),
+            vlm_base_url: String::new(),
             user_agent: String::new(),
         }
     }
@@ -419,6 +435,10 @@ impl BackendSettings {
                 model_insert_mode: RelayModelInsertMode::Patch,
                 model_list: String::new(),
                 model_windows: String::new(),
+                model_vlm: String::new(),
+                vlm_api_key: String::new(),
+                vlm_model: String::new(),
+                vlm_base_url: String::new(),
                 user_agent: String::new(),
             };
         }
@@ -464,6 +484,10 @@ impl BackendSettings {
             model_insert_mode: RelayModelInsertMode::Patch,
             model_list: String::new(),
             model_windows: String::new(),
+            model_vlm: String::new(),
+            vlm_api_key: String::new(),
+            vlm_model: String::new(),
+            vlm_base_url: String::new(),
             user_agent: String::new(),
         }
     }
@@ -1294,7 +1318,7 @@ fn normalize_text_config(contents: String) -> String {
     }
 }
 
-pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     atomic_write_inner(
         path,
         bytes,
@@ -1961,6 +1985,19 @@ mod tests {
     }
 
     #[test]
+    fn atomic_write_replaces_existing_file_and_removes_temp_file() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, b"old").unwrap();
+
+        atomic_write(&path, b"new").unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        assert!(!dir.join("settings.json.tmp").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn settings_default_matches_expected_behavior() {
         let settings = BackendSettings::default();
         assert!(!settings.provider_sync_enabled);
@@ -2045,7 +2082,7 @@ mod tests {
     fn atomic_write_opens_temp_with_create_new() {
         let source = include_str!("settings.rs");
         let atomic_write_source = source
-            .split("pub(crate) fn atomic_write")
+            .split("fn atomic_write(")
             .nth(1)
             .and_then(|source| source.split("fn cleanup_atomic_temp_after_error").next())
             .expect("atomic_write source");

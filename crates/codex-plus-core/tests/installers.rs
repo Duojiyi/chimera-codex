@@ -981,11 +981,11 @@ fn release_gate_builds_frontend_before_rust_tests() {
 fn frontend_behavior_tests_are_required_by_pr_and_release_gates() {
     let package = std::fs::read_to_string("../../apps/codex-plus-manager/package.json")
         .expect("read manager package.json");
-    assert!(
-        package.contains(
-            r#""test": "node --test src/entrypoint-health.test.ts src/model-windows.test.ts""#
-        ),
-        "manager package must expose the deterministic frontend behavior suite"
+    let package: serde_json::Value =
+        serde_json::from_str(&package).expect("parse manager package.json");
+    assert_eq!(
+        package["scripts"]["test"], r#"node --test "src/*.test.ts""#,
+        "manager package must run every deterministic frontend behavior test"
     );
 
     for workflow in [

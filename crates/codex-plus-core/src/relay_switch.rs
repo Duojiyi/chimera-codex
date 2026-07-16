@@ -24,6 +24,7 @@ pub fn switch_relay_profile_in_home(
     if !selected_settings.relay_profiles_enabled {
         anyhow::bail!("供应商配置总开关已关闭，未写入 config.toml / auth.json。");
     }
+    crate::codex_app_state::capture_app_state_snapshot_nonfatal(home, "relay_switch.before");
 
     let original_settings_snapshot = store.snapshot_bytes()?;
     let selected_profile = selected_settings.active_relay_profile();
@@ -42,7 +43,13 @@ pub fn switch_relay_profile_in_home(
     })();
 
     match switch_result {
-        Ok(result) => Ok(result),
+        Ok(result) => {
+            crate::codex_app_state::sync_app_state_after_provider_switch_nonfatal(
+                home,
+                "relay_switch.after",
+            );
+            Ok(result)
+        }
         Err(error) => {
             let settings_rollback = store.restore_snapshot(original_settings_snapshot.as_deref());
             let live_rollback = live_snapshot.restore();
