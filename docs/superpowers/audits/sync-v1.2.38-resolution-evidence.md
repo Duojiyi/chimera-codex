@@ -37,6 +37,8 @@ Cloud run `29509860794` passed TypeScript, frontend behavior tests, and the fron
 
 Cloud run `29510126822` passed Rustfmt and reached Rust compilation. It exposed one merged API mismatch: the external-model-catalog branch returned the upstream `String` instead of Chimera's `PreparedModelCatalogConfig`. The branch now wraps the unchanged config text with `catalog: None`, preserving the external pointer without scheduling a generated catalog write.
 
+Cloud run `29510605436` compiled production targets and exposed two test-only merge gaps: missing `Mutex`/`OnceLock` imports for the new paths test guard, and one session-list test still calling an upstream environment restore helper removed by Chimera. The imports are now test-gated, and the relation-only database test uses the same explicit home/backup injection contract as adjacent session tests.
+
 ## Cloud Gates
 
 - Branding / ads / Rust / frontend required check.

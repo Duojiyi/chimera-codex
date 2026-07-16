@@ -4790,6 +4790,7 @@ mod tests {
         for name in [
             "delete_local_session_falls_back_when_requested_db_no_longer_contains_thread",
             "list_local_sessions_deduplicates_threads_across_current_and_legacy_dbs",
+            "list_local_sessions_ignores_relation_only_thread_reference_dbs",
             "delete_local_session_removes_duplicate_threads_from_all_candidate_dbs",
         ] {
             let marker = format!("fn {name}()");
@@ -4952,9 +4953,7 @@ mod tests {
 
     #[test]
     fn list_local_sessions_ignores_relation_only_thread_reference_dbs() {
-        let _codex_home_guard = lock_codex_home_for_test();
         let temp = tempfile::tempdir().unwrap();
-        let previous_codex_home = std::env::var_os("CODEX_HOME");
         let codex_home = temp.path().join("codex-home");
         let sqlite_dir = codex_home.join("sqlite");
         std::fs::create_dir_all(&sqlite_dir).unwrap();
@@ -4973,11 +4972,12 @@ mod tests {
             .unwrap();
         drop(relation);
 
-        unsafe {
-            std::env::set_var("CODEX_HOME", &codex_home);
-        }
-        let result = list_local_sessions(None);
-        restore_codex_home(previous_codex_home);
+        let result = list_local_sessions_in_home(
+            &codex_home,
+            &temp.path().join("backups"),
+            0,
+            DEFAULT_LOCAL_SESSIONS_PAGE_SIZE,
+        );
 
         assert_eq!(result.status, "ok");
         assert_eq!(result.payload.sessions.len(), 1);
