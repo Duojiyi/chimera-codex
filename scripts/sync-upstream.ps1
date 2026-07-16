@@ -149,6 +149,45 @@ function Get-IdentifiedGitArgs {
     ) + $Arguments
 }
 
+function Get-UpstreamBaselineAncestryDisposition {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$BaselineTag,
+        [string]$CandidateRef = 'HEAD'
+    )
+
+    $probe = Invoke-Git -WorkDir $Root -Args @(
+        'merge-base', '--is-ancestor', $BaselineTag, $CandidateRef
+    )
+    if ($probe.Code -eq 0) { return 'present' }
+    if ($probe.Code -eq 1) { return 'stitch' }
+    throw "unable to inspect upstream baseline ancestry for ${BaselineTag}: $($probe.Text)"
+}
+
+function Ensure-UpstreamBaselineAncestry {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$BaselineTag
+    )
+
+    $disposition = Get-UpstreamBaselineAncestryDisposition `
+        -Root $Root `
+        -BaselineTag $BaselineTag
+    if ($disposition -eq 'present') {
+        Write-Info "Upstream baseline ancestry already contains $BaselineTag"
+        return
+    }
+
+    Write-Info "Recording squash-merged upstream baseline ancestry for $BaselineTag"
+    $mergeArgs = Get-IdentifiedGitArgs -Arguments @(
+        'merge', '--no-ff', '--no-edit', '-s', 'ours', $BaselineTag
+    )
+    $merge = Invoke-Git -WorkDir $Root -Args $mergeArgs
+    if ($merge.Code -ne 0) {
+        throw "failed to record upstream baseline ancestry for ${BaselineTag}: $($merge.Text)"
+    }
+}
+
 function Get-MergeFailureDisposition {
     param(
         [Parameter(Mandatory)]$MergeResult,
@@ -936,6 +975,17 @@ if (-not $tagSha) {
 $script:Result.upstream_sha = $tagSha
 Write-Info "resolved $upstreamTag -> $tagSha"
 
+$baselineTag = "v$baselineVersion"
+$baselineFetch = Invoke-Git -Args @(
+    'fetch', 'upstream', "refs/tags/${baselineTag}:refs/tags/${baselineTag}", '--no-tags'
+)
+if ($baselineFetch.Code -ne 0) {
+    $baselineFetch2 = Invoke-Git -Args @('fetch', 'upstream', 'tag', $baselineTag)
+    if ($baselineFetch2.Code -ne 0) {
+        Set-ResultAndExit -Code 4 -Message "Failed to fetch upstream baseline tag ${baselineTag}: $($baselineFetch.Text) | $($baselineFetch2.Text)" -Action 'error'
+    }
+}
+
 $mainRef = 'main'
 $mainSha = (Invoke-Git -Args @('rev-parse', $mainRef)).Text.Trim()
 if (-not $mainSha -or (Invoke-Git -Args @('rev-parse', $mainRef)).Code -ne 0) {
@@ -971,6 +1021,8 @@ $cleanupWorktree = {
 }
 
 try {
+    Ensure-UpstreamBaselineAncestry -Root $worktreePath -BaselineTag $baselineTag
+
     Write-Info "Merging $upstreamTag into $syncBranch..."
     $mergeArgs = Get-IdentifiedGitArgs -Arguments @('merge', '--no-ff', '--no-edit', $upstreamTag)
     $merge = Invoke-Git -WorkDir $worktreePath -Args $mergeArgs
