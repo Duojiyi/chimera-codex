@@ -1018,7 +1018,7 @@ fn session_index_cleanup_write_failure_reports_backup_and_preserves_original() {
     let preview = preview_session_index_cleanup(Some(&home)).unwrap();
     let _deny_atomic_replace = fs::OpenOptions::new()
         .read(true)
-        .share_mode(0)
+        .share_mode(1) // FILE_SHARE_READ: allow verification reads, deny replacement.
         .open(&index_path)
         .unwrap();
 
