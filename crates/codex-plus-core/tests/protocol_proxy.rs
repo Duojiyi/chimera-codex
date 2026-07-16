@@ -40,10 +40,7 @@ fn protocol_proxy_tests_do_not_mutate_process_environment() {
 fn settings_path_guard_tests_do_not_lock_the_guard_mutex_twice() {
     let source = include_str!("protocol_proxy.rs");
     assert!(
-        !source.contains(concat!(
-            "let _lock = settings_path_test_lock()",
-            ".lock()"
-        )),
+        !source.contains(concat!("let _lock = settings_path_test_lock()", ".lock()")),
         "SettingsPathGuard::set owns the settings-path mutex; callers must not lock it first"
     );
 }
