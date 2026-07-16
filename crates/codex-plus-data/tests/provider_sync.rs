@@ -1035,8 +1035,5 @@ fn session_index_cleanup_write_failure_reports_backup_and_preserves_original() {
         fs::read_to_string(backup.join("session_index.jsonl")).unwrap(),
         original
     );
-    assert_eq!(
-        fs::read_to_string(index_path).unwrap(),
-        original
-    );
+    assert_eq!(fs::read_to_string(index_path).unwrap(), original);
 }
