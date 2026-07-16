@@ -41,6 +41,8 @@ Cloud run `29510605436` compiled production targets and exposed two test-only me
 
 Cloud run `29511260941` compiled all tests and ran the core suite: 219 passed and one source-contract test failed because it split on the old `pub(crate) fn atomic_write` signature. The implementation still uses `create_new(true)` and all behavioral atomic-write safety tests passed. The source contract now anchors on visibility-independent `fn atomic_write(` and retains the same security assertion.
 
+Cloud run `29511983032` passed the 220-test core library suite and reached installer contracts. One installer contract still required the previous explicit two-file npm test command, while the merged package uses upstream's broader `node --test "src/*.test.ts"` and the cloud frontend test step passed. The contract now parses `package.json` structurally and requires the all-test-files command; PR and release workflow ordering assertions remain unchanged.
+
 ## Cloud Gates
 
 - Branding / ads / Rust / frontend required check.
