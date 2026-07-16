@@ -1003,16 +1003,24 @@ fn session_index_preview_preserves_relation_only_sqlite_thread_references() {
     assert!(preview.candidates.is_empty());
 }
 
+#[cfg(windows)]
 #[test]
 fn session_index_cleanup_write_failure_reports_backup_and_preserves_original() {
+    use std::os::windows::fs::OpenOptionsExt;
+
     let tmp = tempdir().unwrap();
     let home = tmp.path().join(".codex");
     fs::create_dir(&home).unwrap();
     let stale_id = "019f4e36-490e-7ae0-8e78-a8b3ab33a428";
     let original = format!("{}\n", session_index_line(stale_id, "stale"));
-    fs::write(home.join("session_index.jsonl"), &original).unwrap();
+    let index_path = home.join("session_index.jsonl");
+    fs::write(&index_path, &original).unwrap();
     let preview = preview_session_index_cleanup(Some(&home)).unwrap();
-    fs::create_dir(home.join("session_index.jsonl.tmp")).unwrap();
+    let _deny_atomic_replace = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&index_path)
+        .unwrap();
 
     let error = apply_session_index_cleanup(
         Some(&home),
@@ -1028,7 +1036,7 @@ fn session_index_cleanup_write_failure_reports_backup_and_preserves_original() {
         original
     );
     assert_eq!(
-        fs::read_to_string(home.join("session_index.jsonl")).unwrap(),
+        fs::read_to_string(index_path).unwrap(),
         original
     );
 }
