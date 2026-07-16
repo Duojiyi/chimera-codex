@@ -984,8 +984,7 @@ fn frontend_behavior_tests_are_required_by_pr_and_release_gates() {
     let package: serde_json::Value =
         serde_json::from_str(&package).expect("parse manager package.json");
     assert_eq!(
-        package["scripts"]["test"],
-        r#"node --test "src/*.test.ts""#,
+        package["scripts"]["test"], r#"node --test "src/*.test.ts""#,
         "manager package must run every deterministic frontend behavior test"
     );
 
