@@ -266,7 +266,7 @@ fn session_index_cleanup_process_guard_blocks_desktop_apps_but_not_cli() {
         find_session_index_cleanup_blocking_processes_from_snapshot(&processes),
         vec![11, 12, 13]
     );
-    assert_eq!(find_codex_processes_from_snapshot(&processes), vec![11, 13]);
+    assert_eq!(find_codex_processes_from_snapshot(&processes), vec![13]);
 }
 
 #[cfg(windows)]
