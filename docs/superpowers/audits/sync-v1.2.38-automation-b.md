@@ -18,4 +18,4 @@ The patch is minimal and ordered correctly. Cloud required checks remain respons
 
 ## Cloud Red Follow-up
 
-The test fixture no longer assumes upstream tag refs exist in the Chimera origin. It still exercises the real Git graph and fails closed if the baseline release commit cannot be resolved from candidate history. This makes the contract portable to both developer clones and GitHub PR merge checkouts.
+The test fixture no longer assumes upstream tag refs exist in the Chimera origin. It resolves the baseline by an anchored exact release subject, still exercises the real Git graph, and fails closed if that commit cannot be resolved from candidate history. This makes the contract portable to both developer clones and GitHub PR merge checkouts without matching Chimera sync commit descriptions.

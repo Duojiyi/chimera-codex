@@ -161,7 +161,7 @@ Assert-Equal (
 ) '-c|user.name=github-actions[bot]|-c|user.email=41898282+github-actions[bot]@users.noreply.github.com|commit|-m|sync: merge upstream v1.2.36' 'candidate commit identity'
 
 $baselineCommit = (Invoke-Git -Args @(
-    'log', 'HEAD', '--format=%H', '--fixed-strings', '--grep=release: v1.2.36', '-1'
+    'log', 'HEAD', '--format=%H', '--grep=^release: v1.2.36$', '-1'
 )).Text.Trim()
 if ($baselineCommit -notmatch '^[0-9a-f]{40}$') {
     throw 'test fixture must resolve the upstream v1.2.36 release commit from candidate history'
