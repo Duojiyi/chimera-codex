@@ -160,16 +160,23 @@ Assert-Equal (
     $identifiedCommitArgs -join '|'
 ) '-c|user.name=github-actions[bot]|-c|user.email=41898282+github-actions[bot]@users.noreply.github.com|commit|-m|sync: merge upstream v1.2.36' 'candidate commit identity'
 
+$baselineCommit = (Invoke-Git -Args @(
+    'log', 'HEAD', '--format=%H', '--fixed-strings', '--grep=release: v1.2.36', '-1'
+)).Text.Trim()
+if ($baselineCommit -notmatch '^[0-9a-f]{40}$') {
+    throw 'test fixture must resolve the upstream v1.2.36 release commit from candidate history'
+}
+
 $squashedBaseline = Get-UpstreamBaselineAncestryDisposition `
     -Root $repoRoot `
-    -BaselineTag 'v1.2.36' `
+    -BaselineTag $baselineCommit `
     -CandidateRef 'origin/main'
 Assert-Equal $squashedBaseline 'stitch' 'squash-merged main requires baseline ancestry stitch'
 
 $upstreamBaseline = Get-UpstreamBaselineAncestryDisposition `
     -Root $repoRoot `
-    -BaselineTag 'v1.2.36' `
-    -CandidateRef 'v1.2.38'
+    -BaselineTag $baselineCommit `
+    -CandidateRef 'HEAD'
 Assert-Equal $upstreamBaseline 'present' 'upstream descendant already contains baseline ancestry'
 
 $mergeConflict = Get-MergeFailureDisposition `

@@ -16,3 +16,6 @@ Result: PASS
 
 The patch is minimal and ordered correctly. Cloud required checks remain responsible for compilation, tests, and platform packaging. No open boundary or regression finding remains.
 
+## Cloud Red Follow-up
+
+The test fixture no longer assumes upstream tag refs exist in the Chimera origin. It still exercises the real Git graph and fails closed if the baseline release commit cannot be resolved from candidate history. This makes the contract portable to both developer clones and GitHub PR merge checkouts.

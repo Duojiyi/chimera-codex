@@ -16,3 +16,6 @@ Result: PASS
 
 The change addresses the reason v1.2.37 and v1.2.38 repeatedly stopped at the merge gate. It does not weaken conflict handling, bypass required checks, push to upstream, or publish directly. No open requirements finding remains.
 
+## Cloud Red Follow-up
+
+PR #17 run `29509556134` showed that an Actions checkout of the standalone Chimera repository has the upstream release commits through candidate ancestry but not the original upstream tag refs. The regression test now resolves the v1.2.36 release commit from `HEAD` history and tests that SHA against `origin/main` and `HEAD`; production behavior remains unchanged.
