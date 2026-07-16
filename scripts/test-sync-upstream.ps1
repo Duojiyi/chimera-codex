@@ -160,11 +160,11 @@ Assert-Equal (
     $identifiedCommitArgs -join '|'
 ) '-c|user.name=github-actions[bot]|-c|user.email=41898282+github-actions[bot]@users.noreply.github.com|commit|-m|sync: merge upstream v1.2.36' 'candidate commit identity'
 
-$baselineCommit = (Invoke-Git -Args @(
-    'log', 'HEAD', '--format=%H', '--grep=^release: v1.2.36$', '-1'
-)).Text.Trim()
+$fixtureWorkspaceVersion = Get-WorkspaceCargoVersion -Root $repoRoot
+$fixtureBaselineTag = "v$(Get-FormalBaselineVersion -WorkspaceVersion $fixtureWorkspaceVersion)"
+$baselineCommit = (Invoke-Git -Args @('rev-parse', $fixtureBaselineTag)).Text.Trim()
 if ($baselineCommit -notmatch '^[0-9a-f]{40}$') {
-    throw 'test fixture must resolve the upstream v1.2.36 release commit from candidate history'
+    throw "test fixture must resolve current upstream baseline tag $fixtureBaselineTag"
 }
 
 $squashedBaseline = Get-UpstreamBaselineAncestryDisposition `
@@ -176,8 +176,8 @@ Assert-Equal $squashedBaseline 'stitch' 'squash-merged main requires baseline an
 $upstreamBaseline = Get-UpstreamBaselineAncestryDisposition `
     -Root $repoRoot `
     -BaselineTag $baselineCommit `
-    -CandidateRef 'HEAD'
-Assert-Equal $upstreamBaseline 'present' 'upstream descendant already contains baseline ancestry'
+    -CandidateRef $fixtureBaselineTag
+Assert-Equal $upstreamBaseline 'present' 'upstream baseline tag contains its own ancestry'
 
 $mergeConflict = Get-MergeFailureDisposition `
     -MergeResult ([pscustomobject]@{ Code = 1; Text = 'Automatic merge failed'; Lines = @(); StdoutLines = @(); StderrLines = @() }) `
