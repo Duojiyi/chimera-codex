@@ -160,24 +160,39 @@ Assert-Equal (
     $identifiedCommitArgs -join '|'
 ) '-c|user.name=github-actions[bot]|-c|user.email=41898282+github-actions[bot]@users.noreply.github.com|commit|-m|sync: merge upstream v1.2.36' 'candidate commit identity'
 
-$fixtureWorkspaceVersion = Get-WorkspaceCargoVersion -Root $repoRoot
-$fixtureBaselineTag = "v$(Get-FormalBaselineVersion -WorkspaceVersion $fixtureWorkspaceVersion)"
-$baselineCommit = (Invoke-Git -Args @('rev-parse', $fixtureBaselineTag)).Text.Trim()
-if ($baselineCommit -notmatch '^[0-9a-f]{40}$') {
-    throw "test fixture must resolve current upstream baseline tag $fixtureBaselineTag"
+$ancestryFixture = Join-Path ([System.IO.Path]::GetTempPath()) ("chimera-ancestry-" + [guid]::NewGuid().ToString('N'))
+try {
+    New-Item -ItemType Directory -Path $ancestryFixture | Out-Null
+    Assert-Equal (Invoke-Git -WorkDir $ancestryFixture -Args @('init')).Code 0 'ancestry fixture init'
+    Set-Content -LiteralPath (Join-Path $ancestryFixture 'baseline.txt') -Value 'upstream baseline'
+    Assert-Equal (Invoke-Git -WorkDir $ancestryFixture -Args @('add', 'baseline.txt')).Code 0 'ancestry fixture add baseline'
+    $baselineCommitArgs = Get-IdentifiedGitArgs -Arguments @('commit', '-m', 'upstream baseline')
+    Assert-Equal (Invoke-Git -WorkDir $ancestryFixture -Args $baselineCommitArgs).Code 0 'ancestry fixture commit baseline'
+    $baselineCommit = (Invoke-Git -WorkDir $ancestryFixture -Args @('rev-parse', 'HEAD')).Text.Trim()
+
+    Assert-Equal (Invoke-Git -WorkDir $ancestryFixture -Args @('checkout', '--orphan', 'squashed-main')).Code 0 'ancestry fixture orphan branch'
+    Remove-Item -LiteralPath (Join-Path $ancestryFixture 'baseline.txt')
+    Set-Content -LiteralPath (Join-Path $ancestryFixture 'main.txt') -Value 'squashed main'
+    Assert-Equal (Invoke-Git -WorkDir $ancestryFixture -Args @('add', '-A')).Code 0 'ancestry fixture add main'
+    $mainCommitArgs = Get-IdentifiedGitArgs -Arguments @('commit', '-m', 'squashed main')
+    Assert-Equal (Invoke-Git -WorkDir $ancestryFixture -Args $mainCommitArgs).Code 0 'ancestry fixture commit main'
+
+    $squashedBaseline = Get-UpstreamBaselineAncestryDisposition `
+        -Root $ancestryFixture `
+        -BaselineTag $baselineCommit
+    Assert-Equal $squashedBaseline 'stitch' 'squash-merged main requires baseline ancestry stitch'
+
+    $upstreamBaseline = Get-UpstreamBaselineAncestryDisposition `
+        -Root $ancestryFixture `
+        -BaselineTag $baselineCommit `
+        -CandidateRef $baselineCommit
+    Assert-Equal $upstreamBaseline 'present' 'upstream baseline contains its own ancestry'
 }
-
-$squashedBaseline = Get-UpstreamBaselineAncestryDisposition `
-    -Root $repoRoot `
-    -BaselineTag $baselineCommit `
-    -CandidateRef 'origin/main'
-Assert-Equal $squashedBaseline 'stitch' 'squash-merged main requires baseline ancestry stitch'
-
-$upstreamBaseline = Get-UpstreamBaselineAncestryDisposition `
-    -Root $repoRoot `
-    -BaselineTag $baselineCommit `
-    -CandidateRef $fixtureBaselineTag
-Assert-Equal $upstreamBaseline 'present' 'upstream baseline tag contains its own ancestry'
+finally {
+    if (Test-Path -LiteralPath $ancestryFixture) {
+        Remove-Item -LiteralPath $ancestryFixture -Recurse -Force
+    }
+}
 
 $mergeConflict = Get-MergeFailureDisposition `
     -MergeResult ([pscustomobject]@{ Code = 1; Text = 'Automatic merge failed'; Lines = @(); StdoutLines = @(); StderrLines = @() }) `
