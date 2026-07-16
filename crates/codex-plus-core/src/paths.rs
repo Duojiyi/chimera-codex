@@ -52,6 +52,17 @@ thread_local! {
     static SETTINGS_PATH_FOR_TESTS: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
+#[cfg(test)]
+static SETTINGS_PATH_TEST_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn settings_path_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    SETTINGS_PATH_TEST_GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap()
+}
+
 pub fn set_settings_path_for_tests(path: Option<PathBuf>) -> Option<PathBuf> {
     SETTINGS_PATH_FOR_TESTS.with(|current| std::mem::replace(&mut *current.borrow_mut(), path))
 }
@@ -62,6 +73,7 @@ mod tests {
 
     #[test]
     fn default_settings_path_uses_app_state_directory() {
+        let _guard = settings_path_test_guard();
         let path = default_settings_path();
 
         assert!(path.ends_with(".codex-session-delete/settings.json"));

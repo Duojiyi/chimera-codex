@@ -7,13 +7,13 @@
 {"path":"apps/codex-plus-manager/src/branding.generated.ts","pattern":"github","lineNumber":7,"line":"export const LATEST_JSON_URL = 'https://github.com/Duojiyi/chimera-codex/releases/latest/download/latest.json';","reason":"generated fixed background updater manifest URL; customer UI scan must allow only this exact line"}
 
 # Embedded #[cfg(test)] fixtures in provider import URL parser
-{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":652,"line":"let url = \"codexplusplus://v1/import/provider?resource=provider&name=JOJO%20Code&baseUrl=https%3A%2F%2Fjojocode.com%2Fv1&apiKey=sk-test&wireApi=responses&relayMode=pureApi&configContents=bW9kZWxfcHJvdmlkZXIgPSAiQ29kZXhQbHVzUGx1cyIK&authContents=eyJPUEVOQUlfQVBJX0tFWSI6InNrLXRlc3QifQo%3D\";","reason":"cfg(test) URL parser fixture; not a production endpoint"}
-{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":657,"line":"assert_eq!(request.base_url, \"https://jojocode.com/v1\");","reason":"cfg(test) URL parser assertion"}
-{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":678,"line":"base_url: \"https://jojocode.com/v1/\".to_string(),","reason":"cfg(test) provider import fixture"}
-{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":702,"line":"\"https://jojocode.com/v1\"","reason":"cfg(test) provider import assertion"}
-{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":757,"line":"base_url: \"https://jojocode.com/v1\".to_string(),","reason":"cfg(test) pending import fixture"}
-{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":813,"line":"assert_eq!(pending.base_url, \"https://jojocode.com/v1\");","reason":"cfg(test) pending import assertion"}
-{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":912,"line":"base_url: \"https://jojocode.com/v1\".to_string(),","reason":"cfg(test) confirm pending import fixture"}
+{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":656,"line":"let url = \"codexplusplus://v1/import/provider?resource=provider&name=JOJO%20Code&baseUrl=https%3A%2F%2Fjojocode.com%2Fv1&apiKey=sk-test&wireApi=responses&relayMode=pureApi&configContents=bW9kZWxfcHJvdmlkZXIgPSAiQ29kZXhQbHVzUGx1cyIK&authContents=eyJPUEVOQUlfQVBJX0tFWSI6InNrLXRlc3QifQo%3D\";","reason":"cfg(test) URL parser fixture; not a production endpoint"}
+{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":661,"line":"assert_eq!(request.base_url, \"https://jojocode.com/v1\");","reason":"cfg(test) URL parser assertion"}
+{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":682,"line":"base_url: \"https://jojocode.com/v1/\".to_string(),","reason":"cfg(test) provider import fixture"}
+{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":706,"line":"\"https://jojocode.com/v1\"","reason":"cfg(test) provider import assertion"}
+{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":761,"line":"base_url: \"https://jojocode.com/v1\".to_string(),","reason":"cfg(test) pending import fixture"}
+{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":817,"line":"assert_eq!(pending.base_url, \"https://jojocode.com/v1\");","reason":"cfg(test) pending import assertion"}
+{"path":"crates/codex-plus-core/src/provider_import.rs","pattern":"jojocode.com","lineNumber":916,"line":"base_url: \"https://jojocode.com/v1\".to_string(),","reason":"cfg(test) confirm pending import fixture"}
 
 # Legacy display names used only for detection/cleanup (Task 6)
 {"path":"crates/codex-plus-core/src/install/mod.rs","pattern":"Codex++ 管理工具","lineNumber":20,"line":"pub const LEGACY_MANAGER_NAME: &str = \"Codex++ 管理工具\";","reason":"legacy display name used only for detection and cleanup"}
