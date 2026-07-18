@@ -197,7 +197,7 @@ describe("dream skin theme helpers", () => {
     assert.match(app, /refresh_dream_skin_market/);
     assert.match(app, /install_dream_skin_market_theme/);
     assert.match(app, /主题市场/);
-    assert.match(app, /投稿主题/);
+    assert.doesNotMatch(app, /投稿主题|<Github|github\.com\/BigPizzaV3\/CodexPlusPlus-Themes/);
     assert.match(app, /onInstalled=\{\(\) => setThemeView\("local"\)\}/);
     assert.match(css, /\.dream-skin-market-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,/s);
     assert.match(css, /\.dream-skin-market-preview\s*\{[^}]*aspect-ratio:\s*16 \/ 9/s);
