@@ -10,3 +10,6 @@
 # Generated branding must stay LF to match scripts/generate-branding.ps1 -Check.
 crates/codex-plus-core/src/branding.rs text eol=lf
 apps/codex-plus-manager/src/branding.generated.ts text eol=lf
+# Preserve the original Snow Skin asset line endings for byte-exact bundling.
+assets/inject/upstream/snow-skin/*.js text eol=lf
+assets/inject/upstream/snow-skin/*.css text eol=lf
