@@ -47,8 +47,6 @@ export const EN_PLAIN: Record<string, string> = {
   "Dream Skin 状态": "Dream Skin status",
   "主题库": "Theme library",
   "恢复 Dream Skin 默认主题": "Restore the default Dream Skin theme",
-  "当前 Codex 无法实时更新完整外观，需要重启 Chimera++。是否立即重启？":
-    "Codex cannot update the complete appearance live. Restart Chimera++ now?",
   "恢复 Codex 默认配色": "Restore Codex default colors",
   "外观模式": "Appearance mode",
   "自动": "Auto",

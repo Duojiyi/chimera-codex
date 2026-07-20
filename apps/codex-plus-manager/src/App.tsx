@@ -2503,10 +2503,6 @@ export function App() {
         pendingThemeKey: "codex-original-appearance",
         pendingThemeName: t("Codex 原始外观"),
       });
-      if (result.state === "not_running") {
-        const confirmed = window.confirm(t("当前 Codex 无法实时更新完整外观，需要重启 Chimera++。是否立即重启？"));
-        if (confirmed) await restart();
-      }
     }
   };
 
