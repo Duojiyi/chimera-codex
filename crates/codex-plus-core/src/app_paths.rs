@@ -19,7 +19,6 @@ const STANDALONE_CODEX_EXECUTABLES: &[&str] = &["ChatGPT.exe", "Codex.exe", "cod
 const OPENAI_PACKAGE_FAMILY_NAMES: &[&str] = &[
     "OpenAI.Codex_2p2nqsd0c76g0",
     "OpenAI.CodexBeta_2p2nqsd0c76g0",
-    "OpenAI.ChatGPT-Desktop_2p2nqsd0c76g0",
 ];
 
 #[cfg(windows)]
@@ -38,12 +37,6 @@ const APP_PACKAGE_SPECS: &[AppPackageSpec] = &[
     },
     AppPackageSpec {
         identity: "OpenAI.CodexBeta",
-        app_id: "App",
-        executable_names: CODEX_PACKAGE_EXECUTABLES,
-        priority: 1,
-    },
-    AppPackageSpec {
-        identity: "OpenAI.ChatGPT-Desktop",
         app_id: "App",
         executable_names: CODEX_PACKAGE_EXECUTABLES,
         priority: 1,
