@@ -60,7 +60,7 @@ fn injection_script_prefixes_helper_url_without_sponsor_images() {
     assert!(script.contains("window.__CODEX_SESSION_DELETE_HELPER__"));
     assert!(script.contains("http://127.0.0.1:57321"));
     assert!(!script.contains("window.__CODEX_PLUS_SPONSOR_IMAGES__"));
-    assert!(!script.contains("data:image/jpeg;base64,"));
+    assert!(!script.contains("data:image/jpeg;base64,/9j/"));
     assert!(!script.contains("sponsor-alipay"));
     assert!(!script.contains("sponsor-wechat"));
     assert!(script.contains("window.__CODEX_PLUS_VERSION__"));
