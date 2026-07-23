@@ -9,6 +9,6 @@ latest_json_url = "https://github.com/Duojiyi/chimera-codex/releases/latest/down
 default_relay_base_url = "https://api.chimerahub.org/v1"
 default_relay_model = "gpt-5.5"
 artifact_prefix = "ChimeraPlusPlus"
-macos_build_number = 10
+macos_build_number = 11
 website_url = "https://api.chimerahub.org/"
 api_key_url = "https://api.chimerahub.org/"
