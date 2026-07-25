@@ -1,0 +1,19 @@
+[package]
+name = "chimera-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Chimera++ 2.0 — managed Codex runtime: install, update, rollback, health, ownership"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+chimera-domain = { path = "../chimera-domain" }
+chimera-platform = { path = "../chimera-platform" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

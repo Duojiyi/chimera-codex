@@ -393,6 +393,101 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
+name = "chimera-desktop"
+version = "1.2.42-chimera.1"
+dependencies = [
+ "anyhow",
+ "chimera-domain",
+ "chimera-platform",
+ "chimera-provider",
+ "chimera-runtime",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tempfile",
+]
+
+[[package]]
+name = "chimera-domain"
+version = "1.2.42-chimera.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "chimera-migration"
+version = "1.2.42-chimera.1"
+dependencies = [
+ "anyhow",
+ "chimera-domain",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "chimera-platform"
+version = "1.2.42-chimera.1"
+dependencies = [
+ "anyhow",
+ "chimera-domain",
+ "fs2",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "chimera-provider"
+version = "1.2.42-chimera.1"
+dependencies = [
+ "anyhow",
+ "chimera-domain",
+ "chimera-platform",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml_edit 0.22.27",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "chimera-runtime"
+version = "1.2.42-chimera.1"
+dependencies = [
+ "anyhow",
+ "chimera-domain",
+ "chimera-platform",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "chimera-theme"
+version = "1.2.42-chimera.1"
+dependencies = [
+ "anyhow",
+ "chimera-domain",
+ "chimera-platform",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"

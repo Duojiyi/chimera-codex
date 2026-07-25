@@ -1,0 +1,32 @@
+[package]
+name = "chimera-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Chimera++ 2.0 — Tauri 2 desktop shell"
+
+[lib]
+name = "chimera_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "chimera-desktop"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = ["custom-protocol", "tray-icon"] }
+tauri-plugin-dialog = "2"
+chimera-domain = { path = "../../../crates/chimera-domain" }
+chimera-provider = { path = "../../../crates/chimera-provider" }
+chimera-runtime = { path = "../../../crates/chimera-runtime" }
+chimera-platform = { path = "../../../crates/chimera-platform" }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dev-dependencies]
+tempfile.workspace = true

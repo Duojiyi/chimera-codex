@@ -1,0 +1,16 @@
+[package]
+name = "chimera-domain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Chimera++ 2.0 — pure domain types, state machines, error taxonomy (no I/O)"
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

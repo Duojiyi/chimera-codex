@@ -1,0 +1,33 @@
+{
+  "name": "chimera-desktop",
+  "version": "2.0.0-beta",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev":    "tauri dev",
+    "build":  "tauri build",
+    "check":  "tsc --noEmit -p tsconfig.json",
+    "test":   "node --test src/**/*.test.ts",
+    "test:a11y": "node scripts/test-a11y.mjs",
+    "vite:dev":   "vite --host 127.0.0.1 --port 1421",
+    "vite:build": "vite build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/cli": "^2.0.0",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "dependency-cruiser": "^16.0.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.8.0",
+    "vite": "^6.0.0"
+  }
+}

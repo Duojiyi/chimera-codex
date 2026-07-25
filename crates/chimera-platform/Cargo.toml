@@ -1,0 +1,18 @@
+[package]
+name = "chimera-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Chimera++ 2.0 — platform ports: paths, single-instance, cross-process lock, keychain, process identity"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+chimera-domain = { path = "../chimera-domain" }
+
+fs2 = { workspace = true }
+tempfile = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]

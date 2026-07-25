@@ -1,6 +1,15 @@
 [workspace]
 resolver = "2"
 members = [
+  # ── v2 crates (Chimera++ 2.0 independent product) ──────────────────────
+  "crates/chimera-domain",
+  "crates/chimera-platform",
+  "crates/chimera-provider",
+  "crates/chimera-runtime",
+  "crates/chimera-theme",
+  "crates/chimera-migration",
+  "apps/chimera-desktop/src-tauri",
+  # ── 1.x legacy (maintenance only, no new features) ─────────────────────
   "crates/codex-plus-core",
   "crates/codex-plus-data",
   "apps/codex-plus-launcher",

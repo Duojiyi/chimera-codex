@@ -1,0 +1,17 @@
+[package]
+name = "chimera-migration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Chimera++ 2.0 — read-only 1.x/CC Switch import, external manager detection"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chimera-domain = { path = "../chimera-domain" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
