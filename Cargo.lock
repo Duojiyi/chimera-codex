@@ -2262,6 +2262,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mirror-contract"
+version = "1.2.42-chimera.1"
+dependencies = [
+ "chimera-domain",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "url",
+]
+
+[[package]]
 name = "muda"
 version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

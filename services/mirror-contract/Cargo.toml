@@ -1,0 +1,20 @@
+[package]
+name = "mirror-contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Chimera++ 2.0 — Mirror manifest schema, stable CAS, capability manifest"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+sha2 = { workspace = true }
+semver = { workspace = true }
+chimera-domain = { path = "../../crates/chimera-domain" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+serde_json = { workspace = true }
