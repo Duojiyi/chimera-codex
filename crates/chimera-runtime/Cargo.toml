@@ -17,3 +17,4 @@ chimera-platform = { path = "../chimera-platform" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+sha2 = { workspace = true }

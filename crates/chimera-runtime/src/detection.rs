@@ -1,0 +1,172 @@
+//! Step 5.1 — Runtime detection and ownership manifest.
+//! Detects ManagedPortable (Chimera-owned), ExternalMsix, or ExternalPortable.
+//! All operations verify canonical path before any mutation.
+
+use std::path::{Path, PathBuf};
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+use chimera_domain::{InstallMode, InstallOwnership, TransactionState};
+
+pub use chimera_domain::InstallMode as InstallKind;
+
+/// Result of scanning a directory for a managed runtime.
+#[derive(Debug, Clone)]
+pub enum DetectedRuntime {
+    /// Chimera-owned portable installation; ownership.json verified.
+    ManagedPortable(InstallOwnership),
+    /// System-registered MSIX; detected but NOT owned by Chimera.
+    ExternalMsix { version: String, path: PathBuf },
+    /// User or other-manager-owned directory; NOT owned by Chimera.
+    ExternalPortable { path: PathBuf },
+    /// No Codex found at this path.
+    Unknown,
+}
+
+#[derive(Debug, Error)]
+pub enum OwnershipError {
+    #[error("path traversal detected: {0:?}")]
+    PathTraversal(PathBuf),
+    #[error("canonical path mismatch — expected {expected:?}, found {actual:?}")]
+    CanonicalPathMismatch { expected: PathBuf, actual: PathBuf },
+    #[error("ownership.json parse error: {0}")]
+    Parse(String),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+const OWNERSHIP_FILENAME: &str = "ownership.json";
+
+/// Detect the runtime type at `dir`.
+/// Returns an error if:
+/// - `dir` contains `..` path components (traversal)
+/// - `ownership.json` exists but its canonical_path does not match `dir`
+pub fn detect_runtime(dir: &Path) -> Result<DetectedRuntime, OwnershipError> {
+    // Reject path traversal
+    for component in dir.components() {
+        if component.as_os_str() == ".." {
+            return Err(OwnershipError::PathTraversal(dir.to_path_buf()));
+        }
+    }
+
+    let ownership_path = dir.join(OWNERSHIP_FILENAME);
+    if !ownership_path.exists() {
+        return Ok(DetectedRuntime::Unknown);
+    }
+
+    let ownership = read_ownership_manifest(dir)?
+        .ok_or_else(|| OwnershipError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound, "ownership.json disappeared")))?;
+
+    // Canonical path check: ownership.json's recorded path must match `dir`
+    // On Windows, compare case-insensitively and normalise separators.
+    let recorded = &ownership.canonical_path;
+    let actual = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+
+    if !paths_equivalent(recorded, &actual) && !paths_equivalent(recorded, dir) {
+        return Err(OwnershipError::CanonicalPathMismatch {
+            expected: recorded.clone(),
+            actual,
+        });
+    }
+
+    Ok(DetectedRuntime::ManagedPortable(ownership))
+}
+
+fn paths_equivalent(a: &Path, b: &Path) -> bool {
+    let a_str = a.to_string_lossy().replace('\\', "/").to_lowercase();
+    let b_str = b.to_string_lossy().replace('\\', "/").to_lowercase();
+    a_str == b_str
+}
+
+/// Read and parse `ownership.json` from `dir`. Returns None if file does not exist.
+pub fn read_ownership_manifest(dir: &Path) -> Result<Option<InstallOwnership>, OwnershipError> {
+    let path = dir.join(OWNERSHIP_FILENAME);
+    if !path.exists() { return Ok(None); }
+    let bytes = std::fs::read(&path)?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| OwnershipError::Parse(e.to_string()))?;
+    parse_ownership_from_value(v).map(Some)
+}
+
+fn parse_ownership_from_value(v: serde_json::Value) -> Result<InstallOwnership, OwnershipError> {
+    let install_mode = match v.get("install_mode").and_then(|m| m.as_str()) {
+        Some("managed_portable") => InstallMode::ManagedPortable,
+        Some("external_msix")    => InstallMode::ExternalMsix,
+        _                        => InstallMode::ExternalPortable,
+    };
+
+    let canonical_path: PathBuf = v.get("canonical_path")
+        .and_then(|p| p.as_str())
+        .ok_or_else(|| OwnershipError::Parse("missing canonical_path".into()))?
+        .into();
+
+    let codex_version = v.get("codex_version")
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let source_manifest_digest = v.get("source_manifest_digest")
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let file_tree_digest = v.get("file_tree_digest")
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let created_by_chimera_version = v.get("created_by_chimera_version")
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    Ok(InstallOwnership {
+        install_mode,
+        canonical_path,
+        codex_version,
+        source_manifest_digest,
+        file_tree_digest,
+        created_by_chimera_version,
+        transaction_state: TransactionState::Clean,
+        last_health_result: None,
+    })
+}
+
+/// Write a new `ownership.json` to `dir`.
+/// Returns the parsed ownership for immediate use.
+pub fn write_ownership_manifest(
+    dir: &Path,
+    codex_version: &str,
+    source_manifest_digest: &str,
+    file_tree_digest: &str,
+    created_by_chimera_version: &str,
+) -> Result<InstallOwnership, OwnershipError> {
+    let canonical_path = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let ownership = InstallOwnership {
+        install_mode: InstallMode::ManagedPortable,
+        canonical_path: canonical_path.clone(),
+        codex_version: codex_version.to_string(),
+        source_manifest_digest: source_manifest_digest.to_string(),
+        file_tree_digest: file_tree_digest.to_string(),
+        created_by_chimera_version: created_by_chimera_version.to_string(),
+        transaction_state: TransactionState::Clean,
+        last_health_result: None,
+    };
+
+    let json = serde_json::json!({
+        "install_mode": "managed_portable",
+        "canonical_path": canonical_path.to_string_lossy(),
+        "codex_version": codex_version,
+        "source_manifest_digest": source_manifest_digest,
+        "file_tree_digest": file_tree_digest,
+        "created_by_chimera_version": created_by_chimera_version,
+        "transaction_state": { "state": "clean" },
+        "last_health_result": null
+    });
+
+    let tmp = dir.join("ownership.json.tmp");
+    std::fs::write(&tmp, serde_json::to_string_pretty(&json).unwrap())?;
+    std::fs::rename(tmp, dir.join(OWNERSHIP_FILENAME))?;
+
+    Ok(ownership)
+}
