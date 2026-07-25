@@ -1,72 +1,195 @@
 # AGENTS.md
 
-本文件为 CodexPlusPlus fork 的工作规范，指导 agent 在本仓库工作。
+## 1. Project Overview
 
-## 项目概述
+Chimera++ 2.0 is a fully independent product. It is no longer a fork or derivative of CodexPlusPlus and does not track any CodexPlusPlus upstream.
 
-本仓库是 [BigPizzaV3/CodexPlusPlus](https://github.com/BigPizzaV3/CodexPlusPlus) 的公开发行 fork。当前目标是在保留「按模型粒度配置上下文窗口与自动压缩阈值」能力的基础上，制作并维护 Chimera Codex 发行版：去推广、浅层品牌化、ChimeraHub 首次配置、独立公开更新源，以及跟踪上游正式 Release 的自动同步。
+Chimera++ v2 provides three core capabilities for Codex desktop users:
 
-采用 codex 原生 `model_catalog_json` 机制：通过 `model_list` 后缀语法（如 `deepseek-v4-pro[1M]`）声明每模型窗口，由 CodexPlusPlus 生成 catalog 文件并注入 config.toml 指针，codex 客户端运行时按模型识别各自窗口。
+- Vendor switcher: lets users point Codex at any compatible API provider without patching the binary.
+- Runtime manager: manages provider credentials, model selections, and connection lifecycle.
+- Optional skin enhancer: ships opt-in UI theme overlays that do not modify Codex application files.
 
-Chimera 品牌、默认中转和去推广改动不回推上游；可复用的通用 bugfix 可以拆分后向上游提交。
+The 1.x line remains available on the `1.x-maintenance` branch for security fixes only. All new development targets the `v2` branch.
 
-## 仓库结构
+---
 
-- `crates/codex-plus-core/` — 核心 Rust 库（配置生成、catalog 解析、数据模型）
-- `apps/codex-plus-manager/` — Tauri 桌面应用，前端 React+TS
-- `crates/codex-plus-data/` — 数据持久化
-- `docs/` — 本 fork 的设计文档、调研、计划
+## 2. Repository Structure
 
-## 关键代码位置
+```
+chimera-refs/codex-app-mirror/
+├── apps/
+│   └── chimera-desktop/        # Electron shell and renderer (TypeScript + React)
+├── crates/
+│   ├── chimera-domain/         # Core domain types and business rules (no I/O)
+│   ├── chimera-platform/       # OS-level integration (file paths, process launch)
+│   ├── chimera-provider/       # Provider adapter implementations
+│   ├── chimera-runtime/        # Credential lifecycle and active-session management
+│   ├── chimera-theme/          # Skin/theme asset pipeline and injection engine
+│   └── chimera-migration/      # Schema and config migration between versions
+├── services/
+│   └── mirror-contract/        # Shared interface contracts between desktop and Rust backend
+└── scripts/
+    └── verify-v2.mjs           # Primary verification entry point (see V1-V15 below)
+```
 
-- 数据模型：`crates/codex-plus-core/src/settings.rs` 的 `RelayProfile` 结构体
-- 配置生成：`crates/codex-plus-core/src/relay_config.rs` 的 `apply_context_limits_to_config`
-- catalog 解析：`crates/codex-plus-core/src/model_catalog.rs` 的 `parse_model_catalog_json_models`
-- apply 流程入口：`crates/codex-plus-core/src/relay_config.rs` 的 `apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard`
-- 前端模型列表：`apps/codex-plus-manager/src/App.tsx` 的 `modelList` textarea
+Each crate owns its own `tests/` directory. Integration tests live under `tests/` at the workspace root.
 
-## 安全规则
+---
 
-- 禁止批量删除、rm -rf、rmdir /s
-- 删除只能单个文件，删除前确认
-- 禁止 sudo、提权、curl | bash
-- 禁止泄露密钥、.env、auth.json、config.toml 凭据
-- 覆盖文件前确认
-- 不擅自改 Cargo.toml、package.json、.gitignore（除非任务必需）
+## 3. Key Code Locations
 
-## 命令执行
+These locations will be populated as Tasks 1-9 land. Do not guess paths; update this table when a task is merged.
 
-- 执行 bash 命令前确认
-- 不运行未知脚本、不擅自装依赖
-- 测试用 cargo test，不另起工具链
+| Area | Path | Task |
+|---|---|---|
+| Provider adapter trait | TBD | Task 2 |
+| Credential store | TBD | Task 3 |
+| Runtime session loop | TBD | Task 4 |
+| Config operation lock | TBD | Task 5 |
+| Theme injection entry | TBD | Task 6 |
+| Migration runner | TBD | Task 7 |
+| Mirror contract types | TBD | Task 8 |
+| Desktop IPC bridge | TBD | Task 9 |
 
-## 编码规范
+Until a path is confirmed by a merged PR, leave the cell as TBD. Never speculate.
 
-- 对话用中文，代码可用英文，注释尽量中文
-- 保持上游代码风格统一（Rust 标准、React+TS）
-- 改动隔离 + opt-in，不破坏现有 per-profile 单值行为
-- 不做需求外的操作
+---
 
-## 测试约定
+## 4. Security Rules
 
-- 沿用上游 `#[test]` + tempfile 风格（见 `crates/codex-plus-core/tests/relay_config.rs`）
-- 断言读 config.toml 文本，如 `assert!(config.contains("model_catalog_json"))`
-- 改行为要同步改/加对应测试
+These rules are non-negotiable. Violations block merge.
 
-## TDD 与双盲审计
+**No bulk delete without a named guard.**
+Any code path that removes more than one record or file at a time must be gated behind an explicit operation lock acquired before the write begins. Batch deletes without a lock are rejected in review.
 
-- 每个可观察行为改动必须先写会失败的测试（Red），再做最小实现（Green），最后仅在必要时重构（Refactor）；禁止先改实现再补测试。
-- Plan 中每个 `Step` checkbox 是一个最小任务；TODO 中的 `T*` checkbox 是对应大任务聚合门。每个最小任务完成后必须保留 Red、Green 和针对性回归命令的结果。
-- 每个最小任务完成后进行两次相互独立的审计：审计 A 只按需求、测试与可观察行为查漏；审计 B 独立按 diff、边界和回归面查漏。两次结论在记录前不得互相引用。
-- 每个大任务完成后，额外进行一次聚合双盲审计，复核任务边界、所有子任务证据和未覆盖风险。
-- 审计发现未关闭前不得勾选 TODO，不得进入依赖它的下一任务。审计记录保存在 `docs/superpowers/audits/`。
+**No secrets in code, logs, or fixtures.**
+API keys, tokens, passwords, and provider credentials must never appear in source files, test fixtures, log output, or commit history. Use environment variables or the credential store. If a secret is accidentally committed, treat it as compromised immediately.
 
-## 与上游同步
+**No plain-text keys in SQLite fields.**
+Credentials stored in the local database must be encrypted at rest. Storing a raw key string in any SQLite column is a blocking defect regardless of whether the column name sounds sensitive.
 
-- `upstream` = https://github.com/BigPizzaV3/CodexPlusPlus.git
-- `origin` = https://github.com/Duojiyi/chimera-codex.git（公开仓库，已完成创建与可达性核验）
-- 当前本地仓库已完成非 shallow 化；任何后续推送前仍必须逐项核对 remote、分支和工作树状态
-- 功能分支命名：`codex/<feature>`；自动同步分支：`sync/upstream-vX.Y.Z`
-- 自动发行只跟踪上游正式 Release tag，通过同步 PR + required checks 合入，不直接 rebase/覆盖本项目 `main`
-- 发布版本格式：`X.Y.Z-chimera.N`
-- 严禁把 Chimera 定制误推到 `upstream`
+**Require operation lock before writing config.**
+Any write to the active configuration (provider selection, model override, theme state) must acquire the operation lock defined in `chimera-runtime`. Config writes that bypass the lock are rejected.
+
+**No unsafe logging of user input.**
+Log statements must not include user-supplied strings verbatim unless they have been explicitly sanitized. PII and credential fragments must be redacted before logging.
+
+**Dependency additions require review.**
+New third-party crates or npm packages must be justified in the PR description. Pinned exact versions are required. Open version ranges (`*`, `>=`, `^`) are not permitted.
+
+---
+
+## 5. Command Execution Rules
+
+**Always confirm before running build or test commands in a user session.**
+Before executing `cargo build`, `cargo test`, `npm run`, `pnpm`, or any script from `package.json` or `Makefile`, state the command and wait for explicit confirmation unless the user has already approved it in the current turn.
+
+**Do not run scripts that are not listed in this file or in `package.json`/`Cargo.toml`.**
+Unknown scripts (especially downloaded or generated ones) must not be executed without user review.
+
+**The verification suite is the canonical check.**
+Use `node scripts/verify-v2.mjs` as the primary gate. Do not substitute ad-hoc one-liner checks as a replacement for the full suite.
+
+**No side-effecting commands during read-only investigation.**
+When investigating a bug or reading the codebase, do not run commands that modify state (database writes, file creation outside temp directories, network calls to live providers).
+
+---
+
+## 6. Coding Standards
+
+### Rust crates
+
+- Follow a strict three-layer architecture in each crate: **domain**, **service**, **adapter**.
+- The domain layer (`chimera-domain`) must have zero I/O dependencies. No `tokio`, no `reqwest`, no `std::fs` in domain types.
+- Service layers coordinate domain logic with adapters but do not call external services directly.
+- Adapter layers own all I/O: file system, HTTP, SQLite, IPC.
+- Avoid `unwrap()` and `expect()` in non-test code. Use `?` propagation and typed errors.
+- All public items in a crate must have doc comments in English or Chinese. Both are acceptable; mixing within a single item is not.
+- Comments explaining intent or non-obvious decisions may be written in Chinese.
+
+### TypeScript / React (apps/chimera-desktop)
+
+- Use a **feature-based** directory layout. Each feature owns its components, hooks, and local state.
+- Page components must not read files or call IPC directly. They receive data through hooks or context.
+- All IPC calls go through the bridge defined in `services/mirror-contract`. No direct `ipcRenderer.invoke` calls scattered through components.
+- Prefer `unknown` over `any`. Uses of `any` require a comment explaining why it cannot be avoided.
+- No barrel `index.ts` files that re-export everything; they hide import paths and slow TypeScript.
+
+---
+
+## 7. TDD and Dual-Blind Audit Rules
+
+### Red-Green-Refactor
+
+Every feature change follows the strict cycle:
+
+1. **Red**: write a failing test that describes the expected behavior. Commit the failing test alone.
+2. **Green**: write the minimum code to make the test pass. No gold-plating.
+3. **Refactor**: clean up without changing behavior. All tests must remain green after refactor.
+
+Skipping the Red step (writing code first, then writing a test that passes immediately) is not acceptable. If a reviewer cannot identify the commit that contained the failing test, the PR is returned.
+
+### Dual-Blind Audit
+
+Each Step (as defined in the project plan) requires two independent audit passes before its checkbox can be marked complete:
+
+- **Audit A**: the author reviews their own diff against the acceptance criteria and signs off.
+- **Audit B**: a second reviewer (human or designated agent) reviews the same diff independently, without seeing Audit A's notes until their own review is written.
+
+Both audits must be recorded in the PR description or a linked review comment. A Step with only one audit pass is not done.
+
+---
+
+## 8. v2 Branch Rules
+
+**`v2` is the long-term development branch.**
+All feature work, refactors, and new tasks target `v2`. Direct commits to `main` are not permitted except for release tagging.
+
+**No auto-sync to CodexPlusPlus upstream.**
+Chimera++ v2 is an independent product. There is no upstream remote pointing to CodexPlusPlus. Do not add one. Do not cherry-pick from CodexPlusPlus without explicit written approval from the project lead, and only after a security review of the incoming changes.
+
+**`1.x-maintenance` is for security fixes only.**
+The `1.x-maintenance` branch receives backported security patches only. No new features, no refactors, no dependency upgrades unless they are directly required by a security fix.
+
+**Never push Chimera customizations to upstream.**
+Chimera-specific logic, configuration formats, credential handling, and theme APIs must not be contributed back to Codex or any other upstream project. If a general improvement is identified that has no Chimera-specific content, it may be contributed separately after review, but this requires explicit approval.
+
+**Branch naming for tasks.**
+Feature branches follow the pattern `v2/task-N-short-description`. Hotfix branches on `1.x-maintenance` follow `1x/fix-short-description`.
+
+---
+
+## 9. Verification Commands
+
+The primary verification entry point is:
+
+```
+node scripts/verify-v2.mjs
+```
+
+Individual checks (V1-V15) can be run by passing the check ID as an argument:
+
+```
+node scripts/verify-v2.mjs --check V3
+```
+
+| ID | What it checks |
+|---|---|
+| V1 | Workspace compiles without errors (`cargo check --workspace`) |
+| V2 | All Rust unit tests pass (`cargo test --workspace`) |
+| V3 | No `unwrap()` or `expect()` outside `#[cfg(test)]` blocks |
+| V4 | No plain-text credential patterns in source or fixtures |
+| V5 | SQLite schema has no unencrypted key columns (static analysis) |
+| V6 | Operation lock is acquired before every config write path |
+| V7 | TypeScript compiles without errors (`tsc --noEmit`) |
+| V8 | Frontend unit tests pass |
+| V9 | No direct `ipcRenderer.invoke` calls outside the bridge module |
+| V10 | No open dependency version ranges in `Cargo.toml` or `package.json` |
+| V11 | All public Rust items have doc comments |
+| V12 | Migration runner can apply and roll back every known migration |
+| V13 | No CodexPlusPlus remote configured in git remotes |
+| V14 | Dual-blind audit records present for all completed Steps |
+| V15 | Full integration smoke test (desktop launches, provider round-trip, theme toggle) |
+
+Run the full suite before opening any PR against `v2` or `1.x-maintenance`. A PR with a failing verification check is not reviewed until the check passes.
