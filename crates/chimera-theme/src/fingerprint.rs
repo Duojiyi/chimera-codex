@@ -73,10 +73,17 @@ pub struct CandidateFingerprint {
 
 /// Fold a [`ProbeInput`] into a [`CandidateFingerprint`].
 ///
-/// A `\n` separator after every selector (rather than concatenating them
-/// bare) means `["ab", "c"]` and `["a", "bc"]` can never hash identically by
-/// accident of concatenation — the classic string-boundary collision a naive
-/// "just join the strings" digest would be exposed to.
+/// Every variable-length field is length-prefixed rather than delimited. A
+/// separator only avoids boundary collisions for inputs that cannot contain
+/// it, and a CSS selector can contain a newline — an adversarial review
+/// demonstrated `["a\nb"]` and `["a", "b"]` hashing identically under the
+/// earlier `\n`-delimited scheme.
+///
+/// That is the worst possible collision for this particular value. The
+/// fingerprint's whole job is to notice that Codex's UI changed; two different
+/// selector sets sharing a digest means a changed UI reporting as unchanged,
+/// so the fuse never trips and a skin keeps injecting into a shell it was
+/// never validated against.
 pub fn compute_fingerprint(input: &ProbeInput) -> CandidateFingerprint {
     let mut selectors = input.observed_selectors.clone();
     selectors.sort();
@@ -86,9 +93,17 @@ pub fn compute_fingerprint(input: &ProbeInput) -> CandidateFingerprint {
     hasher.update(PROBE_SCHEMA_VERSION.to_le_bytes());
     hasher.update((input.codex_version.len() as u64).to_le_bytes());
     hasher.update(input.codex_version.as_bytes());
+    // Length-prefixed, not newline-delimited. A selector may legitimately
+    // contain a newline, and with a plain separator `["a\nb"]` and
+    // `["a", "b"]` hash identically. For a value whose entire job is to notice
+    // that Codex's UI changed, a collision means a changed UI reporting as
+    // unchanged — the fuse silently fails to trip, which is the one outcome it
+    // exists to prevent. The count is included for the same reason: without it
+    // a trailing empty selector is invisible.
+    hasher.update((selectors.len() as u64).to_le_bytes());
     for selector in &selectors {
+        hasher.update((selector.len() as u64).to_le_bytes());
         hasher.update(selector.as_bytes());
-        hasher.update(b"\n");
     }
     let digest = hasher.finalize();
 

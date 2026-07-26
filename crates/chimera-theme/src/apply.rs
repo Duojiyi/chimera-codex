@@ -180,35 +180,77 @@ impl<A: SkinApplier> SkinStateTransaction<A> {
         }
     }
 
-    /// Push `package` live and, only once that succeeds, commit it: write
-    /// its files under `state_dir/current/` and record it in
-    /// `skin-state.json`. Ordering matters — see module docs on why a
-    /// failed live push never reaches the disk-writing half of this
-    /// function at all.
+    /// Stage to disk, push live, then publish — in that order.
+    ///
+    /// Two properties have to hold at once, and an adversarial review found
+    /// that neither naive ordering gives both:
+    ///
+    /// - A failed apply must not destroy the previously committed skin. Writing
+    ///   straight into `current/` breaks this.
+    /// - The live session and `skin-state.json` must never disagree. Pushing
+    ///   live *first* breaks this: a later disk failure left the browser showing
+    ///   the failed package while the recorded state still named the previous
+    ///   one, so restore-default would restore the wrong thing and the user
+    ///   would be looking at a skin the app believed was not applied.
+    ///
+    /// Three phases satisfy both. Staging touches nothing the user can see, so
+    /// a failure there is free. The live push comes next, while `current/` and
+    /// the recorded state are still untouched — a failure there removes the
+    /// staging directory and leaves everything exactly as it was. Only once the
+    /// user can actually see the new skin does it become the committed one.
+    ///
+    /// The remaining window is publish-after-a-successful-live-push. It cannot
+    /// be eliminated — two systems, one commit — so it is converged instead:
+    /// both sides fall back to Default. Not what the user asked for, but a
+    /// state where what they see and what is recorded agree, and one retry away
+    /// from what they wanted. Disagreement is the outcome no retry can fix.
     pub fn apply_and_commit(&mut self, package: &SkinPackage) -> Result<(), ApplyError> {
-        self.applier.apply(&package.entry_css)?;
-
         let dest = self.state_dir.join(CURRENT_DIR);
         let staging = self.state_dir.join(STAGING_DIR);
         if staging.exists() {
             fs::remove_dir_all(&staging)?;
         }
-        // Written to a fresh sibling directory and renamed over `current`
-        // (rather than written directly into it) so a crash mid-write
-        // cannot leave `current` half old/half new for a later
-        // `cancel_try` to read from.
-        package.write_to(&staging)?;
-        if dest.exists() {
-            fs::remove_dir_all(&dest)?;
-        }
-        fs::rename(&staging, &dest)?;
 
-        self.current = SkinState::Applied {
-            name: package.manifest.name.clone(),
-            version: package.manifest.version.clone(),
-            entry_css: package.manifest.entry_css.clone(),
-        };
-        self.persist_state()
+        // Phase 1 — staging. A fresh sibling directory rather than `current/`
+        // itself, so a crash mid-write cannot leave `current` half old and half
+        // new for a later `cancel_try` to read from.
+        package.write_to(&staging)?;
+
+        // Phase 2 — live. Still nothing committed: on failure the staging
+        // directory goes and the previous skin remains exactly as it was.
+        if let Err(live_error) = self.applier.apply(&package.entry_css) {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(ApplyError::from(live_error));
+        }
+
+        // Phase 3 — publish. The user can already see it; make it official.
+        let published = (|| -> Result<(), ApplyError> {
+            if dest.exists() {
+                fs::remove_dir_all(&dest)?;
+            }
+            fs::rename(&staging, &dest)?;
+            self.current = SkinState::Applied {
+                name: package.manifest.name.clone(),
+                version: package.manifest.version.clone(),
+                entry_css: package.manifest.entry_css.clone(),
+            };
+            self.persist_state()
+        })();
+
+        if let Err(publish_error) = published {
+            // Converge rather than leave the two disagreeing. Best-effort on
+            // the way down: if clearing or persisting also fails there is
+            // nothing more this call can do, and the publish error is the one
+            // worth reporting.
+            let _ = self.applier.clear();
+            self.current = SkinState::Default;
+            let _ = self.persist_state();
+            let _ = fs::remove_dir_all(&staging);
+            let _ = fs::remove_dir_all(&dest);
+            return Err(publish_error);
+        }
+
+        Ok(())
     }
 
     /// Unconditionally return to Codex's own default appearance: clear the
