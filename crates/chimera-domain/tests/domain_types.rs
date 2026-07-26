@@ -15,7 +15,7 @@ fn provider_chimera_hub_kind_serializes_correctly() {
         id: uuid::Uuid::new_v4(),
         display_name: "ChimeraHub".to_string(),
         kind: ProviderKind::ChimeraHub,
-        base_url: "https://api.chimerahub.io/v1".parse().unwrap(),
+        base_url: "https://api.chimerahub.org/v1".parse().unwrap(),
         protocol: ProviderProtocol::Responses,
         secret_ref: None,
         selected_model: None,

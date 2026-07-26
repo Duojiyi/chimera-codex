@@ -105,9 +105,11 @@ fn url_parse_failure_returns_error() {
 
 #[test]
 fn validated_url_exposes_origin_for_cross_origin_check() {
-    let r = validate_provider_url("https://api.chimerahub.io/v1", false).unwrap();
+    let r = validate_provider_url("https://api.chimerahub.org/v1", false).unwrap();
     assert_eq!(
         r.base_url.origin(),
-        Url::parse("https://api.chimerahub.io/v1").unwrap().origin()
+        Url::parse("https://api.chimerahub.org/v1")
+            .unwrap()
+            .origin()
     );
 }

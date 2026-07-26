@@ -27,7 +27,7 @@ export function validateChimeraHubKey(
     return {
       field: "apiKey",
       message: "API Key is required to connect to ChimeraHub.",
-      recovery: "Enter your ChimeraHub API Key. You can find it at api.chimerahub.io/dashboard.",
+      recovery: "Enter your ChimeraHub API Key. You can find it at api.chimerahub.org/dashboard.",
       severity: "error",
     };
   }

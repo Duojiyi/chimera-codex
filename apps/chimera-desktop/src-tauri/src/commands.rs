@@ -19,13 +19,14 @@ use chimera_provider::probe::{UrlValidationError, validate_provider_url};
 use chimera_provider::projection::{ProviderProjection, revert_provider_projection};
 use chimera_provider::transaction::{SwitchTransaction, TransactionOutcome, TxError};
 use chimera_runtime::health::check_runtime_health;
+use chimera_runtime::process::{LaunchError, launch_managed_codex};
 
 use crate::dto::{ProviderDto, ProviderTestDto, RuntimeInfoDto, SkinDto, SystemStatusDto};
 use crate::state::AppState;
 
 /// Map a ProviderRow to its wire DTO. Deliberately drops `secret_ref` entirely —
 /// only whether one exists (G4: keys never cross the IPC boundary).
-fn row_to_dto(row: &ProviderRow) -> ProviderDto {
+pub fn row_to_dto(row: &ProviderRow) -> ProviderDto {
     ProviderDto {
         id: row.id.to_string(),
         display_name: row.display_name.clone(),
@@ -129,7 +130,7 @@ pub fn test_provider(base_url: String, dev_mode: bool) -> Result<ProviderTestDto
 
 /// Translate a URL validation error into an actionable Chinese-friendly message.
 /// Never leaks the raw Debug form of the error.
-fn url_error_message(e: &UrlValidationError) -> String {
+pub fn url_error_message(e: &UrlValidationError) -> String {
     match e {
         UrlValidationError::Empty => "Endpoint URL is required.".to_string(),
         UrlValidationError::ContainsUserinfo => {
@@ -292,19 +293,33 @@ fn tx_error_message(e: &TxError) -> String {
 
 /// Launch the managed Codex runtime.
 ///
-/// Deliberately fails loudly rather than pretending: the process-spawn path is
-/// Task 5.5 and launching an unverified runtime would violate G5.
+/// Spawns the active version's executable, detached. `launch_managed_codex`
+/// re-verifies ownership under the runtime root before spawning (G5) — this
+/// command only translates the outcome into a user-facing message.
 #[tauri::command]
 pub fn launch_codex(state: State<'_, AppState>) -> Result<(), String> {
-    match check_runtime_health(&state.runtime) {
-        Ok(h) if h.exe_present => Err(
-            "Codex is installed but launching is not enabled in this build. Task 5.5 wires process spawn."
-                .to_string(),
-        ),
-        Ok(_) | Err(_) => Err(
+    launch_managed_codex(&state.runtime)
+        .map(|_report| ())
+        .map_err(|e| launch_error_message(&e))
+}
+
+/// Translate a launch failure into an actionable message. Never leaks a raw
+/// filesystem path here: `NotOwned` in particular must not reveal where an
+/// unmanaged install lives (G5), only that Chimera does not manage it.
+fn launch_error_message(e: &LaunchError) -> String {
+    match e {
+        LaunchError::NotInstalled => {
             "Codex is not installed yet. Open the Codex tab to prepare the managed runtime."
-                .to_string(),
-        ),
+                .to_string()
+        }
+        LaunchError::NotOwned { .. } => {
+            "The Codex install Chimera++ found is not Chimera-managed, so it cannot be launched from here. Reinstall it from the Codex tab."
+                .to_string()
+        }
+        LaunchError::Spawn(_) => {
+            "Could not start Codex. Check that the managed install is not corrupted and try again."
+                .to_string()
+        }
     }
 }
 

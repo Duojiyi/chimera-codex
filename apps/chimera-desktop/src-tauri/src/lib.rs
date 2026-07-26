@@ -5,6 +5,7 @@
 
 pub mod commands;
 pub mod dto;
+pub mod provider_cmds;
 pub mod runtime_cmds;
 pub mod state;
 
@@ -31,6 +32,9 @@ pub fn run() {
             commands::launch_codex,
             commands::switch_provider,
             commands::test_provider,
+            provider_cmds::add_provider,
+            provider_cmds::delete_provider,
+            provider_cmds::test_existing_provider,
             commands::list_skins,
             commands::apply_skin,
             commands::try_skin,

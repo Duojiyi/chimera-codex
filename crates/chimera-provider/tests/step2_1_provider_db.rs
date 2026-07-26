@@ -22,7 +22,7 @@ fn insert_and_list_providers() {
         id,
         display_name: "ChimeraHub".into(),
         kind: ProviderKind::ChimeraHub,
-        base_url: Url::parse("https://api.chimerahub.io/v1").unwrap(),
+        base_url: Url::parse("https://api.chimerahub.org/v1").unwrap(),
         protocol: ProviderProtocol::Responses,
         secret_ref: Some("keychain://chimera/chimerahub".into()),
         selected_model: Some("gpt-4o".into()),

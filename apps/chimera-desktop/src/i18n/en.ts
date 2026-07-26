@@ -97,6 +97,9 @@ export const en: Record<TranslationKey, string> = {
   "providers.testAria": "Test connection to {0}",
   "providers.deleteAria": "Delete provider {0}",
   "providers.confirmDelete": "Delete {0}?",
+  "providers.verifying": "Verifying connection…",
+  "providers.verifyFailed": "Verification failed, so the provider was not added.",
+  "providers.addFailed": "Could not add the provider.",
   "providers.countSingular": "Provider",
 
   // ── Provider form validation ──────────────────────────────────────────────

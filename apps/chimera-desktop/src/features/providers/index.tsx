@@ -50,7 +50,11 @@ export function ProvidersFeature() {
   const [busy, setBusy] = useState(false);
   const active = selectActive(state);
 
-  function handleAdd() {
+  // Spec 7.1: a provider is verified BEFORE it is activated. The client-side
+  // checks below are only a fast pre-filter; the authoritative step is the
+  // backend probe inside add_provider, which stores the key and inserts the row
+  // only after the endpoint actually answers. A rejected probe adds nothing.
+  async function handleAdd() {
     let errors: string[] = [];
     if (addKind === "chimera_hub") {
       const err = validateChimeraHubKey(keyInput);
@@ -60,17 +64,47 @@ export function ProvidersFeature() {
         .filter(e => e.severity === "error").map(e => e.message);
     }
     if (errors.length > 0) { setFormErrors(errors); return; }
-    const entry: ProviderEntry = {
-      id: crypto.randomUUID(),
-      displayName: addKind === "chimera_hub" ? t("providers.kindChimeraHub")
-        : (() => { try { return new URL(urlInput).hostname; } catch { return t("providers.kindCustom"); } })(),
-      kind: addKind,
-      baseUrl: addKind === "chimera_hub" ? "https://api.chimerahub.io/v1" : urlInput.trim(),
-      protocol: "responses", secretRef: `keychain://chimera/${addKind}`,
-      selectedModel: null, health: "unknown", sortOrder: state.providers.length,
-    };
-    setState(s => addProvider(s, entry));
-    setShowAdd(false); setUrlInput(""); setKeyInput(""); setFormErrors([]);
+
+    setBusy(true);
+    setFormErrors([]);
+    try {
+      // The key crosses IPC exactly once, here, and is never stored client-side.
+      const dto = await invoke("add_provider", {
+        kind: addKind,
+        baseUrl: addKind === "chimera_hub" ? "https://api.chimerahub.org/v1" : urlInput.trim(),
+        apiKey: keyInput,
+        devMode: false,
+      }) as {
+        id: string; displayName: string; kind: string;
+        baseUrl: string; health: string; selectedModel: string | null;
+      } | undefined;
+
+      if (!dto) {
+        setFormErrors([t("providers.addFailed")]);
+        return;
+      }
+
+      // Mirror the row the backend just committed. secretRef is deliberately
+      // absent from the DTO (G4) and is not needed to render the list.
+      const entry: ProviderEntry = {
+        id: dto.id,
+        displayName: dto.displayName,
+        kind: dto.kind === "chimerahub" ? "chimera_hub" : "custom",
+        baseUrl: dto.baseUrl,
+        protocol: "responses",
+        secretRef: null,
+        selectedModel: dto.selectedModel,
+        health: dto.health as ProviderEntry["health"],
+        sortOrder: state.providers.length,
+      };
+      setState(s => addProvider(s, entry));
+      setShowAdd(false); setUrlInput(""); setKeyInput("");
+    } catch (err: unknown) {
+      // The backend message is already actionable and localised-safe.
+      setFormErrors([err instanceof Error ? err.message : String(err ?? t("providers.verifyFailed"))]);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function handleSwitch(id: string | null) {

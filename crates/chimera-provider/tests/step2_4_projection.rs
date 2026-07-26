@@ -37,7 +37,7 @@ fn unknown_fields_are_preserved_after_projection() {
     let result = apply_provider_projection(
         CONFIG_WITH_UNKNOWN_FIELDS,
         &ProviderProjection {
-            base_url: "https://api.chimerahub.io/v1".into(),
+            base_url: "https://api.chimerahub.org/v1".into(),
             model: Some("gpt-4o".into()),
             api_key_env_or_plain: "sk-test-key".into(),
         },
@@ -116,7 +116,7 @@ fn projection_on_empty_config_produces_valid_toml() {
     let result = apply_provider_projection(
         CONFIG_EMPTY,
         &ProviderProjection {
-            base_url: "https://api.chimerahub.io/v1".into(),
+            base_url: "https://api.chimerahub.org/v1".into(),
             model: None,
             api_key_env_or_plain: "sk-new".into(),
         },
@@ -128,7 +128,7 @@ fn projection_on_empty_config_produces_valid_toml() {
         .parse::<toml::Value>()
         .expect("result must be valid TOML");
     assert!(
-        result.contains("chimerahub.io"),
+        result.contains("chimerahub.org"),
         "base_url must appear in result: {result}"
     );
 }
@@ -141,7 +141,7 @@ fn revert_restores_pre_projection_state() {
     let projected = apply_provider_projection(
         original,
         &ProviderProjection {
-            base_url: "https://api.chimerahub.io/v1".into(),
+            base_url: "https://api.chimerahub.org/v1".into(),
             model: Some("gpt-4o".into()),
             api_key_env_or_plain: "sk-key".into(),
         },
@@ -161,7 +161,7 @@ fn revert_restores_pre_projection_state() {
     );
     // Chimera's injected fields should be removed
     assert!(
-        !reverted.contains("chimerahub.io"),
+        !reverted.contains("chimerahub.org"),
         "chimera base_url must be removed on revert: {reverted}"
     );
 }

@@ -29,7 +29,7 @@ fn happy_path_switch_updates_config_and_clears_journal() {
     );
 
     let projection = ProviderProjection {
-        base_url: "https://api.chimerahub.io/v1".into(),
+        base_url: "https://api.chimerahub.org/v1".into(),
         model: Some("gpt-4o".into()),
         api_key_env_or_plain: "sk-test-key".into(),
     };
@@ -44,7 +44,7 @@ fn happy_path_switch_updates_config_and_clears_journal() {
     // Config must now reference the new provider
     let new_config = fs::read_to_string(&config_path).unwrap();
     assert!(
-        new_config.contains("chimerahub.io"),
+        new_config.contains("chimerahub.org"),
         "config must contain new base_url"
     );
 
@@ -90,7 +90,7 @@ fn cas_detects_external_write_after_snapshot() {
     });
 
     let projection = ProviderProjection {
-        base_url: "https://api.chimerahub.io/v1".into(),
+        base_url: "https://api.chimerahub.org/v1".into(),
         model: Some("gpt-4o".into()),
         api_key_env_or_plain: "sk-key".into(),
     };
@@ -131,7 +131,7 @@ fn journal_written_before_atomic_rename() {
     );
 
     let projection = ProviderProjection {
-        base_url: "https://api.chimerahub.io/v1".into(),
+        base_url: "https://api.chimerahub.org/v1".into(),
         model: None,
         api_key_env_or_plain: "sk-k".into(),
     };
