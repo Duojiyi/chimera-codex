@@ -25,8 +25,10 @@ pub enum ProjectionError {
     TomlSerialise(String),
 }
 
-/// Chimera-owned sentinel comment prefix — identifies keys Chimera injected.
-const CHIMERA_SENTINEL: &str = " chimera-managed";
+/// Top-level boolean key Chimera writes to mark the projection as its own.
+/// `revert_provider_projection` refuses to remove anything when it is absent,
+/// so a config Chimera never touched is left completely alone.
+const CHIMERA_OWNERSHIP_FLAG: &str = "chimera_managed";
 
 /// Apply provider projection to an existing config.toml text.
 /// Returns the new config text with Chimera keys updated and all other content preserved.
@@ -47,8 +49,8 @@ pub fn apply_provider_projection(
         doc["model"] = value(model.as_str());
     }
 
-    // Add a chimera_managed flag so revert can identify our keys
-    doc["chimera_managed"] = value(true);
+    // Mark the projection as Chimera-owned so revert can identify our keys.
+    doc[CHIMERA_OWNERSHIP_FLAG] = value(true);
 
     Ok(doc.to_string())
 }
@@ -63,7 +65,7 @@ pub fn revert_provider_projection(projected_config: &str) -> Result<String, Proj
     // Only remove keys Chimera is responsible for.
     // We identify them by the chimera_managed flag; if it's absent, we do nothing.
     let is_chimera_managed = doc
-        .get("chimera_managed")
+        .get(CHIMERA_OWNERSHIP_FLAG)
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
@@ -71,7 +73,7 @@ pub fn revert_provider_projection(projected_config: &str) -> Result<String, Proj
         doc.remove("model_base_url");
         doc.remove("model_provider");
         doc.remove("api_key");
-        doc.remove("chimera_managed");
+        doc.remove(CHIMERA_OWNERSHIP_FLAG);
         // model key is left if it existed before; Chimera only removes fields
         // it knows it added. A user-modified model key would be left in place.
     }

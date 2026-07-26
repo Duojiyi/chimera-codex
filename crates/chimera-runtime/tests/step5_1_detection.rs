@@ -1,11 +1,8 @@
 // Step 5.1 RED — Runtime detection: ManagedPortable / ExternalMsix / ExternalPortable.
 // Spec 8.1: only operations on owned runtime; path/ownership boundary checks.
-use chimera_runtime::detection::{
-    detect_runtime, DetectedRuntime, InstallKind, OwnershipError,
-};
-use chimera_domain::InstallOwnership;
-use tempfile::tempdir;
+use chimera_runtime::detection::{DetectedRuntime, InstallKind, OwnershipError, detect_runtime};
 use std::fs;
+use tempfile::tempdir;
 
 // ── ManagedPortable detection ────────────────────────────────────────────────
 
@@ -26,11 +23,18 @@ fn detects_managed_portable_by_ownership_file() {
         "transaction_state": { "state": "clean" },
         "last_health_result": null
     });
-    fs::write(runtime_dir.join("ownership.json"), serde_json::to_string_pretty(&ownership).unwrap()).unwrap();
+    fs::write(
+        runtime_dir.join("ownership.json"),
+        serde_json::to_string_pretty(&ownership).unwrap(),
+    )
+    .unwrap();
 
     let result = detect_runtime(&runtime_dir).unwrap();
-    assert!(matches!(result, DetectedRuntime::ManagedPortable(_)),
-        "must detect ManagedPortable via ownership.json: {:?}", result);
+    assert!(
+        matches!(result, DetectedRuntime::ManagedPortable(_)),
+        "must detect ManagedPortable via ownership.json: {:?}",
+        result
+    );
 
     if let DetectedRuntime::ManagedPortable(own) = result {
         assert_eq!(own.codex_version, "26.721.41059");
@@ -41,8 +45,10 @@ fn detects_managed_portable_by_ownership_file() {
 fn no_ownership_file_returns_not_managed() {
     let tmp = tempdir().unwrap();
     let result = detect_runtime(tmp.path()).unwrap();
-    assert!(matches!(result, DetectedRuntime::Unknown),
-        "directory without ownership.json must be Unknown");
+    assert!(
+        matches!(result, DetectedRuntime::Unknown),
+        "directory without ownership.json must be Unknown"
+    );
 }
 
 // ── Canonical path boundary ───────────────────────────────────────────────────
@@ -64,11 +70,21 @@ fn ownership_canonical_path_mismatch_returns_error() {
         "transaction_state": { "state": "clean" },
         "last_health_result": null
     });
-    fs::write(runtime_dir.join("ownership.json"), serde_json::to_string_pretty(&ownership).unwrap()).unwrap();
+    fs::write(
+        runtime_dir.join("ownership.json"),
+        serde_json::to_string_pretty(&ownership).unwrap(),
+    )
+    .unwrap();
 
     let result = detect_runtime(&runtime_dir);
-    assert!(result.is_err(), "canonical path mismatch must return an error");
-    assert!(matches!(result.unwrap_err(), OwnershipError::CanonicalPathMismatch { .. }));
+    assert!(
+        result.is_err(),
+        "canonical path mismatch must return an error"
+    );
+    assert!(matches!(
+        result.unwrap_err(),
+        OwnershipError::CanonicalPathMismatch { .. }
+    ));
 }
 
 // ── Path traversal rejection ──────────────────────────────────────────────────
@@ -76,7 +92,10 @@ fn ownership_canonical_path_mismatch_returns_error() {
 #[test]
 fn path_traversal_in_runtime_dir_is_rejected() {
     let result = detect_runtime(std::path::Path::new("/tmp/../etc/passwd"));
-    assert!(result.is_err(), "path with .. must be rejected by detect_runtime");
+    assert!(
+        result.is_err(),
+        "path with .. must be rejected by detect_runtime"
+    );
 }
 
 // ── InstallKind variants ─────────────────────────────────────────────────────
@@ -104,9 +123,15 @@ fn ownership_serialisation_roundtrip() {
         "sha256:abc",
         "sha256:def",
         "2.0.0-beta",
-    ).unwrap();
+    )
+    .unwrap();
 
-    let loaded = chimera_runtime::detection::read_ownership_manifest(&dir).unwrap().unwrap();
+    let loaded = chimera_runtime::detection::read_ownership_manifest(&dir)
+        .unwrap()
+        .unwrap();
     assert_eq!(original.codex_version, loaded.codex_version);
-    assert_eq!(original.source_manifest_digest, loaded.source_manifest_digest);
+    assert_eq!(
+        original.source_manifest_digest,
+        loaded.source_manifest_digest
+    );
 }

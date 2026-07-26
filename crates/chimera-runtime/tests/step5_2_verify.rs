@@ -1,11 +1,10 @@
 // Step 5.2 RED — MSIX identity verification and hash checks.
 // Spec 8.2: verify architecture, Authenticode identity, SHA-256 before staging.
 use chimera_runtime::verify::{
-    verify_payload_hash, VerifyError,
-    check_msix_codex_identity, MsixIdentityResult,
+    MsixIdentityResult, VerifyError, check_msix_codex_identity, verify_payload_hash,
 };
-use tempfile::tempdir;
 use std::fs;
+use tempfile::tempdir;
 
 // ── SHA-256 verification ──────────────────────────────────────────────────────
 
@@ -29,7 +28,10 @@ fn wrong_hash_fails_verification() {
     let wrong_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let result = verify_payload_hash(&file, wrong_hash);
     assert!(result.is_err(), "wrong hash must fail");
-    assert!(matches!(result.unwrap_err(), VerifyError::HashMismatch { .. }));
+    assert!(matches!(
+        result.unwrap_err(),
+        VerifyError::HashMismatch { .. }
+    ));
 }
 
 #[test]
@@ -62,8 +64,10 @@ fn missing_file_returns_error() {
 #[test]
 fn valid_codex_identity_passes() {
     let result = check_msix_codex_identity("OpenAI.Codex", "OpenAI, Inc.");
-    assert!(matches!(result, MsixIdentityResult::Valid),
-        "canonical Codex identity must be valid");
+    assert!(
+        matches!(result, MsixIdentityResult::Valid),
+        "canonical Codex identity must be valid"
+    );
 }
 
 #[test]

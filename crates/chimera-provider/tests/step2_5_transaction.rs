@@ -1,13 +1,11 @@
 // Step 2.5 RED — CAS transaction switch, journal, and external write detection.
 // Spec 7.4: acquire lock → snapshot+hash → render → journal → stage → CAS check
 //           → atomic replace → verify → mark active → clear journal.
-use chimera_provider::transaction::{
-    SwitchTransaction, TransactionOutcome, CasConflict, JournalEntry,
-};
 use chimera_provider::keychain::{KeychainPort, MemoryKeychain};
 use chimera_provider::projection::ProviderProjection;
-use tempfile::tempdir;
+use chimera_provider::transaction::{JournalEntry, SwitchTransaction, TransactionOutcome};
 use std::fs;
+use tempfile::tempdir;
 
 // ── Happy path ────────────────────────────────────────────────────────────────
 
@@ -15,7 +13,11 @@ use std::fs;
 fn happy_path_switch_updates_config_and_clears_journal() {
     let tmp = tempdir().unwrap();
     let config_path = tmp.path().join("config.toml");
-    fs::write(&config_path, "model = \"gpt-4o\"\nmodel_provider = \"openai\"\n").unwrap();
+    fs::write(
+        &config_path,
+        "model = \"gpt-4o\"\nmodel_provider = \"openai\"\n",
+    )
+    .unwrap();
 
     let kc = MemoryKeychain::new();
     let secret_ref = kc.store("chimera/test", "sk-test-key").unwrap();
@@ -33,12 +35,18 @@ fn happy_path_switch_updates_config_and_clears_journal() {
     };
 
     let outcome = tx.execute(&projection, &kc, &secret_ref).unwrap();
-    assert!(matches!(outcome, TransactionOutcome::Committed),
-        "happy path must commit: {:?}", outcome);
+    assert!(
+        matches!(outcome, TransactionOutcome::Committed),
+        "happy path must commit: {:?}",
+        outcome
+    );
 
     // Config must now reference the new provider
     let new_config = fs::read_to_string(&config_path).unwrap();
-    assert!(new_config.contains("chimerahub.io"), "config must contain new base_url");
+    assert!(
+        new_config.contains("chimerahub.io"),
+        "config must contain new base_url"
+    );
 
     // Journal must be cleared after successful commit
     let journal_path = tmp.path().join("chimera.journal");
@@ -74,9 +82,11 @@ fn cas_detects_external_write_after_snapshot() {
     // modifies the file between snapshot and CAS check.
     let config_path_clone = config_path.clone();
     let external_write_fn = Box::new(move || {
-        fs::write(&config_path_clone,
-            "model = \"o3\"\nmodel_provider = \"openai\"\nexternal_change = true\n"
-        ).unwrap();
+        fs::write(
+            &config_path_clone,
+            "model = \"o3\"\nmodel_provider = \"openai\"\nexternal_change = true\n",
+        )
+        .unwrap();
     });
 
     let projection = ProviderProjection {
@@ -85,16 +95,21 @@ fn cas_detects_external_write_after_snapshot() {
         api_key_env_or_plain: "sk-key".into(),
     };
 
-    let outcome = tx.execute_with_pre_cas_hook(&projection, &kc, &secret_ref, external_write_fn).unwrap();
+    let outcome = tx
+        .execute_with_pre_cas_hook(&projection, &kc, &secret_ref, external_write_fn)
+        .unwrap();
     assert!(
         matches!(outcome, TransactionOutcome::Conflict(_)),
-        "must detect external write via CAS: {:?}", outcome
+        "must detect external write via CAS: {:?}",
+        outcome
     );
 
     // Conflict must preserve the external change (not overwrite it)
     let current_config = fs::read_to_string(&config_path).unwrap();
-    assert!(current_config.contains("external_change = true"),
-        "CAS must NOT overwrite external change: {current_config}");
+    assert!(
+        current_config.contains("external_change = true"),
+        "CAS must NOT overwrite external change: {current_config}"
+    );
 }
 
 // ── Journal recovery: simulate crash after journal write ─────────────────────
@@ -129,8 +144,8 @@ fn journal_written_before_atomic_rename() {
         let content = fs::read_to_string(&journal_path).unwrap();
         // Either empty, or a cleared JournalEntry
         if !content.trim().is_empty() {
-            let entry: JournalEntry = serde_json::from_str(&content)
-                .expect("journal must be valid JSON");
+            let entry: JournalEntry =
+                serde_json::from_str(&content).expect("journal must be valid JSON");
             assert!(entry.is_cleared(), "journal must be cleared after commit");
         }
     }
@@ -149,7 +164,9 @@ fn second_transaction_fails_while_first_holds_lock() {
 
     // Acquire the lock manually
     let lock = chimera_platform::OperationLock::new(&lock_path);
-    let _guard = lock.try_acquire("manual_hold").expect("first lock must succeed");
+    let _guard = lock
+        .try_acquire("manual_hold")
+        .expect("first lock must succeed");
 
     let kc = MemoryKeychain::new();
     let sr = kc.store("chimera/lock-test", "sk").unwrap();

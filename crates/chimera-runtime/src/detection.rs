@@ -2,10 +2,9 @@
 //! Detects ManagedPortable (Chimera-owned), ExternalMsix, or ExternalPortable.
 //! All operations verify canonical path before any mutation.
 
-use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
 use chimera_domain::{InstallMode, InstallOwnership, TransactionState};
+use std::path::{Path, PathBuf};
+use thiserror::Error;
 
 pub use chimera_domain::InstallMode as InstallKind;
 
@@ -53,9 +52,12 @@ pub fn detect_runtime(dir: &Path) -> Result<DetectedRuntime, OwnershipError> {
         return Ok(DetectedRuntime::Unknown);
     }
 
-    let ownership = read_ownership_manifest(dir)?
-        .ok_or_else(|| OwnershipError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound, "ownership.json disappeared")))?;
+    let ownership = read_ownership_manifest(dir)?.ok_or_else(|| {
+        OwnershipError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "ownership.json disappeared",
+        ))
+    })?;
 
     // Canonical path check: ownership.json's recorded path must match `dir`
     // On Windows, compare case-insensitively and normalise separators.
@@ -81,41 +83,48 @@ fn paths_equivalent(a: &Path, b: &Path) -> bool {
 /// Read and parse `ownership.json` from `dir`. Returns None if file does not exist.
 pub fn read_ownership_manifest(dir: &Path) -> Result<Option<InstallOwnership>, OwnershipError> {
     let path = dir.join(OWNERSHIP_FILENAME);
-    if !path.exists() { return Ok(None); }
+    if !path.exists() {
+        return Ok(None);
+    }
     let bytes = std::fs::read(&path)?;
-    let v: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|e| OwnershipError::Parse(e.to_string()))?;
+    let v: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| OwnershipError::Parse(e.to_string()))?;
     parse_ownership_from_value(v).map(Some)
 }
 
 fn parse_ownership_from_value(v: serde_json::Value) -> Result<InstallOwnership, OwnershipError> {
     let install_mode = match v.get("install_mode").and_then(|m| m.as_str()) {
         Some("managed_portable") => InstallMode::ManagedPortable,
-        Some("external_msix")    => InstallMode::ExternalMsix,
-        _                        => InstallMode::ExternalPortable,
+        Some("external_msix") => InstallMode::ExternalMsix,
+        _ => InstallMode::ExternalPortable,
     };
 
-    let canonical_path: PathBuf = v.get("canonical_path")
+    let canonical_path: PathBuf = v
+        .get("canonical_path")
         .and_then(|p| p.as_str())
         .ok_or_else(|| OwnershipError::Parse("missing canonical_path".into()))?
         .into();
 
-    let codex_version = v.get("codex_version")
+    let codex_version = v
+        .get("codex_version")
         .and_then(|s| s.as_str())
         .unwrap_or("")
         .to_string();
 
-    let source_manifest_digest = v.get("source_manifest_digest")
+    let source_manifest_digest = v
+        .get("source_manifest_digest")
         .and_then(|s| s.as_str())
         .unwrap_or("")
         .to_string();
 
-    let file_tree_digest = v.get("file_tree_digest")
+    let file_tree_digest = v
+        .get("file_tree_digest")
         .and_then(|s| s.as_str())
         .unwrap_or("")
         .to_string();
 
-    let created_by_chimera_version = v.get("created_by_chimera_version")
+    let created_by_chimera_version = v
+        .get("created_by_chimera_version")
         .and_then(|s| s.as_str())
         .unwrap_or("")
         .to_string();

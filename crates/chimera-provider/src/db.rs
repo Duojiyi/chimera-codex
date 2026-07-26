@@ -1,8 +1,8 @@
 //! Provider SQLite repository.
 //! Key不存 DB：只存 secret_ref（OS keychain 引用字符串）。
-use std::path::Path;
-use rusqlite::{Connection, params};
 use chimera_domain::{ProviderHealth, ProviderKind, ProviderProtocol};
+use rusqlite::{Connection, params};
+use std::path::Path;
 use url::Url;
 use uuid::Uuid;
 
@@ -40,10 +40,15 @@ impl ProviderDb {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER NOT NULL);",
         )?;
-        let ver: i64 = self.conn
-            .query_row("SELECT COALESCE(MAX(version),0) FROM _schema_version", [], |r| r.get(0))
+        let ver: i64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(version),0) FROM _schema_version",
+                [],
+                |r| r.get(0),
+            )
             .unwrap_or(0);
-        if ver < 1 {
+        if ver < CURRENT_SCHEMA_VERSION {
             self.conn.execute_batch(
                 "CREATE TABLE IF NOT EXISTS providers (
                     id           TEXT    NOT NULL PRIMARY KEY,
@@ -55,16 +60,22 @@ impl ProviderDb {
                     selected_model TEXT,
                     health       TEXT    NOT NULL DEFAULT 'unknown',
                     sort_order   INTEGER NOT NULL DEFAULT 0
-                );
-                INSERT INTO _schema_version(version) VALUES(1);",
+                );",
+            )?;
+            self.conn.execute(
+                "INSERT INTO _schema_version(version) VALUES(?1)",
+                [CURRENT_SCHEMA_VERSION],
             )?;
         }
         Ok(())
     }
 
     pub fn schema_version(&self) -> rusqlite::Result<i64> {
-        self.conn
-            .query_row("SELECT COALESCE(MAX(version),0) FROM _schema_version", [], |r| r.get(0))
+        self.conn.query_row(
+            "SELECT COALESCE(MAX(version),0) FROM _schema_version",
+            [],
+            |r| r.get(0),
+        )
     }
 
     pub fn insert(&self, row: &ProviderRow) -> rusqlite::Result<()> {
@@ -138,7 +149,8 @@ impl ProviderDb {
     }
 
     pub fn delete(&self, id: Uuid) -> rusqlite::Result<()> {
-        self.conn.execute("DELETE FROM providers WHERE id=?1", [id.to_string()])?;
+        self.conn
+            .execute("DELETE FROM providers WHERE id=?1", [id.to_string()])?;
         Ok(())
     }
 }
@@ -146,30 +158,40 @@ impl ProviderDb {
 // ── serde helpers ─────────────────────────────────────────────────────────────
 
 fn kind_to_str(k: &ProviderKind) -> &'static str {
-    match k { ProviderKind::ChimeraHub => "chimera_hub", ProviderKind::Custom => "custom" }
+    match k {
+        ProviderKind::ChimeraHub => "chimera_hub",
+        ProviderKind::Custom => "custom",
+    }
 }
 fn str_to_kind(s: &str) -> ProviderKind {
-    match s { "chimera_hub" => ProviderKind::ChimeraHub, _ => ProviderKind::Custom }
+    match s {
+        "chimera_hub" => ProviderKind::ChimeraHub,
+        _ => ProviderKind::Custom,
+    }
 }
 fn protocol_to_str(p: &ProviderProtocol) -> &'static str {
-    match p { ProviderProtocol::Responses => "responses" }
+    match p {
+        ProviderProtocol::Responses => "responses",
+    }
 }
-fn str_to_protocol(_s: &str) -> ProviderProtocol { ProviderProtocol::Responses }
+fn str_to_protocol(_s: &str) -> ProviderProtocol {
+    ProviderProtocol::Responses
+}
 fn health_to_str(h: &ProviderHealth) -> &'static str {
     match h {
-        ProviderHealth::Unknown     => "unknown",
-        ProviderHealth::Healthy     => "healthy",
-        ProviderHealth::AuthFailed  => "auth_failed",
+        ProviderHealth::Unknown => "unknown",
+        ProviderHealth::Healthy => "healthy",
+        ProviderHealth::AuthFailed => "auth_failed",
         ProviderHealth::Incompatible => "incompatible",
         ProviderHealth::Unreachable => "unreachable",
     }
 }
 fn str_to_health(s: &str) -> ProviderHealth {
     match s {
-        "healthy"      => ProviderHealth::Healthy,
-        "auth_failed"  => ProviderHealth::AuthFailed,
+        "healthy" => ProviderHealth::Healthy,
+        "auth_failed" => ProviderHealth::AuthFailed,
         "incompatible" => ProviderHealth::Incompatible,
-        "unreachable"  => ProviderHealth::Unreachable,
-        _              => ProviderHealth::Unknown,
+        "unreachable" => ProviderHealth::Unreachable,
+        _ => ProviderHealth::Unknown,
     }
 }

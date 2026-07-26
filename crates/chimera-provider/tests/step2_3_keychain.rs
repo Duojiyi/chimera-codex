@@ -46,11 +46,15 @@ fn retrieve_nonexistent_returns_none() {
 #[test]
 fn secret_ref_debug_does_not_expose_key() {
     let kc = MemoryKeychain::new();
-    let secret_ref = kc.store("chimera/sensitive", "sk-REAL-SECRET-KEY-HERE").unwrap();
+    let secret_ref = kc
+        .store("chimera/sensitive", "sk-REAL-SECRET-KEY-HERE")
+        .unwrap();
     // Debug output of SecretRef must NOT contain the actual key value
     let debug_str = format!("{:?}", secret_ref);
-    assert!(!debug_str.contains("sk-REAL-SECRET-KEY-HERE"),
-        "SecretRef debug must not expose the key: {debug_str}");
+    assert!(
+        !debug_str.contains("sk-REAL-SECRET-KEY-HERE"),
+        "SecretRef debug must not expose the key: {debug_str}"
+    );
 }
 
 #[test]

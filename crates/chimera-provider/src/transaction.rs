@@ -3,15 +3,15 @@
 //! acquire lock → snapshot+hash → render → journal → stage → CAS → atomic replace
 //!             → verify → mark active → clear journal
 
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use sha2::{Digest, Sha256};
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::keychain::{KeychainPort, SecretRef};
-use crate::projection::{apply_provider_projection, ProviderProjection};
+use crate::projection::{ProviderProjection, apply_provider_projection};
 use chimera_platform::lock::{LockError, OperationLock};
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -130,7 +130,8 @@ impl SwitchTransaction {
         let snapshot_hash = hash_str(&existing_config);
 
         // 3. Retrieve secret from keychain
-        let secret = kc.retrieve(secret_ref)
+        let secret = kc
+            .retrieve(secret_ref)
             .map_err(|e| TxError::Keychain(e.to_string()))?
             .ok_or(TxError::SecretMissing)?;
 

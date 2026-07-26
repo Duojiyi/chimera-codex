@@ -3,9 +3,8 @@
 // Expected: compile error referencing missing types.
 
 use chimera_domain::{
-    OperationError, Provider, ProviderHealth, ProviderKind, ProviderProtocol,
-    InstallMode, InstallOwnership, TransactionState,
-    RuntimeState, UpdateState,
+    InstallMode, InstallOwnership, OperationError, Provider, ProviderHealth, ProviderKind,
+    ProviderProtocol, RuntimeState, TransactionState, UpdateState,
 };
 
 // ── Provider ─────────────────────────────────────────────────────────────────
@@ -89,8 +88,12 @@ fn install_mode_variants_cover_all_cases() {
 fn transaction_state_variants_cover_journal_lifecycle() {
     let _states = [
         TransactionState::Clean,
-        TransactionState::Pending { operation: "switch_provider".to_string() },
-        TransactionState::Failed { reason: "disk full".to_string() },
+        TransactionState::Pending {
+            operation: "switch_provider".to_string(),
+        },
+        TransactionState::Failed {
+            reason: "disk full".to_string(),
+        },
     ];
 }
 
@@ -120,17 +123,42 @@ fn update_state_machine_transitions_are_represented() {
     let _states: Vec<UpdateState> = vec![
         UpdateState::Idle,
         UpdateState::Checking,
-        UpdateState::Available { version: "26.732".to_string() },
-        UpdateState::Downloading { version: "26.732".to_string(), bytes_done: 0, bytes_total: 1024 },
-        UpdateState::Paused { version: "26.732".to_string() },
-        UpdateState::Verifying { version: "26.732".to_string() },
-        UpdateState::Staged { version: "26.732".to_string() },
-        UpdateState::WaitingForSafeRestart { version: "26.732".to_string() },
-        UpdateState::Committing { version: "26.732".to_string() },
-        UpdateState::HealthChecking { version: "26.732".to_string() },
-        UpdateState::Succeeded { version: "26.732".to_string() },
-        UpdateState::RolledBack { reason: "health check failed".to_string() },
-        UpdateState::FailedRecoverable { version: "26.732".to_string(), reason: "disk full".to_string() },
+        UpdateState::Available {
+            version: "26.732".to_string(),
+        },
+        UpdateState::Downloading {
+            version: "26.732".to_string(),
+            bytes_done: 0,
+            bytes_total: 1024,
+        },
+        UpdateState::Paused {
+            version: "26.732".to_string(),
+        },
+        UpdateState::Verifying {
+            version: "26.732".to_string(),
+        },
+        UpdateState::Staged {
+            version: "26.732".to_string(),
+        },
+        UpdateState::WaitingForSafeRestart {
+            version: "26.732".to_string(),
+        },
+        UpdateState::Committing {
+            version: "26.732".to_string(),
+        },
+        UpdateState::HealthChecking {
+            version: "26.732".to_string(),
+        },
+        UpdateState::Succeeded {
+            version: "26.732".to_string(),
+        },
+        UpdateState::RolledBack {
+            reason: "health check failed".to_string(),
+        },
+        UpdateState::FailedRecoverable {
+            version: "26.732".to_string(),
+            reason: "disk full".to_string(),
+        },
     ];
     assert_eq!(_states.len(), 13);
 }
@@ -155,8 +183,10 @@ fn operation_error_cas_conflict_carries_hashes() {
         actual_hash: "xyz".to_string(),
     };
     let msg = format!("{e}");
-    assert!(msg.contains("abc") || msg.contains("conflict") || msg.contains("CAS"),
-        "Error message should mention conflict: {msg}");
+    assert!(
+        msg.contains("abc") || msg.contains("conflict") || msg.contains("CAS"),
+        "Error message should mention conflict: {msg}"
+    );
 }
 
 #[test]

@@ -1,3 +1,4 @@
+use fs2::FileExt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -8,7 +9,11 @@ pub enum LockError {
     #[error("operation lock already held (holder pid: {holder_pid:?})")]
     AlreadyHeld { holder_pid: Option<u32> },
     #[error("io error acquiring lock: {source}")]
-    Io { path: PathBuf, #[source] source: std::io::Error },
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 pub struct OperationLock {
@@ -17,16 +22,22 @@ pub struct OperationLock {
 
 impl OperationLock {
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
-        Self { path: path.as_ref().to_path_buf() }
+        Self {
+            path: path.as_ref().to_path_buf(),
+        }
     }
 
     pub fn try_acquire(&self, operation: &str) -> Result<LockGuard, LockError> {
         let mut file = OpenOptions::new()
-            .create(true).write(true).read(true)
+            .create(true)
+            .write(true)
+            .read(true)
             .open(&self.path)
-            .map_err(|e| LockError::Io { path: self.path.clone(), source: e })?;
+            .map_err(|e| LockError::Io {
+                path: self.path.clone(),
+                source: e,
+            })?;
 
-        use fs2::FileExt;
         match file.try_lock_exclusive() {
             Ok(()) => {
                 let _ = file.set_len(0);
@@ -36,7 +47,10 @@ impl OperationLock {
                 let info = format!("{{\"pid\":{pid},\"op\":\"{op_clean}\"}}\n");
                 let _ = file.write_all(info.as_bytes());
                 let _ = file.flush();
-                Ok(LockGuard { file, path: self.path.clone() })
+                Ok(LockGuard {
+                    file,
+                    path: self.path.clone(),
+                })
             }
             Err(_) => {
                 let mut content = String::new();
@@ -54,10 +68,17 @@ pub struct LockGuard {
     path: PathBuf,
 }
 
+impl LockGuard {
+    /// Path of the lock file this guard holds. Used by diagnostics to report
+    /// which operation lock is contended without re-deriving the path.
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
 impl Drop for LockGuard {
     fn drop(&mut self) {
         let _ = self.file.set_len(0);
-        use fs2::FileExt;
         let _ = self.file.unlock();
     }
 }

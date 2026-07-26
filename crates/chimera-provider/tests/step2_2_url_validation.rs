@@ -1,6 +1,6 @@
 // Step 2.2 RED — URL validation and probe security rules.
 // These tests enforce the spec's security requirements for provider URL input.
-use chimera_provider::probe::{validate_provider_url, UrlValidationError};
+use chimera_provider::probe::{UrlValidationError, validate_provider_url};
 use url::Url;
 
 // ── HTTPS enforcement ────────────────────────────────────────────────────────
@@ -34,7 +34,10 @@ fn https_url_is_accepted() {
 fn userinfo_in_url_is_rejected() {
     let r = validate_provider_url("https://user:pass@api.example.com/v1", false);
     assert!(r.is_err());
-    assert!(matches!(r.unwrap_err(), UrlValidationError::ContainsUserinfo));
+    assert!(matches!(
+        r.unwrap_err(),
+        UrlValidationError::ContainsUserinfo
+    ));
 }
 
 #[test]
@@ -43,7 +46,10 @@ fn fragment_in_url_is_rejected() {
     // (they indicate a confused / misconfigured URL)
     let r = validate_provider_url("https://api.example.com/v1#frag", false);
     assert!(r.is_err());
-    assert!(matches!(r.unwrap_err(), UrlValidationError::ContainsFragment));
+    assert!(matches!(
+        r.unwrap_err(),
+        UrlValidationError::ContainsFragment
+    ));
 }
 
 // ── scheme validation ────────────────────────────────────────────────────────
@@ -52,7 +58,10 @@ fn fragment_in_url_is_rejected() {
 fn ftp_scheme_is_rejected() {
     let r = validate_provider_url("ftp://files.example.com/v1", false);
     assert!(r.is_err());
-    assert!(matches!(r.unwrap_err(), UrlValidationError::InsecureScheme { .. }));
+    assert!(matches!(
+        r.unwrap_err(),
+        UrlValidationError::InsecureScheme { .. }
+    ));
 }
 
 #[test]
@@ -97,5 +106,8 @@ fn url_parse_failure_returns_error() {
 #[test]
 fn validated_url_exposes_origin_for_cross_origin_check() {
     let r = validate_provider_url("https://api.chimerahub.io/v1", false).unwrap();
-    assert_eq!(r.base_url.origin(), Url::parse("https://api.chimerahub.io/v1").unwrap().origin());
+    assert_eq!(
+        r.base_url.origin(),
+        Url::parse("https://api.chimerahub.io/v1").unwrap().origin()
+    );
 }

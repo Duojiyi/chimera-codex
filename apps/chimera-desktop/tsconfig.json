@@ -4,6 +4,8 @@
     "lib": ["DOM", "DOM.Iterable", "ESNext"],
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "types": ["node"],
     "strict": true,
     "jsx": "react-jsx",
     "noEmit": true,

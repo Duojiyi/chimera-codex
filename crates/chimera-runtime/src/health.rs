@@ -1,8 +1,8 @@
 //! Steps 5.5/5.6 — Runtime health check and process ownership guard.
 
+use crate::update::RuntimeLayout;
 use std::path::Path;
 use thiserror::Error;
-use crate::update::RuntimeLayout;
 
 #[derive(Debug, Clone)]
 pub struct HealthResult {
@@ -24,12 +24,16 @@ pub enum HealthError {
 /// Check that the active version's executable is present on disk.
 /// A deeper liveness check (launching the process) is done in integration tests.
 pub fn check_runtime_health(layout: &RuntimeLayout) -> Result<HealthResult, HealthError> {
-    let pointer = layout.read_current_pointer()?
+    let pointer = layout
+        .read_current_pointer()?
         .ok_or(HealthError::NoVersionInstalled)?;
 
     let version_dir = layout.version_dir(&pointer.active_version);
     let exe = find_codex_exe(&version_dir);
-    let exe_present = exe.as_ref().map(|p: &std::path::PathBuf| p.exists()).unwrap_or(false);
+    let exe_present = exe
+        .as_ref()
+        .map(|p: &std::path::PathBuf| p.exists())
+        .unwrap_or(false);
 
     Ok(HealthResult {
         version: Some(pointer.active_version),
@@ -43,7 +47,9 @@ fn find_codex_exe(version_dir: &Path) -> Option<std::path::PathBuf> {
     let candidates = ["Codex.exe", "codex", "Codex"];
     for name in &candidates {
         let p = version_dir.join(name);
-        if p.exists() { return Some(p); }
+        if p.exists() {
+            return Some(p);
+        }
     }
     None
 }
@@ -53,6 +59,9 @@ fn find_codex_exe(version_dir: &Path) -> Option<std::path::PathBuf> {
 pub fn is_process_owned_by_runtime(exe_path: &Path, runtime_root: &Path) -> bool {
     // Normalise separators for cross-platform comparison
     let exe_str = exe_path.to_string_lossy().replace('\\', "/").to_lowercase();
-    let root_str = runtime_root.to_string_lossy().replace('\\', "/").to_lowercase();
+    let root_str = runtime_root
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_lowercase();
     exe_str.starts_with(&root_str)
 }

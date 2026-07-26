@@ -1,10 +1,10 @@
 //! Steps 5.3/5.4 — Runtime directory layout, current pointer, staging, commit, rollback.
 //! Spec 8.2: versions/<v>/, staging/<tx>/, backup/<v>/, current.json, operation.lock
 
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -40,12 +40,24 @@ impl RuntimeLayout {
         Self { root: root.into() }
     }
 
-    pub fn root(&self) -> &Path { &self.root }
-    pub fn versions_dir(&self) -> PathBuf { self.root.join("versions") }
-    pub fn staging_dir(&self) -> PathBuf { self.root.join("staging") }
-    pub fn backup_dir(&self) -> PathBuf { self.root.join("backup") }
-    pub fn version_dir(&self, version: &str) -> PathBuf { self.versions_dir().join(version) }
-    pub fn current_pointer_path(&self) -> PathBuf { self.root.join("current.json") }
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+    pub fn versions_dir(&self) -> PathBuf {
+        self.root.join("versions")
+    }
+    pub fn staging_dir(&self) -> PathBuf {
+        self.root.join("staging")
+    }
+    pub fn backup_dir(&self) -> PathBuf {
+        self.root.join("backup")
+    }
+    pub fn version_dir(&self, version: &str) -> PathBuf {
+        self.versions_dir().join(version)
+    }
+    pub fn current_pointer_path(&self) -> PathBuf {
+        self.root.join("current.json")
+    }
 
     pub fn initialise(&self) -> Result<(), UpdateError> {
         fs::create_dir_all(self.versions_dir())?;
@@ -56,7 +68,9 @@ impl RuntimeLayout {
 
     pub fn read_current_pointer(&self) -> Result<Option<UpdatePointer>, UpdateError> {
         let p = self.current_pointer_path();
-        if !p.exists() { return Ok(None); }
+        if !p.exists() {
+            return Ok(None);
+        }
         let data = fs::read(&p)?;
         serde_json::from_slice(&data)
             .map_err(|e| UpdateError::PointerCorrupt(e.to_string()))
@@ -64,8 +78,8 @@ impl RuntimeLayout {
     }
 
     fn write_current_pointer(&self, pointer: &UpdatePointer) -> Result<(), UpdateError> {
-        let json = serde_json::to_string_pretty(pointer)
-            .map_err(|e| UpdateError::Json(e.to_string()))?;
+        let json =
+            serde_json::to_string_pretty(pointer).map_err(|e| UpdateError::Json(e.to_string()))?;
         let tmp = self.current_pointer_path().with_extension("json.tmp");
         let mut f = fs::File::create(&tmp)?;
         f.write_all(json.as_bytes())?;
@@ -101,8 +115,10 @@ pub fn commit_version(
     // Atomic rename: staging → versions/<v>
     fs::rename(&staged, &version_dir)?;
 
-    let previous = layout.read_current_pointer()
-        .ok().flatten()
+    let previous = layout
+        .read_current_pointer()
+        .ok()
+        .flatten()
         .map(|p| p.active_version);
 
     let pointer = UpdatePointer {
@@ -116,10 +132,12 @@ pub fn commit_version(
 
 /// Roll back to the previous version.
 pub fn rollback_to_last_known(layout: &RuntimeLayout) -> Result<UpdatePointer, UpdateError> {
-    let current = layout.read_current_pointer()?
+    let current = layout
+        .read_current_pointer()?
         .ok_or(UpdateError::NoPreviousVersion)?;
 
-    let prev_version = current.previous_version
+    let prev_version = current
+        .previous_version
         .ok_or(UpdateError::NoPreviousVersion)?;
 
     // Verify the previous version directory still exists

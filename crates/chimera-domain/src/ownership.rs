@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Codex 安装模式。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

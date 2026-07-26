@@ -1,0 +1,163 @@
+name: v2 build and gates
+
+# Chimera++ 2.0 (v2 branch) CI.
+#
+# Deliberately separate from pr-build.yml, which targets the 1.x product
+# (codex-plus-manager) and runs gates that no longer apply on v2 — notably
+# test-sync-upstream.ps1, whose subject workflow (sync-upstream.yml) is
+# removed on v2 per ADR: v2 does not follow CodexPlusPlus upstream tags.
+#
+# Ordering constraint: the frontend must be built before any cargo command
+# that compiles apps/chimera-desktop, because Tauri's generate_context!
+# resolves frontendDist at COMPILE time and dist/ is gitignored.
+#
+# Per ADR-007 the same Node/Rust entrypoints run on Windows and macOS;
+# PowerShell is only used for Windows-specific operations.
+
+on:
+  push:
+    branches: [v2]
+  pull_request:
+    branches: [v2]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FRONTEND_DIR: apps/chimera-desktop
+
+jobs:
+  supply-chain:
+    name: Supply chain and secret gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+
+      - name: V11 license and third-party source registry
+        run: node scripts/verify-license.mjs
+
+      - name: V12 secret scan
+        run: node scripts/verify-no-secrets.mjs
+
+      - name: V9 mirror contract
+        run: node scripts/test-mirror-contract.mjs
+
+      - name: V15 architecture boundaries
+        run: node scripts/verify-v2-architecture.mjs
+
+      - name: V16 design tokens match .pen design file
+        run: node scripts/verify-design-tokens.mjs
+
+      - name: V14 whitespace and text errors
+        run: git diff --check ${{ github.event.pull_request.base.sha || 'HEAD~1' }} HEAD
+
+  rust:
+    name: Rust v2 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ${{ env.FRONTEND_DIR }}/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          components: rustfmt
+
+      - name: V1 Rust formatting
+        run: cargo fmt --all -- --check
+
+      # generate_context! reads frontendDist at compile time; dist/ is gitignored.
+      - name: Install frontend dependencies
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npm ci
+
+      - name: Build frontend (required before cargo)
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npm run vite:build
+
+      - name: V2 chimera-domain
+        run: cargo test -p chimera-domain --locked
+
+      - name: V3 chimera-provider
+        run: cargo test -p chimera-provider --locked
+
+      - name: V4 chimera-runtime
+        run: cargo test -p chimera-runtime --locked
+
+      - name: V5 chimera-theme
+        run: cargo test -p chimera-theme --locked
+
+      - name: V6 chimera-migration
+        run: cargo test -p chimera-migration --locked
+
+      - name: chimera-platform
+        run: cargo test -p chimera-platform --locked
+
+      - name: mirror-contract
+        run: cargo test -p mirror-contract --locked
+
+      # V7 is scoped to v2 crates. `cargo test --workspace` currently aborts in
+      # the 1.x codex-plus-core launcher suite (STATUS_STACK_BUFFER_OVERRUN from
+      # a runaway allocation) on commit 2ce80f2c, before any v2 work. That is a
+      # 1.x maintenance-branch defect; v2 must not depend on codex-plus-core (G2),
+      # so the v2 gate does not inherit it. Build the shell to keep it compiling.
+      - name: v2 desktop shell compiles
+        run: cargo build -p chimera-desktop --locked
+
+  frontend:
+    name: Frontend v2 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ${{ env.FRONTEND_DIR }}/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npm ci
+
+      - name: V8 TypeScript check
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npm run check
+
+      - name: V8 behaviour tests
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npm test
+
+      - name: V8 production build
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npm run vite:build

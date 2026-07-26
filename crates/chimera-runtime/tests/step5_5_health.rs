@@ -1,12 +1,9 @@
 // Steps 5.5/5.6 RED — Health check and process ownership verification.
 // Spec 8.2: only close processes under owned runtime root; health = exe exists + responds.
-use chimera_runtime::health::{
-    check_runtime_health, HealthResult, HealthError,
-    is_process_owned_by_runtime,
-};
+use chimera_runtime::health::{check_runtime_health, is_process_owned_by_runtime};
 use chimera_runtime::update::RuntimeLayout;
-use tempfile::tempdir;
 use std::fs;
+use tempfile::tempdir;
 
 fn make_layout_with_version(tmp: &tempfile::TempDir, version: &str) -> RuntimeLayout {
     let layout = RuntimeLayout::new(tmp.path().join("runtime"));
@@ -25,7 +22,10 @@ fn health_check_passes_when_exe_exists() {
     let tmp = tempdir().unwrap();
     let layout = make_layout_with_version(&tmp, "26.721");
     let result = check_runtime_health(&layout).unwrap();
-    assert!(result.exe_present, "exe_present must be true when Codex.exe exists");
+    assert!(
+        result.exe_present,
+        "exe_present must be true when Codex.exe exists"
+    );
 }
 
 #[test]
@@ -35,8 +35,10 @@ fn health_check_fails_when_no_version_installed() {
     layout.initialise().unwrap();
     // No version installed — no current.json
     let result = check_runtime_health(&layout);
-    assert!(result.is_err() || result.map(|r| !r.exe_present).unwrap_or(true),
-        "health check must fail/be unhealthy when no version installed");
+    assert!(
+        result.is_err() || result.map(|r| !r.exe_present).unwrap_or(true),
+        "health check must fail/be unhealthy when no version installed"
+    );
 }
 
 #[test]

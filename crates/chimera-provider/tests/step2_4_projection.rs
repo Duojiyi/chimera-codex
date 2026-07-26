@@ -1,10 +1,8 @@
 // Step 2.4 RED — Codex config.toml projection golden fixtures.
 // Spec 7.3-7.4: 结构化投影、保留未知字段、MCP、官方登录材料不被覆盖。
 use chimera_provider::projection::{
-    apply_provider_projection, revert_provider_projection,
-    ProviderProjection, ProjectionError,
+    ProviderProjection, apply_provider_projection, revert_provider_projection,
 };
-use std::collections::HashMap;
 
 // ── Golden fixture helpers ─────────────────────────────────────────────────
 
@@ -43,18 +41,27 @@ fn unknown_fields_are_preserved_after_projection() {
             model: Some("gpt-4o".into()),
             api_key_env_or_plain: "sk-test-key".into(),
         },
-    ).unwrap();
+    )
+    .unwrap();
 
     // User's custom section must survive unchanged
-    assert!(result.contains("[some_user_custom_section]"),
-        "unknown section must survive: {result}");
-    assert!(result.contains("my_setting = true"),
-        "unknown field must survive: {result}");
-    assert!(result.contains("another_value = 42"),
-        "unknown field must survive: {result}");
+    assert!(
+        result.contains("[some_user_custom_section]"),
+        "unknown section must survive: {result}"
+    );
+    assert!(
+        result.contains("my_setting = true"),
+        "unknown field must survive: {result}"
+    );
+    assert!(
+        result.contains("another_value = 42"),
+        "unknown field must survive: {result}"
+    );
     // MCP config must survive
-    assert!(result.contains("[mcp_servers]"),
-        "mcp_servers must survive: {result}");
+    assert!(
+        result.contains("[mcp_servers]"),
+        "mcp_servers must survive: {result}"
+    );
 }
 
 #[test]
@@ -66,12 +73,17 @@ fn projection_updates_model_provider_fields() {
             model: Some("claude-opus-5".into()),
             api_key_env_or_plain: "sk-new-key".into(),
         },
-    ).unwrap();
+    )
+    .unwrap();
 
-    assert!(result.contains("https://api.new.io/v1"),
-        "new base_url must be in config: {result}");
-    assert!(result.contains("claude-opus-5"),
-        "new model must be in config: {result}");
+    assert!(
+        result.contains("https://api.new.io/v1"),
+        "new base_url must be in config: {result}"
+    );
+    assert!(
+        result.contains("claude-opus-5"),
+        "new model must be in config: {result}"
+    );
 }
 
 // ── 官方登录材料不被 Chimera 投影覆盖 ──────────────────────────────────────
@@ -87,11 +99,14 @@ fn official_login_section_is_not_overwritten() {
             model: Some("gpt-4o".into()),
             api_key_env_or_plain: "sk-chimera-key".into(),
         },
-    ).unwrap();
+    )
+    .unwrap();
 
     // Official [auth] section must remain (not deleted)
-    assert!(result.contains("[auth]"),
-        "official [auth] section must not be removed: {result}");
+    assert!(
+        result.contains("[auth]"),
+        "official [auth] section must not be removed: {result}"
+    );
 }
 
 // ── empty config 可被安全初始化 ─────────────────────────────────────────────
@@ -105,12 +120,17 @@ fn projection_on_empty_config_produces_valid_toml() {
             model: None,
             api_key_env_or_plain: "sk-new".into(),
         },
-    ).unwrap();
+    )
+    .unwrap();
 
     // Must parse as valid TOML
-    result.parse::<toml::Value>().expect("result must be valid TOML");
-    assert!(result.contains("chimerahub.io"),
-        "base_url must appear in result: {result}");
+    result
+        .parse::<toml::Value>()
+        .expect("result must be valid TOML");
+    assert!(
+        result.contains("chimerahub.io"),
+        "base_url must appear in result: {result}"
+    );
 }
 
 // ── revert 只删除 Chimera 拥有的字段 ──────────────────────────────────────
@@ -125,18 +145,25 @@ fn revert_restores_pre_projection_state() {
             model: Some("gpt-4o".into()),
             api_key_env_or_plain: "sk-key".into(),
         },
-    ).unwrap();
+    )
+    .unwrap();
 
     let reverted = revert_provider_projection(&projected).unwrap();
 
     // User's unknown fields must still be present after revert
-    assert!(reverted.contains("[some_user_custom_section]"),
-        "revert must not remove unknown sections: {reverted}");
-    assert!(reverted.contains("[mcp_servers]"),
-        "revert must not remove mcp_servers: {reverted}");
+    assert!(
+        reverted.contains("[some_user_custom_section]"),
+        "revert must not remove unknown sections: {reverted}"
+    );
+    assert!(
+        reverted.contains("[mcp_servers]"),
+        "revert must not remove mcp_servers: {reverted}"
+    );
     // Chimera's injected fields should be removed
-    assert!(!reverted.contains("chimerahub.io"),
-        "chimera base_url must be removed on revert: {reverted}");
+    assert!(
+        !reverted.contains("chimerahub.io"),
+        "chimera base_url must be removed on revert: {reverted}"
+    );
 }
 
 // ── API Key 不出现在投影后的 config（env var 引用）──────────────────────────
@@ -152,11 +179,15 @@ fn api_key_in_plain_text_must_be_injected_as_env_or_direct() {
             model: None,
             api_key_env_or_plain: "sk-projected-key".into(),
         },
-    ).unwrap();
+    )
+    .unwrap();
     // The key (or an env reference) must appear in the output
     // so Codex can authenticate. Projection must not silently drop it.
     let has_key_ref = result.contains("sk-projected-key")
         || result.contains("CHIMERA_API_KEY")
         || result.contains("api_key");
-    assert!(has_key_ref, "projected config must reference the key somehow: {result}");
+    assert!(
+        has_key_ref,
+        "projected config must reference the key somehow: {result}"
+    );
 }

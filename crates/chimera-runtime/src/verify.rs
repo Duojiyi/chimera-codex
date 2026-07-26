@@ -1,7 +1,7 @@
 //! Step 5.2 — Payload hash verification and MSIX identity checks.
 
-use std::path::Path;
 use sha2::{Digest, Sha256};
+use std::path::Path;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -14,12 +14,14 @@ pub enum VerifyError {
 
 /// Verify SHA-256 hash of a file.
 pub fn verify_payload_hash(path: &Path, expected_hex: &str) -> Result<(), VerifyError> {
-    let bytes = std::fs::read(path)
-        .map_err(|e| VerifyError::Io(e.to_string()))?;
+    let bytes = std::fs::read(path).map_err(|e| VerifyError::Io(e.to_string()))?;
     let actual = format!("{:x}", Sha256::digest(&bytes));
     let expected_lower = expected_hex.to_ascii_lowercase();
     if actual != expected_lower {
-        return Err(VerifyError::HashMismatch { expected: expected_lower, actual });
+        return Err(VerifyError::HashMismatch {
+            expected: expected_lower,
+            actual,
+        });
     }
     Ok(())
 }
@@ -43,7 +45,10 @@ pub fn check_msix_codex_identity(package_name: &str, publisher: &str) -> MsixIde
     if !package_name.starts_with(CODEX_PACKAGE_NAME) {
         return MsixIdentityResult::UnknownPackage(package_name.to_string());
     }
-    if !OPENAI_PUBLISHERS.iter().any(|&p| publisher.eq_ignore_ascii_case(p)) {
+    if !OPENAI_PUBLISHERS
+        .iter()
+        .any(|&p| publisher.eq_ignore_ascii_case(p))
+    {
         return MsixIdentityResult::UnknownPublisher(publisher.to_string());
     }
     MsixIdentityResult::Valid

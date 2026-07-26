@@ -1,25 +1,40 @@
 // Task 4 — Mirror contract schema and CAS validation tests.
-use mirror_contract::manifest::{MirrorManifest, CompatibilityStatus, OfficialIdentity, SourceProvenance};
-use mirror_contract::cas::{StablePointer, validate_stable_promotion, verify_manifest_digest, CasError};
 use mirror_contract::capability::{CapabilityManifest, SkinCompatibility};
+use mirror_contract::cas::{
+    CasError, StablePointer, validate_stable_promotion, verify_manifest_digest,
+};
+use mirror_contract::manifest::{
+    CompatibilityStatus, MirrorManifest, OfficialIdentity, SourceProvenance,
+};
 
 // ── Manifest ──────────────────────────────────────────────────────────────────
 
 #[test]
 fn stable_compatible_manifest_is_recognised() {
     let m = sample_manifest("stable", CompatibilityStatus::Compatible);
-    assert!(m.is_stable_compatible(), "stable+compatible must be recognised");
+    assert!(
+        m.is_stable_compatible(),
+        "stable+compatible must be recognised"
+    );
 }
 
 #[test]
 fn raw_manifest_is_not_stable_compatible() {
     let m = sample_manifest("raw", CompatibilityStatus::Compatible);
-    assert!(!m.is_stable_compatible(), "raw channel must not pass is_stable_compatible");
+    assert!(
+        !m.is_stable_compatible(),
+        "raw channel must not pass is_stable_compatible"
+    );
 }
 
 #[test]
 fn incompatible_stable_manifest_is_not_stable_compatible() {
-    let m = sample_manifest("stable", CompatibilityStatus::Incompatible { reason: "bad".into() });
+    let m = sample_manifest(
+        "stable",
+        CompatibilityStatus::Incompatible {
+            reason: "bad".into(),
+        },
+    );
     assert!(!m.is_stable_compatible());
 }
 
@@ -55,8 +70,11 @@ fn lower_sequence_is_rejected_prevents_rollback_attack() {
     let current = pointer(10);
     let proposed = pointer(3);
     let err = validate_stable_promotion(&current, &proposed).unwrap_err();
-    assert!(matches!(err, CasError::StalePromotion { .. }),
-        "lower sequence must be rejected (anti-rollback): {:?}", err);
+    assert!(
+        matches!(err, CasError::StalePromotion { .. }),
+        "lower sequence must be rejected (anti-rollback): {:?}",
+        err
+    );
 }
 
 #[test]
@@ -93,7 +111,10 @@ fn capability_matches_bound_digest() {
         bound_raw_digest: "sha256:abc123".into(),
         codex_version: "26.721".into(),
         generated_at: "2026-07-26T00:00:00Z".into(),
-        skin_compat: SkinCompatibility { compatible: true, checks: vec![] },
+        skin_compat: SkinCompatibility {
+            compatible: true,
+            checks: vec![],
+        },
     };
     assert!(cap.matches_digest("sha256:abc123"));
     assert!(!cap.matches_digest("sha256:different"));
@@ -106,7 +127,10 @@ fn capability_manifest_roundtrips_json() {
         bound_raw_digest: "sha256:xyz".into(),
         codex_version: "26.721".into(),
         generated_at: "2026-07-26T00:00:00Z".into(),
-        skin_compat: SkinCompatibility { compatible: false, checks: vec![] },
+        skin_compat: SkinCompatibility {
+            compatible: false,
+            checks: vec![],
+        },
     };
     let json = serde_json::to_string_pretty(&cap).unwrap();
     let cap2: CapabilityManifest = serde_json::from_str(&json).unwrap();

@@ -2,9 +2,7 @@
 // These fail until chimera-platform exposes the required traits and types.
 // Run: cargo test -p chimera-platform
 
-use chimera_platform::{
-    CanonicalPath, OperationLock, LockGuard, SingleInstance, ProcessIdentity,
-};
+use chimera_platform::{CanonicalPath, LockGuard, OperationLock, ProcessIdentity};
 use std::path::PathBuf;
 
 // ── CanonicalPath ─────────────────────────────────────────────────────────────
@@ -33,7 +31,9 @@ fn operation_lock_acquire_and_release_in_same_process() {
     let lock_path = tmp.path().join("chimera.lock");
 
     let lock = OperationLock::new(&lock_path);
-    let _guard: LockGuard = lock.try_acquire("test_op").expect("first acquire must succeed");
+    let _guard: LockGuard = lock
+        .try_acquire("test_op")
+        .expect("first acquire must succeed");
     // Guard released when it drops.
 }
 
@@ -59,7 +59,9 @@ fn operation_lock_is_released_on_guard_drop() {
         // guard drops here
     }
     // Should succeed now
-    let _guard2 = lock.try_acquire("op_b").expect("re-acquire after drop must succeed");
+    let _guard2 = lock
+        .try_acquire("op_b")
+        .expect("re-acquire after drop must succeed");
 }
 
 // ── ProcessIdentity ────────────────────────────────────────────────────────────

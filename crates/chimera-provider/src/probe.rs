@@ -66,7 +66,8 @@ pub fn validate_provider_url(
     match url.scheme() {
         "https" => { /* always allowed */ }
         "http" => {
-            let is_loopback = url.host_str()
+            let is_loopback = url
+                .host_str()
                 .map(|h| h == "127.0.0.1" || h == "localhost" || h == "::1")
                 .unwrap_or(false);
             if !(dev_mode && is_loopback) {
@@ -92,5 +93,9 @@ pub fn validate_provider_url(
         None
     };
 
-    Ok(ValidatedUrl { base_url: url, v1_candidate, dev_mode })
+    Ok(ValidatedUrl {
+        base_url: url,
+        v1_candidate,
+        dev_mode,
+    })
 }
