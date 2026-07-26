@@ -16,14 +16,27 @@ export const color = {
   /** Hairline rules and borders */
   rule: "#282828",
 
-  /** Highest-contrast text: hero, active tab, values */
+  // ── Text ramp — WCAG 2.2 AA override of the .pen greys ────────────────────
+  // The .pen file specifies #999999 / #5E5E5E / #3A3A3A. Measured against the
+  // four ink surfaces, #5E5E5E reaches only 3.02:1 and #3A3A3A only 1.72:1,
+  // both below the 4.5:1 AA minimum for normal-size text (G16 requires zero
+  // serious axe violations). These tones carry section labels, provider
+  // subtitles and the version string — real structure, so suppressing them
+  // from assistive tech instead of fixing contrast would be the worse trade.
+  //
+  // The ramp below is lifted so every step clears 4.5:1 against the LIGHTEST
+  // surface text sits on (ink3 #222222) while keeping four distinguishable
+  // steps. scripts/verify-design-tokens.mjs asserts both the override values
+  // and their measured contrast, so this cannot silently drift.
+
+  /** Highest-contrast text: hero, active tab, values. Unchanged from .pen. */
   primary: "#EBEBEB",
-  /** Panel titles, spec-sheet values */
-  secondary: "#999999",
-  /** Body text, inactive tabs, spec-sheet keys */
-  muted: "#5E5E5E",
-  /** Eyebrow labels, version string */
-  dim: "#3A3A3A",
+  /** Panel titles, spec-sheet values. AA override of .pen #999999. */
+  secondary: "#B8B8B8",
+  /** Body text, inactive tabs, spec-sheet keys. AA override of .pen #5E5E5E. */
+  muted: "#9A9A9A",
+  /** Eyebrow/section labels, version string. AA override of .pen #3A3A3A. */
+  dim: "#8A8A8A",
 
   /** Single accent — logo mark, active tab underline, primary action */
   accent: "#FF4D3D",

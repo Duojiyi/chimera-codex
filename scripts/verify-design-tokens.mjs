@@ -42,15 +42,51 @@ const PEN_COLORS = {
   ink2: "#181818",
   ink3: "#222222",
   rule: "#282828",
-  dim: "#3A3A3A",
-  muted: "#5E5E5E",
-  secondary: "#999999",
   primary: "#EBEBEB",
   accent: "#FF4D3D",
   green: "#34C759",
   amber: "#FF9F0A",
   danger: "#FF453A",
 };
+
+// Deliberate WCAG 2.2 AA overrides of the .pen text greys. The design file's
+// values fail the 4.5:1 minimum for normal-size text, and these tones carry
+// real structure (section labels, subtitles, version string), so they cannot be
+// hidden from assistive tech instead. Each entry records the .pen original so
+// the divergence stays visible, and the contrast check below proves the
+// replacement actually earns its place — a wrong value fails the gate.
+const A11Y_OVERRIDES = {
+  secondary: { pen: "#999999", use: "#B8B8B8" },
+  muted: { pen: "#5E5E5E", use: "#9A9A9A" },
+  dim: { pen: "#3A3A3A", use: "#8A8A8A" },
+};
+
+/**
+ * Every surface text sits on, from the .pen file. The override must clear AA
+ * against all of them — checking only the page background would let a token
+ * pass while failing on a panel or a selected row.
+ */
+const SURFACES = {
+  ink0: "#0C0C0C",
+  ink1: "#111111",
+  ink2: "#181818",
+  ink3: "#222222",
+};
+const AA_NORMAL = 4.5;
+
+function relativeLuminance(hex) {
+  const [r, g, b] = [1, 3, 5].map((i) => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrastRatio(a, b) {
+  const [x, y] = [relativeLuminance(a), relativeLuminance(b)];
+  const [hi, lo] = x > y ? [x, y] : [y, x];
+  return (hi + 0.05) / (lo + 0.05);
+}
 
 // Display-size anchors: each screen's single largest type element.
 const PEN_ANCHORS = {
@@ -82,6 +118,41 @@ if (!existsSync(TOKENS_FILE)) {
     }
   }
   if (failures === 0) pass(`all ${Object.keys(PEN_COLORS).length} colour tokens match the .pen file`);
+
+  // Overrides must (a) be present at the stated value and (b) actually earn the
+  // exemption by clearing 4.5:1 on every surface. An override that does not
+  // improve contrast is just drift wearing a comment.
+  for (const [name, o] of Object.entries(A11Y_OVERRIDES)) {
+    const re = new RegExp(`${name}\\s*:\\s*"(#[0-9A-Fa-f]{6})"`);
+    const found = tokens.match(re);
+    if (!found) {
+      fail(`tokens.ts: override token \`${name}\` not found`);
+      continue;
+    }
+    if (found[1].toUpperCase() !== o.use.toUpperCase()) {
+      fail(`tokens.ts: \`${name}\` is ${found[1]}, the recorded a11y override is ${o.use}`);
+      continue;
+    }
+    let worst = Infinity;
+    let worstBg = "";
+    for (const [bgName, bg] of Object.entries(SURFACES)) {
+      const cr = contrastRatio(found[1], bg);
+      if (cr < worst) {
+        worst = cr;
+        worstBg = bgName;
+      }
+    }
+    if (worst < AA_NORMAL) {
+      fail(
+        `tokens.ts: \`${name}\` (${o.use}) is ${worst.toFixed(2)}:1 on ${worstBg} — ` +
+          `below AA ${AA_NORMAL}:1, so the override does not achieve its stated purpose`,
+      );
+    } else {
+      pass(
+        `override ${name} ${o.pen}→${o.use}: ${worst.toFixed(2)}:1 worst-case (${worstBg}), clears AA`,
+      );
+    }
+  }
 
   for (const [name, size] of Object.entries(PEN_ANCHORS)) {
     // Anchors are nested:  hero: { fontSize: 88, fontWeight: 700, ... }
