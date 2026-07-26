@@ -14,6 +14,9 @@
 //! closure or trait parameter) that the caller supplies; see the module docs
 //! on `session` and `fingerprint` for the specific seams.
 
+pub mod apply;
 pub mod css_allowlist;
+pub mod fingerprint;
 pub mod package;
 pub mod schema;
+pub mod session;

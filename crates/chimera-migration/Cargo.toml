@@ -13,7 +13,11 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 url = { workspace = true }
-uuid = { workspace = true }
+# v5: deterministic (namespace + name) provider ids in migrate.rs. Same
+# (source_kind, source_id) always yields the same id, which is what lets a
+# re-run recognise "already migrated" via a plain existence check instead of
+# the ProviderSink needing to know anything about 1.x/CC Switch source ids.
+uuid = { workspace = true, features = ["v5"] }
 chimera-domain = { path = "../chimera-domain" }
 # chimera-platform is layer 1 (ports over OS capabilities); reusing its file
 # lock is allowed. chimera-provider/-runtime/-theme are sibling layer-2
