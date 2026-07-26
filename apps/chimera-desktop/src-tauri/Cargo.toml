@@ -20,6 +20,9 @@ serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = ["custom-protocol", "tray-icon"] }
 tauri-plugin-dialog = "2"
+directories.workspace = true
+url.workspace = true
+uuid.workspace = true
 chimera-domain = { path = "../../../crates/chimera-domain" }
 chimera-provider = { path = "../../../crates/chimera-provider" }
 chimera-runtime = { path = "../../../crates/chimera-runtime" }

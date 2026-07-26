@@ -401,12 +401,15 @@ dependencies = [
  "chimera-platform",
  "chimera-provider",
  "chimera-runtime",
+ "directories",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tempfile",
+ "url",
+ "uuid",
 ]
 
 [[package]]
