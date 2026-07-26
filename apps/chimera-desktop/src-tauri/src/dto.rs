@@ -105,3 +105,81 @@ impl Default for RuntimeInfoDto {
         }
     }
 }
+
+// ── Codex runtime screen ─────────────────────────────────────────────────────
+
+/// One entry in the version-history list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionEntryDto {
+    pub version: String,
+    /// One of: active | previous | superseded.
+    pub state: String,
+}
+
+/// One diagnostic check result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticEntryDto {
+    pub name: String,
+    /// One of: pass | warn | fail.
+    pub result: String,
+}
+
+/// Full state of the Codex screen. Mirrors the frontend `RuntimeStatus`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStatusDto {
+    pub installed: bool,
+    pub version: Option<String>,
+    pub platform: Option<String>,
+    pub healthy: bool,
+    pub health_label: Option<String>,
+    pub mode: Option<String>,
+    pub ownership: Option<String>,
+    pub install_path: Option<String>,
+    pub last_update: Option<String>,
+    pub uptime: Option<String>,
+    pub update_available: bool,
+    pub update_version: Option<String>,
+    pub update_channel: Option<String>,
+    pub update_meta: Option<String>,
+    pub history: Vec<VersionEntryDto>,
+    pub diagnostics: Vec<DiagnosticEntryDto>,
+}
+
+// ── Settings screen ──────────────────────────────────────────────────────────
+
+/// Persisted user preferences. Mirrors the frontend `SettingsState`.
+///
+/// `Default` is the shipped baseline, so a missing or corrupt settings file
+/// degrades to known-good values rather than failing the screen.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsDto {
+    pub launch_at_login: bool,
+    pub launch_codex_on_start: bool,
+    pub start_minimized: bool,
+    pub update_channel: String,
+    pub log_retention: String,
+    pub structured_logs: bool,
+    pub anonymous_usage: bool,
+    pub crash_reporting: bool,
+}
+
+impl Default for SettingsDto {
+    fn default() -> Self {
+        Self {
+            launch_at_login: false,
+            launch_codex_on_start: false,
+            start_minimized: false,
+            update_channel: "stable".to_string(),
+            log_retention: "30".to_string(),
+            // Diagnostics default ON because it is local-only and makes support
+            // possible; the two that leave the machine default OFF (G9).
+            structured_logs: true,
+            anonymous_usage: false,
+            crash_reporting: false,
+        }
+    }
+}

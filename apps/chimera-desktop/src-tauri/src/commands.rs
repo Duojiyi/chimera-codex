@@ -7,10 +7,17 @@
 // Every command returns Result<T, String>: the String is user-facing and must
 // never contain a raw Rust error, a stack trace, or a secret.
 
-use tauri::State;
+use std::fs;
 
+use tauri::State;
+use uuid::Uuid;
+
+use chimera_platform::lock::{LockError, OperationLock};
 use chimera_provider::db::ProviderRow;
+use chimera_provider::keychain::{KeychainPort, SecretRef};
 use chimera_provider::probe::{UrlValidationError, validate_provider_url};
+use chimera_provider::projection::{ProviderProjection, revert_provider_projection};
+use chimera_provider::transaction::{SwitchTransaction, TransactionOutcome, TxError};
 use chimera_runtime::health::check_runtime_health;
 
 use crate::dto::{ProviderDto, ProviderTestDto, RuntimeInfoDto, SkinDto, SystemStatusDto};
@@ -150,11 +157,137 @@ fn url_error_message(e: &UrlValidationError) -> String {
 /// deliberate — a silent success here would make the UI lie about the live
 /// config, which is worse than a visible "not yet available".
 #[tauri::command]
-pub fn switch_provider(_provider_id: Option<String>) -> Result<(), String> {
-    Err(
-        "Provider switching is not enabled in this build. Task 6 connects the config transaction."
-            .to_string(),
-    )
+pub fn switch_provider(
+    provider_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let tx = SwitchTransaction::new(
+        state.paths.codex_config(),
+        state.paths.operation_lock(),
+        state.paths.journal(),
+    );
+
+    // No id means "restore the official login": revert only the keys Chimera
+    // added, leaving [auth], MCP, and every unknown field untouched (G3).
+    let Some(raw_id) = provider_id else {
+        return restore_official(&state);
+    };
+
+    let id = Uuid::parse_str(&raw_id).map_err(|_| "That provider id is not valid.".to_string())?;
+
+    let row = {
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| "Internal state is locked. Restart Chimera++.".to_string())?;
+        db.get_by_id(id)
+            .map_err(|e| format!("Could not read the provider: {e}"))?
+            .ok_or_else(|| "That provider no longer exists.".to_string())?
+    };
+
+    // The key never round-trips through the DB or the frontend — only its
+    // opaque handle does, and it is resolved here at the moment of use (G4).
+    let secret_ref = row
+        .secret_ref
+        .as_deref()
+        .map(SecretRef::new)
+        .ok_or_else(|| {
+            "This provider has no stored API key. Re-add it to store one.".to_string()
+        })?;
+
+    if state
+        .keychain
+        .retrieve(&secret_ref)
+        .map_err(|e| format!("Could not read the stored API key: {e}"))?
+        .is_none()
+    {
+        return Err(
+            "The stored API key is missing from the system credential store. Re-enter it for this provider."
+                .to_string(),
+        );
+    }
+
+    let projection = ProviderProjection {
+        base_url: row.base_url.to_string(),
+        model: row.selected_model.clone(),
+        // The transaction resolves the handle itself; passing the material here
+        // would put the key in this frame and risk it reaching a log or panic.
+        api_key_env_or_plain: String::new(),
+    };
+
+    match tx.execute(&projection, &state.keychain, &secret_ref) {
+        Ok(TransactionOutcome::Committed) => Ok(()),
+        // CAS caught a write between snapshot and commit. Nothing was changed,
+        // so the honest response is to ask for a retry rather than clobber it.
+        Ok(TransactionOutcome::Conflict(_)) => Err(
+            "Codex's config.toml changed while switching, so nothing was modified. Try again."
+                .to_string(),
+        ),
+        Err(e) => Err(tx_error_message(&e)),
+    }
+}
+
+/// Revert Chimera's owned keys, returning Codex to its official login.
+fn restore_official(state: &State<'_, AppState>) -> Result<(), String> {
+    let config_path = state.paths.codex_config();
+    if !config_path.exists() {
+        // Nothing was ever projected, so official mode is already the state.
+        return Ok(());
+    }
+
+    let lock = OperationLock::new(state.paths.operation_lock());
+    let _guard = lock
+        .try_acquire("restore_official")
+        .map_err(|e| lock_error_message(&e))?;
+
+    let current = fs::read_to_string(&config_path)
+        .map_err(|e| format!("Could not read Codex's config.toml: {e}"))?;
+    let reverted = revert_provider_projection(&current)
+        .map_err(|e| format!("Could not update Codex's config.toml: {e}"))?;
+
+    atomic_write(&config_path, &reverted)
+        .map_err(|e| format!("Could not write Codex's config.toml: {e}"))
+}
+
+/// Write via temp file + rename so a crash can never leave a partial config.
+fn atomic_write(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("toml.chimera-tmp");
+    fs::write(&tmp, contents)?;
+    fs::rename(&tmp, path)
+}
+
+fn lock_error_message(e: &LockError) -> String {
+    match e {
+        LockError::AlreadyHeld { .. } => {
+            "Another Chimera++ operation is in progress. Wait for it to finish and try again."
+                .to_string()
+        }
+        LockError::Io { .. } => {
+            "Could not acquire the operation lock. Check that the data directory is writable."
+                .to_string()
+        }
+    }
+}
+
+fn tx_error_message(e: &TxError) -> String {
+    match e {
+        TxError::Lock(l) => lock_error_message(l),
+        TxError::Projection(_) => {
+            "Codex's config.toml could not be updated because it is not valid TOML.".to_string()
+        }
+        TxError::Keychain(_) => {
+            "Could not read the stored API key from the system credential store.".to_string()
+        }
+        TxError::Io(_) => {
+            "Could not write Codex's config.toml. Check that the file is writable.".to_string()
+        }
+        // The DB row references a credential the OS store no longer has — the
+        // user revoked it, or the profile moved between machines.
+        TxError::SecretMissing => {
+            "The stored API key is missing from the system credential store. Re-enter it for this provider."
+                .to_string()
+        }
+    }
 }
 
 /// Launch the managed Codex runtime.

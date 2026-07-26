@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use chimera_provider::db::ProviderDb;
+use chimera_provider::keychain::OsKeychain;
 use chimera_runtime::update::RuntimeLayout;
 
 /// Resolved on-disk locations for this installation.
@@ -71,6 +72,12 @@ impl Paths {
         self.data_root.join("operation.lock")
     }
 
+    /// User preferences. Plain JSON: no secrets live here — provider keys are
+    /// in the OS keychain and only referenced by handle (G4).
+    pub fn settings(&self) -> PathBuf {
+        self.data_root.join("settings.json")
+    }
+
     /// Transaction journal for crash recovery.
     pub fn journal(&self) -> PathBuf {
         self.data_root.join("switch.journal")
@@ -82,6 +89,9 @@ pub struct AppState {
     pub paths: Paths,
     /// Provider DB behind a mutex — single writer (ADR-001).
     pub db: Mutex<ProviderDb>,
+    /// Real OS credential store. Held here so every command shares one
+    /// backend and no command can silently fall back to an in-memory double.
+    pub keychain: OsKeychain,
     pub runtime: RuntimeLayout,
 }
 
@@ -107,6 +117,7 @@ impl AppState {
         Ok(Self {
             paths,
             db: Mutex::new(db),
+            keychain: OsKeychain::new(),
             runtime,
         })
     }

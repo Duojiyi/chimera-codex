@@ -5,6 +5,7 @@
 
 pub mod commands;
 pub mod dto;
+pub mod runtime_cmds;
 pub mod state;
 
 use state::AppState;
@@ -34,6 +35,17 @@ pub fn run() {
             commands::apply_skin,
             commands::try_skin,
             commands::restore_default_skin,
+            // Codex screen — every command the tab calls must be here, or it
+            // fails at runtime with "command not found" the moment it opens.
+            runtime_cmds::get_runtime_status,
+            runtime_cmds::repair_runtime,
+            runtime_cmds::run_diagnostics,
+            runtime_cmds::rollback_runtime,
+            runtime_cmds::apply_codex_update,
+            // Settings screen
+            runtime_cmds::get_settings,
+            runtime_cmds::save_settings,
+            runtime_cmds::reset_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
