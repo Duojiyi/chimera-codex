@@ -5,27 +5,35 @@
 // token; color.ink2 (#181818) is the nearest defined surface tone.
 import { useState, useEffect } from "react";
 import { color, type, size, radius, hairline, ruleOpacity } from "../../design/tokens.ts";
+import { useI18n, type TranslationKey } from "../../i18n/index.tsx";
 
 interface Skin {
   id: string;
-  name: string;
-  subtitle: string;
+  // Built-in skins are localized via i18n key. Module-level constants must
+  // hold KEYS, never translated text, so instant language switching works —
+  // scripts/verify-i18n.mjs enforces this.
+  nameKey?: TranslationKey;
+  subtitleKey?: TranslationKey;
+  // Skins loaded from disk/backend carry their own display strings — they
+  // are not part of the translation dictionary, so these are plain text.
+  name?: string;
+  subtitle?: string;
   applied?: boolean;
 }
 
 const DEFAULT_SKINS: Skin[] = [
-  { id: "default", name: "Default", subtitle: "Official appearance, no modifications", applied: true },
-  { id: "terminal", name: "Terminal", subtitle: "Monospace, high density" },
-  { id: "minimal", name: "Minimal", subtitle: "Reduced chrome" },
-  { id: "high-contrast", name: "High Contrast", subtitle: "WCAG AAA contrast" },
+  { id: "default", nameKey: "appearance.defaultName", subtitleKey: "appearance.defaultSubtitle", applied: true },
+  { id: "terminal", nameKey: "appearance.terminalName", subtitleKey: "appearance.terminalDesc" },
+  { id: "minimal", nameKey: "appearance.minimalName", subtitleKey: "appearance.minimalDesc" },
+  { id: "high-contrast", nameKey: "appearance.highContrastName", subtitleKey: "appearance.highContrastDesc" },
 ];
 
-const SAFETY_ROWS: [string, string][] = [
-  ["app.asar", "untouched"],
-  ["Official files", "untouched"],
-  ["CDP", "loopback only"],
-  ["JavaScript", "not allowed"],
-  ["Remote URLs", "blocked"],
+const SAFETY_ROWS: { labelKey: TranslationKey; valueKey: TranslationKey }[] = [
+  { labelKey: "appearance.rowAppAsar", valueKey: "appearance.valUntouched" },
+  { labelKey: "appearance.rowOfficialFiles", valueKey: "appearance.valUntouched" },
+  { labelKey: "appearance.rowCdp", valueKey: "appearance.valLoopbackOnly" },
+  { labelKey: "appearance.rowJavaScript", valueKey: "appearance.valNotAllowed" },
+  { labelKey: "appearance.rowRemoteUrls", valueKey: "appearance.valBlocked" },
 ];
 
 const invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> =
@@ -34,12 +42,22 @@ const invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> 
     : async () => undefined;
 
 export function AppearanceFeature() {
+  const { t, tf } = useI18n();
   const [skins, setSkins] = useState<Skin[]>(DEFAULT_SKINS);
   const [selectedId, setSelectedId] = useState<string>(
     DEFAULT_SKINS.find(s => s.applied)?.id ?? DEFAULT_SKINS[0].id
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Resolve a skin's display strings: built-in skins translate via key,
+  // skins loaded from disk/backend use their own raw name/subtitle.
+  function skinName(skin: Skin): string {
+    return skin.nameKey ? t(skin.nameKey) : skin.name ?? "";
+  }
+  function skinSubtitle(skin: Skin): string {
+    return skin.subtitleKey ? t(skin.subtitleKey) : skin.subtitle ?? "";
+  }
 
   useEffect(() => {
     invoke("list_skins")
@@ -62,7 +80,7 @@ export function AppearanceFeature() {
       await invoke("apply_skin", { id: selectedSkin.id });
       setSkins(list => list.map(s => ({ ...s, applied: s.id === selectedSkin.id })));
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to apply skin.");
+      setError(err instanceof Error ? err.message : t("appearance.errApply"));
     } finally {
       setBusy(false);
     }
@@ -73,7 +91,7 @@ export function AppearanceFeature() {
     try {
       await invoke("try_skin", { id: selectedSkin.id });
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to preview skin.");
+      setError(err instanceof Error ? err.message : t("appearance.errTry"));
     } finally {
       setBusy(false);
     }
@@ -85,20 +103,21 @@ export function AppearanceFeature() {
       await invoke("restore_default_skin");
       setSkins(list => list.map(s => ({ ...s, applied: s.id === "default" })));
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to restore default skin.");
+      setError(err instanceof Error ? err.message : t("appearance.errRestore"));
     } finally {
       setBusy(false);
     }
   }
 
-  const miniTabs = ["Home", "Providers", "Codex", "Appearance"];
+  const miniTabs: TranslationKey[] = ["nav.home", "nav.providers", "nav.codex", "nav.appearance"];
+  const statCols: TranslationKey[] = ["home.colProvider", "home.colRuntime", "home.colUpdates"];
 
   return (
     <div style={{ display: "flex", height: "100%" }}>
       {/* ── Skin list ── */}
       <div
         role="tablist"
-        aria-label="Installed skins"
+        aria-label={t("appearance.listAriaLabel")}
         style={{
           width: size.skinList, background: color.ink1, borderRight: `${hairline}px solid ${color.rule}`,
           display: "flex", flexDirection: "column",
@@ -108,11 +127,15 @@ export function AppearanceFeature() {
           height: size.panelHead, padding: "0 20px", borderBottom: `${hairline}px solid ${color.rule}`,
           display: "flex", alignItems: "center",
         }}>
-          <span style={{ ...type.uiStrong, color: color.secondary }}>Skins</span>
+          <span style={{ ...type.uiStrong, color: color.secondary }}>
+            {t("appearance.skins")}
+          </span>
         </div>
 
         <div style={{ padding: "14px 20px 6px 20px" }}>
-          <span style={{ ...type.sectionLabel, color: color.dim }}>INSTALLED</span>
+          <span style={{ ...type.sectionLabel, color: color.dim }}>
+            {t("appearance.installed")}
+          </span>
         </div>
 
         {skins.map((skin, i) => (
@@ -133,8 +156,8 @@ export function AppearanceFeature() {
               }}
             >
               <div style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
-                <span style={{ fontSize: 13, fontWeight: 600, color: color.primary }}>{skin.name}</span>
-                <span style={{ fontSize: 11, color: color.dim }}>{skin.subtitle}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: color.primary }}>{skinName(skin)}</span>
+                <span style={{ fontSize: 11, color: color.dim }}>{skinSubtitle(skin)}</span>
               </div>
               {skin.applied && (
                 <span style={{
@@ -142,7 +165,7 @@ export function AppearanceFeature() {
                   border: `${hairline}px solid ${color.rule}`, fontSize: 10, fontWeight: 600,
                   letterSpacing: 1.5, color: color.accent,
                 }}>
-                  APPLIED
+                  {t("appearance.applied")}
                 </span>
               )}
             </div>
@@ -154,24 +177,28 @@ export function AppearanceFeature() {
       </div>
 
       {/* ── Skin detail ── */}
-      <div role="main" aria-label="Skin detail" style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+      <div role="main" aria-label={t("appearance.detailAriaLabel")} style={{ flex: 1, display: "flex", flexDirection: "column" }}>
         <div style={{
           height: size.panelHead, padding: "0 32px", borderBottom: `${hairline}px solid ${color.rule}`,
           display: "flex", alignItems: "center", gap: 16,
         }}>
-          <span style={{ ...type.skinTitle, color: color.primary }}>{selectedSkin.name}</span>
+          <span style={{ ...type.skinTitle, color: color.primary }}>{skinName(selectedSkin)}</span>
           <span style={{ fontSize: 13, color: color.muted }}>
-            {selectedSkin.applied ? "No modifications to official app files" : selectedSkin.subtitle}
+            {selectedSkin.applied ? t("appearance.defaultDesc") : skinSubtitle(selectedSkin)}
           </span>
           <div style={{ flex: 1 }} />
           {selectedSkin.applied && (
-            <span style={{ fontSize: 12, color: color.green }}>✓ System default active</span>
+            <span style={{ fontSize: 12, color: color.green }}>
+              {t("appearance.systemDefaultActive")}
+            </span>
           )}
         </div>
 
         <div style={{ display: "flex", flex: 1 }}>
           <div style={{ flex: 1, padding: "28px 32px", display: "flex", flexDirection: "column", gap: 20 }}>
-            <span style={{ ...type.sectionLabel, color: color.dim }}>PREVIEW</span>
+            <span style={{ ...type.sectionLabel, color: color.dim }}>
+              {t("appearance.preview")}
+            </span>
             <div style={{ height: 1, background: color.rule }} />
 
             <div
@@ -187,38 +214,42 @@ export function AppearanceFeature() {
                 display: "flex", alignItems: "center", padding: "0 10px", gap: 6,
               }}>
                 <div style={{ width: 10, height: 10, borderRadius: radius.xs, background: color.accent }} />
-                <span style={{ fontSize: 9, fontWeight: 600, color: color.primary }}>Chimera++</span>
+                <span style={{ fontSize: 9, fontWeight: 600, color: color.primary }}>
+                  Chimera++
+                </span>
                 <div style={{ width: 1, height: 12, background: color.rule }} />
-                {miniTabs.map((tab, i) => (
-                  <span key={tab} style={{ fontSize: 8, color: i === 0 ? color.primary : color.muted }}>
-                    {tab}
+                {miniTabs.map((key, i) => (
+                  <span key={key} style={{ fontSize: 8, color: i === 0 ? color.primary : color.muted }}>
+                    {t(key)}
                   </span>
                 ))}
               </div>
 
               <div style={{ padding: "18px 20px", display: "flex", flexDirection: "column" }}>
                 <span style={{ fontSize: 7, fontWeight: 600, letterSpacing: 1.5, color: color.muted }}>
-                  ACTIVE PROVIDER
+                  {t("home.eyebrow")}
                 </span>
                 <span style={{ fontSize: 26, fontWeight: 700, color: color.primary, lineHeight: 0.95 }}>
                   ChimeraHub
                 </span>
-                <span style={{ fontSize: 9, color: color.muted }}>→ Codex 26.721 · running</span>
+                <span style={{ fontSize: 9, color: color.muted }}>
+                  {tf("appearance.previewStatusLine", ["26.721"])}
+                </span>
               </div>
 
               <div style={{ height: 1, background: color.rule }} />
 
               <div style={{ flex: 1, display: "flex" }}>
-                {["PROVIDER", "RUNTIME", "UPDATES"].map((title, i) => (
+                {statCols.map((key, i) => (
                   <div
-                    key={title}
+                    key={key}
                     style={{
                       flex: 1, padding: "10px 12px",
                       borderRight: i < 2 ? `${hairline}px solid ${color.rule}` : "none",
                     }}
                   >
                     <span style={{ fontSize: 7, fontWeight: 600, letterSpacing: 1.5, color: color.dim }}>
-                      {title}
+                      {t(key)}
                     </span>
                     {[0, 1, 2].map(row => (
                       <div key={row} style={{
@@ -240,31 +271,31 @@ export function AppearanceFeature() {
                   cursor: busy ? "wait" : "pointer", opacity: busy ? 0.7 : 1,
                 }}
               >
-                Apply skin
+                {t("appearance.apply")}
               </button>
               <button
                 onClick={handleTry}
                 disabled={busy}
-                aria-label="Try without saving"
+                aria-label={t("appearance.tryIt")}
                 style={{
                   background: color.ink3, color: color.primary, border: `${hairline}px solid ${color.rule}`,
                   borderRadius: radius.sm, padding: "9px 18px", fontSize: 13, fontFamily: "inherit",
                   cursor: busy ? "wait" : "pointer", opacity: busy ? 0.7 : 1,
                 }}
               >
-                Try without saving
+                {t("appearance.tryIt")}
               </button>
               <button
                 onClick={handleRestore}
                 disabled={busy}
-                aria-label="Restore default"
+                aria-label={t("appearance.restoreDefault")}
                 style={{
                   background: color.ink3, color: color.primary, border: `${hairline}px solid ${color.rule}`,
                   borderRadius: radius.sm, padding: "9px 18px", fontSize: 13, fontFamily: "inherit",
                   cursor: busy ? "wait" : "pointer", opacity: busy ? 0.7 : 1,
                 }}
               >
-                Restore default
+                {t("appearance.restoreDefault")}
               </button>
             </div>
 
@@ -276,21 +307,23 @@ export function AppearanceFeature() {
           <div style={{ width: 1, background: color.rule, alignSelf: "stretch" }} />
 
           <div
-            aria-label="Safety information"
+            aria-label={t("appearance.safetyAriaLabel")}
             style={{ width: size.skinMeta, padding: "28px 20px", display: "flex", flexDirection: "column" }}
           >
-            <span style={{ ...type.sectionLabel, color: color.dim }}>SAFETY</span>
+            <span style={{ ...type.sectionLabel, color: color.dim }}>
+              {t("appearance.safety")}
+            </span>
             <div style={{ height: 1, background: color.rule, margin: "8px 0" }} />
-            {SAFETY_ROWS.map(([label, value], i) => (
-              <div key={label}>
+            {SAFETY_ROWS.map((row, i) => (
+              <div key={row.labelKey}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 34 }}>
                   <div style={{
                     width: 5, height: 5, borderRadius: "50%",
                     background: color.green,
                   }} />
-                  <span style={{ fontSize: 11, color: color.secondary }}>{label}</span>
+                  <span style={{ fontSize: 11, color: color.secondary }}>{t(row.labelKey)}</span>
                   <div style={{ flex: 1 }} />
-                  <span style={{ fontSize: 10, color: color.muted, textAlign: "right" }}>{value}</span>
+                  <span style={{ fontSize: 10, color: color.muted, textAlign: "right" }}>{t(row.valueKey)}</span>
                 </div>
                 {i < SAFETY_ROWS.length - 1 && (
                   <div style={{ height: 1, background: color.rule, opacity: ruleOpacity.spec }} />
@@ -303,4 +336,3 @@ export function AppearanceFeature() {
     </div>
   );
 }
-

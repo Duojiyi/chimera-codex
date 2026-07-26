@@ -3,6 +3,7 @@
 // Every dimension/colour comes from src/design/tokens.ts — no literals here.
 import { useState, useEffect } from "react";
 import { color, type as font, size, radius, hairline, ruleOpacity } from "../../design/tokens.ts";
+import { useI18n, type TranslationKey } from "../../i18n/index.tsx";
 
 interface SystemStatus {
   providerName: string | null;
@@ -24,7 +25,18 @@ const HEALTH_COLOR: Record<SystemStatus["providerHealth"], string> = {
   unreachable: color.danger,
 };
 
+// Module-level tables hold i18n KEYS, never translated text — translating here
+// would freeze the string at import and break instant language switching.
+// scripts/verify-i18n.mjs enforces this.
+const HEALTH_LABEL_KEY: Record<SystemStatus["providerHealth"], TranslationKey> = {
+  unknown: "health.unknown",
+  healthy: "health.healthy",
+  auth_failed: "health.authFailed",
+  unreachable: "health.unreachable",
+};
+
 export function HomeFeature() {
+  const { t } = useI18n();
   const [status, setStatus] = useState<SystemStatus>({
     providerName: null, providerHealth: "unknown",
     codexVersion: null, codexRunning: false, officialMode: true,
@@ -42,36 +54,40 @@ export function HomeFeature() {
       await invoke("launch_codex");
       setStatus(s => ({ ...s, codexRunning: true }));
     } catch (err: unknown) {
-      setLaunchError(err instanceof Error ? err.message : "Failed to launch Codex. Check diagnostics.");
+      setLaunchError(err instanceof Error ? err.message : t("home.launchFailed"));
     } finally {
       setLaunching(false);
     }
   }
 
-  const providerLabel = status.officialMode ? "Official Codex" : (status.providerName ?? "No provider");
+  const dash = t("common.dash");
+  const providerLabel = status.officialMode
+    ? t("home.officialCodex")
+    : (status.providerName ?? t("home.noProvider"));
   const healthColor = HEALTH_COLOR[status.providerHealth];
+  const healthLabel = t(HEALTH_LABEL_KEY[status.providerHealth]);
 
   const details: [string, string, string][] = [
-    ["Health",   status.providerHealth.replace(/_/g, " "), healthColor],
-    ["Provider", status.officialMode ? "Official" : "Custom", color.secondary],
-    ["Version",  status.codexVersion ?? "—", color.secondary],
+    [t("home.rowHealth"),   healthLabel, healthColor],
+    [t("home.colProvider"), status.officialMode ? t("home.valOfficial") : t("home.valCustom"), color.secondary],
+    [t("home.rowVersion"),  status.codexVersion ?? dash, color.secondary],
   ];
 
   const strip: { title: string; rows: [string, string][] }[] = [
-    { title: "PROVIDER", rows: [
-      ["Endpoint", status.providerName ?? "Official"],
-      ["Protocol", "OpenAI Responses"],
-      ["Status", status.providerHealth.replace(/_/g, " ")],
+    { title: t("home.colProvider"), rows: [
+      [t("home.rowEndpoint"), status.providerName ?? t("home.valOfficial")],
+      [t("home.rowProtocol"), t("home.valResponses")],
+      [t("home.rowStatus"), healthLabel],
     ]},
-    { title: "RUNTIME", rows: [
-      ["Version", status.codexVersion ?? "—"],
-      ["Mode", "Managed Portable"],
-      ["Health", status.codexRunning ? "Running" : "Stopped"],
+    { title: t("home.colRuntime"), rows: [
+      [t("home.rowVersion"), status.codexVersion ?? dash],
+      [t("home.rowMode"), t("home.valManagedPortable")],
+      [t("home.rowHealth"), status.codexRunning ? t("home.running") : t("home.stopped")],
     ]},
-    { title: "UPDATES", rows: [
-      ["Chimera", "Up to date"],
-      ["Codex", "—"],
-      ["Last check", "—"],
+    { title: t("home.colUpdates"), rows: [
+      [t("home.rowChimera"), t("home.valUpToDate")],
+      [t("home.rowCodex"), dash],
+      [t("home.rowLastCheck"), dash],
     ]},
   ];
 
@@ -81,18 +97,18 @@ export function HomeFeature() {
       <div style={{ height: size.heroHeight, display: "flex", flexShrink: 0 }}>
         <div
           role="main"
-          aria-label="System status"
+          aria-label={t("home.statusAriaLabel")}
           style={{
             flex: 1, display: "flex", flexDirection: "column", justifyContent: "center",
             padding: `${size.heroPadY}px ${size.heroPadX}px`,
           }}
         >
-          <p style={{ ...font.eyebrow, color: color.muted, margin: `0 0 ${size.heroEyebrowGap}px` }}>ACTIVE PROVIDER</p>
+          <p style={{ ...font.eyebrow, color: color.muted, margin: `0 0 ${size.heroEyebrowGap}px` }}>{t("home.eyebrow")}</p>
           <h1 style={{ ...font.hero, color: color.primary, margin: 0 }}>{providerLabel}</h1>
 
           <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 14 }}>
             <span style={{ fontSize: 20, color: color.accent }} aria-hidden="true">→</span>
-            <span style={{ fontSize: 24, color: color.secondary }}>{status.codexVersion ?? "Codex not installed"}</span>
+            <span style={{ fontSize: 24, color: color.secondary }}>{status.codexVersion ?? t("home.codexNotInstalled")}</span>
             <span style={{ width: 1, height: 18, background: color.rule }} />
             <span style={{ fontSize: 20, color: status.codexRunning ? color.green : color.muted }}>
               {status.codexRunning ? "running" : "stopped"}
@@ -118,21 +134,21 @@ export function HomeFeature() {
           <button
             onClick={handleLaunch}
             disabled={launching}
-            aria-label={status.codexRunning ? "Codex is already running" : "Launch Codex"}
+            aria-label={status.codexRunning ? t("home.launchAriaRunning") : t("home.launchAriaIdle")}
             style={{
               background: color.accent, color: color.ink0, border: "none", borderRadius: 4,
               padding: "15px 36px", fontSize: 16, fontWeight: 700, fontFamily: "inherit",
               cursor: launching ? "wait" : "pointer", opacity: launching ? 0.7 : 1, width: "100%",
             }}
           >
-            {launching ? "Launching…" : status.codexRunning ? "Codex is running" : "Launch Codex"}
+            {launching ? t("home.launching") : status.codexRunning ? t("home.alreadyRunning") : t("home.launch")}
           </button>
           <div role="alert" aria-live="polite" style={{ minHeight: 16 }}>
             {launchError && (
               <p style={{ fontSize: 12, color: color.danger, textAlign: "center", margin: 0 }}>{launchError}</p>
             )}
           </div>
-          <p style={{ fontSize: 11, color: color.dim, textAlign: "center", margin: 0 }}>⌘K  quick access</p>
+          <p style={{ fontSize: 11, color: color.dim, textAlign: "center", margin: 0 }}>{t("home.quickAccess")}</p>
         </div>
       </div>
 

@@ -12,6 +12,7 @@ import {
   validateCustomProviderInput, validateChimeraHubKey,
 } from "./lib/providerForm.ts";
 import { color, type, size, radius, hairline, indicator, ruleOpacity } from "../../design/tokens.ts";
+import { useI18n, type TranslationKey } from "../../i18n/index.tsx";
 
 const invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> =
   typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__
@@ -39,6 +40,7 @@ const HEALTH_TEXT_COLOR: Record<ProviderHealth, string> = {
 };
 
 export function ProvidersFeature() {
+  const { t, tf } = useI18n();
   const [state, setState] = useState<ProviderListState>(createInitialState());
   const [showAdd, setShowAdd] = useState(false);
   const [addKind, setAddKind] = useState<"chimera_hub" | "custom">("custom");
@@ -60,8 +62,8 @@ export function ProvidersFeature() {
     if (errors.length > 0) { setFormErrors(errors); return; }
     const entry: ProviderEntry = {
       id: crypto.randomUUID(),
-      displayName: addKind === "chimera_hub" ? "ChimeraHub"
-        : (() => { try { return new URL(urlInput).hostname; } catch { return "Custom"; } })(),
+      displayName: addKind === "chimera_hub" ? t("providers.kindChimeraHub")
+        : (() => { try { return new URL(urlInput).hostname; } catch { return t("providers.kindCustom"); } })(),
       kind: addKind,
       baseUrl: addKind === "chimera_hub" ? "https://api.chimerahub.io/v1" : urlInput.trim(),
       protocol: "responses", secretRef: `keychain://chimera/${addKind}`,
@@ -93,8 +95,10 @@ export function ProvidersFeature() {
 
   return (
     <div style={{ height: "100%", display: "flex" }} role="main">
-      <nav
-        aria-label="Provider list"
+      {/* The panel is a plain container. Only the rows form the tablist —
+          a tablist may contain nothing but tabs, so the header and its
+          "+ Add" button must sit outside it (axe: aria-required-children). */}
+      <div
         style={{
           width: size.providerList, borderRight: `${hairline}px solid ${color.rule}`,
           display: "flex", flexDirection: "column", background: color.ink1,
@@ -105,21 +109,27 @@ export function ProvidersFeature() {
           borderBottom: `${hairline}px solid ${color.rule}`,
         }}>
           <span style={{ ...type.uiStrong, color: color.secondary }}>
-            {state.providers.length} Provider{state.providers.length !== 1 ? "s" : ""}
+            {state.providers.length} {state.providers.length !== 1 ? t("providers.count") : t("providers.countSingular")}
           </span>
           <span style={{ flex: 1 }} />
           <button
             onClick={() => setShowAdd(true)}
-            aria-label="Add provider"
+            aria-label={t("providers.addAriaLabel")}
             style={{
               background: color.ink3, color: color.primary, border: `${hairline}px solid ${color.rule}`,
               borderRadius: radius.sm, padding: "5px 10px", fontSize: 12, fontWeight: 700,
               fontFamily: type.family, cursor: "pointer",
             }}
           >
-            + Add
+            + {t("providers.add")}
           </button>
         </div>
+        <div
+          role="tablist"
+          aria-label={t("providers.listAriaLabel")}
+          aria-orientation="vertical"
+          style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "auto" }}
+        >
         <button
           role="tab" aria-selected={state.officialMode} onClick={() => handleSwitch(null)} disabled={busy}
           style={{
@@ -130,8 +140,8 @@ export function ProvidersFeature() {
             cursor: busy ? "default" : "pointer", fontFamily: type.family,
           }}
         >
-          <div style={{ fontSize: 13, fontWeight: 600, color: color.primary }}>Official Codex</div>
-          <div style={{ fontSize: 11, color: color.dim }}>System login mode</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: color.primary }}>{t("home.officialCodex")}</div>
+          <div style={{ fontSize: 11, color: color.dim }}>{t("providers.officialSystemMode")}</div>
         </button>
         {state.providers.map(p => (
           <button
@@ -155,7 +165,8 @@ export function ProvidersFeature() {
             }} />
           </button>
         ))}
-      </nav>
+        </div>
+      </div>
       <div style={{ flex: 1, overflow: "auto" }}>
         {showAdd ? (
           <AddProviderForm
@@ -171,9 +182,9 @@ export function ProvidersFeature() {
           />
         ) : (
           <div style={{ padding: "14px 20px 6px 20px" }}>
-            <p style={{ ...type.sectionLabel, color: color.dim, margin: "0 0 8px" }}>OFFICIAL MODE</p>
+            <p style={{ ...type.sectionLabel, color: color.dim, margin: "0 0 8px" }}>{t("providers.officialMode")}</p>
             <p style={{ ...type.body, color: color.muted, margin: 0 }}>
-              Codex is using your official login. Add a provider to use a custom API endpoint.
+              {t("providers.officialModeDesc")}
             </p>
           </div>
         )}
@@ -188,6 +199,7 @@ function AddProviderForm(props: {
   onUrlChange: (v: string) => void; onKeyChange: (v: string) => void;
   onSubmit: () => void; onCancel: () => void;
 }) {
+  const { t } = useI18n();
   const inp: React.CSSProperties = {
     width: "100%", background: color.ink2, border: `${hairline}px solid ${color.rule}`,
     borderRadius: radius.sm, color: color.primary, padding: "8px 12px", fontSize: 13,
@@ -195,41 +207,41 @@ function AddProviderForm(props: {
   };
   return (
     <form
-      role="form" aria-label="Add provider" onSubmit={e => { e.preventDefault(); props.onSubmit(); }}
+      role="form" aria-label={t("providers.addAriaLabel")} onSubmit={e => { e.preventDefault(); props.onSubmit(); }}
       style={{ padding: 32, maxWidth: 480 }}
     >
-      <p style={{ ...type.sectionLabel, color: color.muted, margin: "0 0 20px" }}>ADD PROVIDER</p>
+      <p style={{ ...type.sectionLabel, color: color.muted, margin: "0 0 20px" }}>{t("providers.addSectionLabel")}</p>
       <div style={{ marginBottom: 16 }}>
         <label htmlFor="add-kind" style={{ fontSize: 12, color: color.muted, display: "block", marginBottom: 6 }}>
-          Provider type
+          {t("providers.fieldType")}
         </label>
         <select
           id="add-kind" value={props.kind}
           onChange={e => props.onKindChange(e.target.value as "chimera_hub" | "custom")}
           style={inp}
         >
-          <option value="chimera_hub">ChimeraHub (built-in template)</option>
-          <option value="custom">Custom — URL + API Key</option>
+          <option value="chimera_hub">{t("providers.optionChimeraHub")}</option>
+          <option value="custom">{t("providers.optionCustom")}</option>
         </select>
       </div>
       {props.kind === "custom" && (
         <div style={{ marginBottom: 16 }}>
           <label htmlFor="add-url" style={{ fontSize: 12, color: color.muted, display: "block", marginBottom: 6 }}>
-            Base URL
+            {t("providers.fieldBaseUrl")}
           </label>
           <input
             id="add-url" type="url" value={props.urlValue} onChange={e => props.onUrlChange(e.target.value)}
-            placeholder="https://api.example.com/v1" style={inp}
+            placeholder={t("providers.urlPlaceholder")} style={inp}
           />
         </div>
       )}
       <div style={{ marginBottom: 16 }}>
         <label htmlFor="add-key" style={{ fontSize: 12, color: color.muted, display: "block", marginBottom: 6 }}>
-          API Key
+          {t("providers.fieldApiKey")}
         </label>
         <input
           id="add-key" type="password" value={props.keyValue} onChange={e => props.onKeyChange(e.target.value)}
-          placeholder="sk-..." style={inp} autoComplete="off"
+          placeholder={t("providers.keyPlaceholderExample")} style={inp} autoComplete="off"
         />
       </div>
       {props.errors.length > 0 && (
@@ -245,7 +257,7 @@ function AddProviderForm(props: {
             padding: "9px 20px", fontSize: 13, fontWeight: 700, fontFamily: type.family, cursor: "pointer",
           }}
         >
-          Add Provider
+          {t("providers.submit")}
         </button>
         <button
           type="button" onClick={props.onCancel}
@@ -254,21 +266,31 @@ function AddProviderForm(props: {
             borderRadius: radius.sm, padding: "9px 16px", fontSize: 13, fontFamily: type.family, cursor: "pointer",
           }}
         >
-          Cancel
+          {t("providers.cancel")}
         </button>
       </div>
     </form>
   );
 }
 
+/** Maps a provider health value to its translation key. */
+const HEALTH_LABEL_KEY: Record<ProviderHealth, TranslationKey> = {
+  unknown: "health.unknown",
+  healthy: "health.healthy",
+  auth_failed: "health.authFailed",
+  incompatible: "health.incompatible",
+  unreachable: "health.unreachable",
+};
+
 function ProviderDetail({ provider, busy, onDelete, onTest }: {
   provider: ProviderEntry; busy: boolean; onDelete: (id: string) => void; onTest: (id: string) => void;
 }) {
+  const { t, tf } = useI18n();
   const rows: [string, string, string][] = [
-    ["Base URL", provider.baseUrl, color.secondary],
-    ["Protocol", provider.protocol, color.secondary],
-    ["Model", provider.selectedModel ?? "Auto", color.secondary],
-    ["Health", provider.health.replace(/_/g, " "), HEALTH_TEXT_COLOR[provider.health]],
+    [t("providers.fieldBaseUrl"), provider.baseUrl, color.secondary],
+    [t("providers.fieldProtocol"), provider.protocol, color.secondary],
+    [t("providers.fieldModel"), provider.selectedModel ?? t("providers.modelAuto"), color.secondary],
+    [t("providers.fieldHealth"), t(HEALTH_LABEL_KEY[provider.health]), HEALTH_TEXT_COLOR[provider.health]],
   ];
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -283,19 +305,19 @@ function ProviderDetail({ provider, busy, onDelete, onTest }: {
           fontSize: 11,
         }}>
           <span style={{ width: 5, height: 5, borderRadius: "50%", background: color.accent }} />
-          <span style={{ color: color.accent }}>Active</span>
+          <span style={{ color: color.accent }}>{t("providers.active")}</span>
         </span>
         <span style={{ flex: 1 }} />
         <button
           onClick={() => onTest(provider.id)} disabled={busy}
-          aria-label={"Test connection to " + provider.displayName}
+          aria-label={tf("providers.testAria", [provider.displayName])}
           style={{
             background: color.ink3, color: color.primary, border: `${hairline}px solid ${color.rule}`,
             borderRadius: radius.sm, padding: "6px 14px", fontSize: 12, fontFamily: type.family,
             cursor: busy ? "default" : "pointer",
           }}
         >
-          Test connection
+          {t("providers.test")}
         </button>
       </div>
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
@@ -315,14 +337,14 @@ function ProviderDetail({ provider, busy, onDelete, onTest }: {
         <div style={{ width: hairline, background: color.rule, alignSelf: "stretch" }} />
         <div style={{ width: size.providerDetailRight, padding: "28px 24px", display: "flex", flexDirection: "column", gap: 8 }}>
           <button
-            aria-label={"Delete provider " + provider.displayName}
-            onClick={() => { if (window.confirm("Delete " + provider.displayName + "?")) onDelete(provider.id); }}
+            aria-label={tf("providers.deleteAria", [provider.displayName])}
+            onClick={() => { if (window.confirm(tf("providers.confirmDelete", [provider.displayName]))) onDelete(provider.id); }}
             style={{
               background: color.dangerBg, color: color.danger, border: `${hairline}px solid ${color.dangerBorder}`,
               borderRadius: radius.sm, padding: "8px 16px", fontSize: 13, fontFamily: type.family, cursor: "pointer",
             }}
           >
-            Delete provider
+            {t("providers.deleteAriaLabel")}
           </button>
         </div>
       </div>

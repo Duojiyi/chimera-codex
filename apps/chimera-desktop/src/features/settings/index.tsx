@@ -4,6 +4,7 @@
 // Every dimension/colour comes from src/design/tokens.ts — no literals here.
 import { useState, useEffect, type ReactNode } from "react";
 import { color, type as font, size, radius, hairline, indicator, ruleOpacity } from "../../design/tokens.ts";
+import { useI18n, type TranslationKey, type Language } from "../../i18n/index.tsx";
 
 type CategoryId = "general" | "privacy" | "updates" | "advanced" | "about";
 
@@ -12,7 +13,6 @@ interface SettingsState {
   launchCodexOnStart: boolean;
   startMinimized: boolean;
   updateChannel: string;
-  language: string;
   logRetention: string;
   structuredLogs: boolean;
   anonymousUsage: boolean;
@@ -29,24 +29,47 @@ const DEFAULT_SETTINGS: SettingsState = {
   launchCodexOnStart: false,
   startMinimized: false,
   updateChannel: "stable",
-  language: "English (US)",
   logRetention: "30 days",
   structuredLogs: true,
   anonymousUsage: false,
   crashReporting: false,
 };
 
-const CATEGORIES: { id: CategoryId; label: string }[] = [
-  { id: "general", label: "General" },
-  { id: "privacy", label: "Privacy" },
-  { id: "updates", label: "Updates" },
-  { id: "advanced", label: "Advanced" },
-  { id: "about", label: "About" },
+// Module-level constants hold i18n KEYS, never translated text — translation
+// happens at render so a language switch re-renders without reloading the
+// webview. scripts/verify-i18n.mjs enforces this.
+const CATEGORIES: { id: CategoryId; labelKey: TranslationKey }[] = [
+  { id: "general", labelKey: "settings.catGeneral" },
+  { id: "privacy", labelKey: "settings.catPrivacy" },
+  { id: "updates", labelKey: "settings.catUpdates" },
+  { id: "advanced", labelKey: "settings.catAdvanced" },
+  { id: "about", labelKey: "settings.catAbout" },
 ];
 
-const SUBTITLES: Partial<Record<CategoryId, string>> = {
-  general: "Application behavior, startup, and interface defaults.",
+const SUBTITLES: Partial<Record<CategoryId, TranslationKey>> = {
+  general: "settings.generalSubtitle",
 };
+
+// Internal setting values are plain codes (never shown directly); these maps
+// hold the i18n KEY used to display each code, not the translated text itself.
+const CHANNEL_LABEL_KEYS: Record<string, TranslationKey> = {
+  stable: "settings.channelStable",
+  beta: "settings.channelBeta",
+};
+
+const RETENTION_LABEL_KEYS: Record<string, TranslationKey> = {
+  "7 days": "settings.retention7",
+  "30 days": "settings.retention30",
+  "90 days": "settings.retention90",
+};
+
+// Language endonyms — deliberately NOT translated (a "简体中文" reader should
+// never see "Simplified Chinese" and an English reader should never see
+// "英语"), so these are hardcoded rather than routed through the dictionary.
+const LANGUAGE_OPTIONS: { value: Language; label: string }[] = [
+  { value: "zh", label: "简体中文" },
+  { value: "en", label: "English" },
+];
 
 const invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> =
   typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__
@@ -56,11 +79,15 @@ const invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> 
 function Toggle({
   checked,
   label,
+  onLabel,
+  offLabel,
   onChange,
   disabled,
 }: {
   checked: boolean;
   label: string;
+  onLabel: string;
+  offLabel: string;
   onChange: () => void;
   disabled?: boolean;
 }) {
@@ -98,16 +125,18 @@ function Toggle({
           }}
         />
       </button>
-      <span style={{ fontSize: 12, color: checked ? color.accent : color.muted }}>{checked ? "On" : "Off"}</span>
+      <span style={{ fontSize: 12, color: checked ? color.accent : color.muted }}>
+        {checked ? onLabel : offLabel}
+      </span>
     </div>
   );
 }
 
-function Select({ label, value }: { label: string; value: string }) {
+function Select({ ariaLabel, value }: { ariaLabel: string; value: string }) {
   return (
     <button
       type="button"
-      aria-label={`${label}: ${value}`}
+      aria-label={ariaLabel}
       style={{
         display: "flex",
         alignItems: "center",
@@ -123,6 +152,70 @@ function Select({ label, value }: { label: string; value: string }) {
       <span style={{ fontSize: 12, color: color.primary }}>{value}</span>
       <span aria-hidden="true" style={{ fontSize: 9, color: color.muted }}>▾</span>
     </button>
+  );
+}
+
+/**
+ * The Language row's control. Visually it is byte-identical to `Select`
+ * (same token references: ink3 / radius.sm / hairline / rule / primary /
+ * muted) — that visible chip is `aria-hidden` and purely decorative. A real
+ * `<select>` is layered transparently on top so the control is a genuine,
+ * keyboard-operable form element: Tab focuses it, arrow keys / typing change
+ * the value, and screen readers get the native select semantics instead of a
+ * fake button.
+ */
+function LanguageSelect({
+  ariaLabel,
+  value,
+  options,
+  onChange,
+}: {
+  ariaLabel: string;
+  value: Language;
+  options: { value: Language; label: string }[];
+  onChange: (next: Language) => void;
+}) {
+  const current = options.find((o) => o.value === value) ?? options[0];
+  return (
+    <div style={{ position: "relative", display: "inline-flex" }}>
+      <div
+        aria-hidden="true"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          background: color.ink3,
+          borderRadius: radius.sm,
+          padding: "6px 12px",
+          border: `${hairline}px solid ${color.rule}`,
+          fontFamily: "inherit",
+        }}
+      >
+        <span style={{ fontSize: 12, color: color.primary }}>{current.label}</span>
+        <span style={{ fontSize: 9, color: color.muted }}>▾</span>
+      </div>
+      <select
+        aria-label={ariaLabel}
+        value={value}
+        onChange={(e) => onChange(e.target.value as Language)}
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          opacity: 0,
+          border: "none",
+          background: "transparent",
+          cursor: "pointer",
+        }}
+      >
+        {options.map((opt) => (
+          <option key={opt.value} value={opt.value}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }
 
@@ -152,6 +245,7 @@ function Section({ label, children }: { label: string; children: ReactNode }) {
 }
 
 export function SettingsFeature() {
+  const { lang, t, tf, setLang } = useI18n();
   const [active, setActive] = useState<CategoryId>("general");
   const [settings, setSettings] = useState<SettingsState>(DEFAULT_SETTINGS);
   const [busy, setBusy] = useState(false);
@@ -176,7 +270,7 @@ export function SettingsFeature() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to save settings.");
+      setError(err instanceof Error ? err.message : t("settings.saveFailed"));
     } finally {
       setBusy(false);
     }
@@ -191,7 +285,7 @@ export function SettingsFeature() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to reset settings.");
+      setError(err instanceof Error ? err.message : t("settings.resetFailed"));
     } finally {
       setBusy(false);
     }
@@ -205,7 +299,7 @@ export function SettingsFeature() {
       {/* ── Category nav (spec: 220px fixed) ── */}
       <nav
         role="tablist"
-        aria-label="Settings categories"
+        aria-label={t("settings.navAriaLabel")}
         aria-orientation="vertical"
         style={{
           width: size.settingsNav,
@@ -226,7 +320,7 @@ export function SettingsFeature() {
             flexShrink: 0,
           }}
         >
-          <span style={{ fontSize: 13, fontWeight: 600, color: color.secondary }}>Preferences</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: color.secondary }}>{t("settings.preferences")}</span>
         </div>
 
         {CATEGORIES.map((cat) => {
@@ -256,7 +350,7 @@ export function SettingsFeature() {
                 textAlign: "left",
               }}
             >
-              {cat.label}
+              {t(cat.labelKey)}
             </button>
           );
         })}
@@ -265,81 +359,110 @@ export function SettingsFeature() {
       {/* ── Content ── */}
       <div
         role="main"
-        aria-label={`${activeCategory.label} settings`}
+        aria-label={tf("settings.categoryAriaLabel", [t(activeCategory.labelKey)])}
         style={{ flex: 1, padding: "32px 48px", display: "flex", flexDirection: "column", overflow: "auto" }}
       >
-        <h1 style={{ ...font.pageTitle, color: color.primary, margin: 0 }}>{activeCategory.label}</h1>
-        {subtitle && <p style={{ fontSize: 14, color: color.muted, margin: "6px 0 0" }}>{subtitle}</p>}
+        <h1 style={{ ...font.pageTitle, color: color.primary, margin: 0 }}>{t(activeCategory.labelKey)}</h1>
+        {subtitle && <p style={{ fontSize: 14, color: color.muted, margin: "6px 0 0" }}>{t(subtitle)}</p>}
         <div style={{ height: hairline, background: color.rule, marginTop: 16 }} />
 
         <div style={{ marginTop: 24, display: "flex", flexDirection: "column", gap: 24 }}>
           {active === "general" ? (
             <>
-              <Section label="STARTUP">
-                <Item label="Launch Chimera++ at login">
+              <Section label={t("settings.secStartup")}>
+                <Item label={t("settings.launchAtLogin")}>
                   <Toggle
                     checked={settings.launchAtLogin}
-                    label="Launch Chimera++ at login"
+                    label={t("settings.launchAtLogin")}
+                    onLabel={t("settings.on")}
+                    offLabel={t("settings.off")}
                     onChange={() => toggleSetting("launchAtLogin")}
                   />
                 </Item>
-                <Item label="Launch Codex on Chimera++ start">
+                <Item label={t("settings.launchCodexOnStart")}>
                   <Toggle
                     checked={settings.launchCodexOnStart}
-                    label="Launch Codex on Chimera++ start"
+                    label={t("settings.launchCodexOnStart")}
+                    onLabel={t("settings.on")}
+                    offLabel={t("settings.off")}
                     onChange={() => toggleSetting("launchCodexOnStart")}
                   />
                 </Item>
-                <Item label="Start minimized to tray">
+                <Item label={t("settings.startMinimized")}>
                   <Toggle
                     checked={settings.startMinimized}
-                    label="Start minimized to tray"
+                    label={t("settings.startMinimized")}
+                    onLabel={t("settings.on")}
+                    offLabel={t("settings.off")}
                     onChange={() => toggleSetting("startMinimized")}
                   />
                 </Item>
               </Section>
 
-              <Section label="INTERFACE">
-                <Item label="Update channel">
-                  <Select label="Update channel" value={settings.updateChannel} />
+              <Section label={t("settings.secInterface")}>
+                <Item label={t("settings.updateChannel")}>
+                  <Select
+                    ariaLabel={tf("settings.selectAriaLabel", [
+                      t("settings.updateChannel"),
+                      t(CHANNEL_LABEL_KEYS[settings.updateChannel] ?? "settings.channelStable"),
+                    ])}
+                    value={t(CHANNEL_LABEL_KEYS[settings.updateChannel] ?? "settings.channelStable")}
+                  />
                 </Item>
-                <Item label="Language">
-                  <Select label="Language" value={settings.language} />
+                <Item label={t("settings.language")}>
+                  <LanguageSelect
+                    ariaLabel={t("settings.languageAriaLabel")}
+                    value={lang}
+                    options={LANGUAGE_OPTIONS}
+                    onChange={setLang}
+                  />
                 </Item>
-                <Item label="Log retention">
-                  <Select label="Log retention" value={settings.logRetention} />
+                <Item label={t("settings.logRetention")}>
+                  <Select
+                    ariaLabel={tf("settings.selectAriaLabel", [
+                      t("settings.logRetention"),
+                      t(RETENTION_LABEL_KEYS[settings.logRetention] ?? "settings.retention30"),
+                    ])}
+                    value={t(RETENTION_LABEL_KEYS[settings.logRetention] ?? "settings.retention30")}
+                  />
                 </Item>
               </Section>
 
-              <Section label="DIAGNOSTICS">
-                <Item label="Structured logs">
+              <Section label={t("settings.secDiagnostics")}>
+                <Item label={t("settings.structuredLogs")}>
                   <Toggle
                     checked={settings.structuredLogs}
-                    label="Structured logs"
+                    label={t("settings.structuredLogs")}
+                    onLabel={t("settings.on")}
+                    offLabel={t("settings.off")}
                     onChange={() => toggleSetting("structuredLogs")}
                   />
                 </Item>
-                <Item label="Anonymous usage statistics">
+                <Item label={t("settings.anonymousStats")}>
                   <Toggle
                     checked={settings.anonymousUsage}
-                    label="Anonymous usage statistics"
+                    label={t("settings.anonymousStats")}
+                    onLabel={t("settings.on")}
+                    offLabel={t("settings.off")}
                     onChange={() => toggleSetting("anonymousUsage")}
                   />
                 </Item>
-                <Item label="Crash reporting">
+                <Item label={t("settings.crashReporting")}>
                   <Toggle
                     checked={settings.crashReporting}
-                    label="Crash reporting"
+                    label={t("settings.crashReporting")}
+                    onLabel={t("settings.on")}
+                    offLabel={t("settings.off")}
                     onChange={() => toggleSetting("crashReporting")}
                   />
                 </Item>
               </Section>
             </>
           ) : (
-            <Section label="STATUS">
+            <Section label={t("settings.secStatus")}>
               <div style={{ height: size.settingsItemRow, display: "flex", alignItems: "center" }}>
                 <span style={{ fontSize: 13, color: color.muted }}>
-                  This category is not yet configured.
+                  {t("settings.categoryNotConfigured")}
                 </span>
               </div>
             </Section>
@@ -352,7 +475,7 @@ export function SettingsFeature() {
 
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 20 }}>
           <div style={{ flex: 1 }} />
-          {saved && <span style={{ fontSize: 12, color: color.secondary }}>Saved</span>}
+          {saved && <span style={{ fontSize: 12, color: color.secondary }}>{t("settings.saved")}</span>}
           <button
             type="button"
             onClick={handleReset}
@@ -369,7 +492,7 @@ export function SettingsFeature() {
               opacity: busy ? 0.7 : 1,
             }}
           >
-            Reset all settings
+            {t("settings.reset")}
           </button>
           <button
             type="button"
@@ -388,7 +511,7 @@ export function SettingsFeature() {
               opacity: busy ? 0.7 : 1,
             }}
           >
-            Save changes
+            {t("settings.save")}
           </button>
         </div>
       </div>

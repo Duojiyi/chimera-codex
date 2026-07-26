@@ -1,12 +1,16 @@
 import type { ActiveFeature } from "../App";
 import { color, type as font, size, radius, hairline, indicator } from "../design/tokens.ts";
+import { useI18n, type TranslationKey } from "../i18n/index.tsx";
 
-const TABS: { id: ActiveFeature; label: string }[] = [
-  { id: "home",       label: "Home" },
-  { id: "providers",  label: "Providers" },
-  { id: "codex",      label: "Codex" },
-  { id: "appearance", label: "Appearance" },
-  { id: "settings",   label: "Settings" },
+// Module-level constants hold i18n KEYS, never translated text — translation
+// happens at render so a language switch re-renders without reloading the
+// webview. scripts/verify-i18n.mjs enforces this.
+const TABS: { id: ActiveFeature; labelKey: TranslationKey }[] = [
+  { id: "home",       labelKey: "nav.home" },
+  { id: "providers",  labelKey: "nav.providers" },
+  { id: "codex",      labelKey: "nav.codex" },
+  { id: "appearance", labelKey: "nav.appearance" },
+  { id: "settings",   labelKey: "nav.settings" },
 ];
 
 interface Props {
@@ -23,10 +27,11 @@ interface Props {
  *   + 1x16 separator + 12px dim version
  */
 export function TopRail({ active, onNavigate }: Props) {
+  const { t } = useI18n();
   return (
     <nav
       role="navigation"
-      aria-label="Main navigation"
+      aria-label={t("nav.ariaLabel")}
       style={{
         height: size.rail,
         display: "flex",
@@ -74,7 +79,7 @@ export function TopRail({ active, onNavigate }: Props) {
                 cursor: "pointer",
               }}
             >
-              {tab.label}
+              {t(tab.labelKey)}
             </button>
           );
         })}
@@ -92,8 +97,8 @@ export function TopRail({ active, onNavigate }: Props) {
             }}
           />
           <span style={{ fontFamily: font.family, ...font.caption, color: color.muted }}>
-            All systems ready
-          </span>
+            {t("shell.statusReady")}
+</span>
         </div>
         <div style={{ width: hairline, height: 16, background: color.rule }} />
         <span style={{ fontFamily: font.family, ...font.caption, color: color.dim }}>
