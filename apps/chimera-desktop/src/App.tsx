@@ -3,13 +3,14 @@
 // Rule (G12): page components must NOT directly read/write files or call platform APIs.
 // All data access goes through Tauri invoke() commands in each feature's hooks/.
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { HomeFeature }       from "@/features/home";
 import { ProvidersFeature }  from "@/features/providers";
 import { CodexFeature }      from "@/features/codex";
 import { AppearanceFeature } from "@/features/appearance";
 import { SettingsFeature }   from "@/features/settings";
 import { TopRail }           from "@/shell/TopRail";
+import { FirstRun }          from "@/shell/FirstRun";
 import { I18nProvider }      from "@/i18n";
 import { FEATURES, type ActiveFeature } from "@/shell/nav";
 
@@ -31,19 +32,32 @@ function resolveInitialFeature(): ActiveFeature {
 
 export default function App() {
   const [active, setActive] = useState<ActiveFeature>(resolveInitialFeature);
+  // Preflight gates the whole app rather than overlaying it: while it is
+  // blocked there is no working UI underneath, and leaving the rail reachable
+  // would let keyboard and screen-reader users into screens that cannot
+  // function. FirstRun calls onReady when the machine is fine — including
+  // outside the desktop shell, where there is no backend to ask.
+  const [ready, setReady] = useState(false);
+  const markReady = useCallback(() => setReady(true), []);
 
   return (
     <I18nProvider>
-      <div style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
-        <TopRail active={active} onNavigate={setActive} />
-        <main style={{ flex: 1, overflow: "hidden" }}>
-          {active === "home"       && <HomeFeature />}
-          {active === "providers"  && <ProvidersFeature />}
-          {active === "codex"      && <CodexFeature />}
-          {active === "appearance" && <AppearanceFeature />}
-          {active === "settings"   && <SettingsFeature />}
-        </main>
-      </div>
+      {ready ? (
+        <div style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
+          <TopRail active={active} onNavigate={setActive} />
+          <main style={{ flex: 1, overflow: "hidden" }}>
+            {active === "home"       && <HomeFeature />}
+            {active === "providers"  && <ProvidersFeature />}
+            {active === "codex"      && <CodexFeature />}
+            {active === "appearance" && <AppearanceFeature />}
+            {active === "settings"   && <SettingsFeature />}
+          </main>
+        </div>
+      ) : (
+        <div style={{ height: "100vh", overflow: "hidden" }}>
+          <FirstRun onReady={markReady} />
+        </div>
+      )}
     </I18nProvider>
   );
 }
