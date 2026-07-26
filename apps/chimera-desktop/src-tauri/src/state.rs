@@ -114,6 +114,15 @@ impl AppState {
             .initialise()
             .map_err(|e| format!("Could not prepare the runtime directory: {e}"))?;
 
+        // G6: an update interrupted by a crash or power loss must return to the
+        // last known good version by itself. This is the only place that can
+        // happen — the user cannot be asked to repair a runtime that will not
+        // start. A failure here is reported rather than fatal: refusing to open
+        // the app would strand them with no way to reach Diagnose or Rollback.
+        if let Err(e) = chimera_runtime::update::recover_if_interrupted(&runtime) {
+            eprintln!("runtime recovery could not complete: {e}");
+        }
+
         Ok(Self {
             paths,
             db: Mutex::new(db),

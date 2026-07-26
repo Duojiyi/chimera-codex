@@ -159,7 +159,15 @@ fn copy_harmless_exe(dest: &Path) {
 
 #[cfg(not(windows))]
 fn copy_harmless_exe(dest: &Path) {
-    fs::copy("/bin/true", dest).expect("copying /bin/true should succeed");
+    // `true` lives in different places per platform: /bin/true on most Linux
+    // distributions, /usr/bin/true on macOS, where /bin holds only a small
+    // fixed set of shells and core utilities. Probe rather than assume.
+    let source = ["/bin/true", "/usr/bin/true"]
+        .into_iter()
+        .map(Path::new)
+        .find(|p| p.exists())
+        .expect("no `true` binary found in /bin or /usr/bin");
+    fs::copy(source, dest).unwrap_or_else(|e| panic!("copying {} failed: {e}", source.display()));
 }
 
 #[cfg(windows)]

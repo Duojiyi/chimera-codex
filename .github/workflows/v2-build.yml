@@ -180,9 +180,47 @@ jobs:
         working-directory: ${{ env.FRONTEND_DIR }}
         run: npm run vite:build
 
-      # G16: zero serious/critical axe findings is a release gate, so it has to
-      # run on every push rather than on demand. Needs the build above, since
-      # the harness serves dist/ and drives each screen via ?screen=.
-      - name: V8 accessibility (axe, WCAG 2.2 AA)
+  # G16: zero serious/critical axe findings is a release gate, so it runs on
+  # every push rather than on demand.
+  #
+  # Its own job, on one runner, for two reasons. The harness drives Chromium
+  # via Playwright, so the result does not depend on the runner OS — running it
+  # in the matrix would test the same thing twice. And Playwright lives in
+  # scripts/design-verify, deliberately isolated from the app's package.json so
+  # `npm ci` in the other jobs never pulls a browser; that isolation is why the
+  # step has to install its own dependencies here.
+  #
+  # This checks structure and contrast, not the shipping webview. The per-
+  # platform evidence R12 requires is the NVDA/VoiceOver smoke, which is manual.
+  a11y:
+    name: Accessibility (axe, WCAG 2.2 AA)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+
+      - name: Install frontend dependencies
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npm ci
+
+      # The harness serves dist/ and loads each screen via ?screen=&lang=.
+      - name: Build frontend
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npm run vite:build
+
+      - name: Install a11y harness dependencies
+        working-directory: scripts/design-verify
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: scripts/design-verify
+        run: npx playwright install --with-deps chromium
+
+      - name: V8 accessibility (axe, both shipped locales)
         working-directory: ${{ env.FRONTEND_DIR }}
         run: npm run test:a11y
