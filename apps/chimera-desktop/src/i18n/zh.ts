@@ -250,6 +250,40 @@ export const zh = {
   "settings.selectAriaLabel": "{0}：{1}",
   "settings.languageAriaLabel": "选择语言",
 
+  // ── 免安装版限制与清理（ADR-002、ADR-009）─────────────────────────────────
+  // 这些不是免责声明，是产品事实。免安装版确实做不到下面这些事，说清楚比
+  // 假装能做要好——伪造包身份或协议注册会让用户多出一条我们控制不了的
+  // 卸载路径。
+  "portable.sectionLimits": "免安装版的限制",
+  "portable.sectionCleanup": "清理与卸载",
+  "portable.intro": "Chimera++ 以免安装方式运行，不写入系统目录、不需要管理员权限。代价是下面这几项：",
+  "portable.noPackageIdentity": "没有 MSIX 包身份，依赖包身份识别应用的系统功能看不到 Chimera++。",
+  "portable.noStoreUpdates": "不通过应用商店更新，更新由 Chimera++ 自己完成。",
+  "portable.noProtocolRegistration": "不接管 codex:// 链接。",
+  "portable.noFileAssociations": "不注册文件关联，双击相关文件不会打开 Chimera++。",
+  "portable.noAppsAndFeaturesEntry": "不出现在「应用和功能」里，卸载请用下面的清理入口。",
+  "portable.cleanupTitle": "移除 Chimera++ 的数据",
+  "portable.cleanupDescription": "下列内容会被删除。删除前请先关闭 Codex。",
+  "portable.cleanupTotal": "共 {0}",
+  "portable.cleanupKeychainNote": "已保存的 API Key 存在系统凭据管理器里，不是文件，不会被这一步删除。需要单独在系统凭据管理器中移除。",
+  "portable.cleanupButton": "删除全部数据",
+  "portable.cleanupConfirm": "确定删除 Chimera++ 的全部本地数据？此操作不可撤销。",
+  "portable.cleanupDone": "已清理。",
+  "portable.cleanupFailed": "清理失败：{0}",
+  "portable.cleanupEmpty": "没有可清理的数据。",
+  "portable.cleanupAriaLabel": "将被删除的项目",
+
+  // ── 首次运行前置检查 ──────────────────────────────────────────────────────
+  // 任何一项不通过都必须在改动机器之前就失败，用户的机器要保持原样。
+  "preflight.webview2Present": "WebView2 运行时可用。",
+  "preflight.webview2Missing": "缺少 Microsoft Edge WebView2 运行时。Chimera++ 的界面依赖它。请从微软官网安装后重新打开。",
+  "preflight.webview2Download": "前往微软官方下载页",
+  "preflight.insufficientSpace": "磁盘空间不足。Codex 需要下载并解压，请预留下载体积两倍以上的空间。",
+  "preflight.notWritable": "无法写入 Chimera++ 的数据目录。请检查该目录的权限，或换一个位置安装。",
+  "preflight.title": "开始之前",
+  "preflight.blockedIntro": "还不能继续，以下问题需要先解决。你的机器目前没有被改动。",
+  "preflight.recheck": "重新检查",
+
   // ── Generic ───────────────────────────────────────────────────────────────
   "common.dash": "—",
   "common.loading": "加载中…",

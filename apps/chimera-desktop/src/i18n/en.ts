@@ -252,6 +252,45 @@ export const en: Record<TranslationKey, string> = {
   "settings.selectAriaLabel": "{0}: {1}",
   "settings.languageAriaLabel": "Select language",
 
+  // ── Portable limits and cleanup (ADR-002, ADR-009) ────────────────────────
+  "portable.sectionLimits": "Portable install limits",
+  "portable.sectionCleanup": "Clean up and remove",
+  "portable.intro":
+    "Chimera++ runs portable: nothing is written to system directories and no administrator rights are needed. These are the trade-offs:",
+  "portable.noPackageIdentity":
+    "No MSIX package identity, so Windows features that identify apps by it do not see Chimera++.",
+  "portable.noStoreUpdates": "Not updated through the Store; Chimera++ updates itself.",
+  "portable.noProtocolRegistration": "Does not handle codex:// links.",
+  "portable.noFileAssociations":
+    "No file associations, so double-clicking a related file will not open Chimera++.",
+  "portable.noAppsAndFeaturesEntry":
+    "Does not appear in Apps & Features; use the cleanup option below to remove it.",
+  "portable.cleanupTitle": "Remove Chimera++ data",
+  "portable.cleanupDescription": "The following will be deleted. Close Codex first.",
+  "portable.cleanupTotal": "{0} total",
+  "portable.cleanupKeychainNote":
+    "Saved API keys live in the system credential store, not in these files, so this will not remove them. Delete them separately from the credential store.",
+  "portable.cleanupButton": "Delete all data",
+  "portable.cleanupConfirm": "Delete all local Chimera++ data? This cannot be undone.",
+  "portable.cleanupDone": "Cleaned up.",
+  "portable.cleanupFailed": "Cleanup failed: {0}",
+  "portable.cleanupEmpty": "There is nothing to clean up.",
+  "portable.cleanupAriaLabel": "Items that will be deleted",
+
+  // ── First-run preflight ───────────────────────────────────────────────────
+  "preflight.webview2Present": "The WebView2 runtime is available.",
+  "preflight.webview2Missing":
+    "The Microsoft Edge WebView2 runtime is missing. Chimera++'s interface needs it. Install it from Microsoft, then reopen Chimera++.",
+  "preflight.webview2Download": "Open Microsoft's download page",
+  "preflight.insufficientSpace":
+    "Not enough disk space. Codex is downloaded and then unpacked, so leave at least twice the download size free.",
+  "preflight.notWritable":
+    "Chimera++ cannot write to its data folder. Check the folder's permissions, or install somewhere else.",
+  "preflight.title": "Before we start",
+  "preflight.blockedIntro":
+    "Not ready yet — these need fixing first. Nothing on your machine has been changed.",
+  "preflight.recheck": "Check again",
+
   // ── Generic ───────────────────────────────────────────────────────────────
   "common.dash": "—",
   "common.loading": "Loading…",

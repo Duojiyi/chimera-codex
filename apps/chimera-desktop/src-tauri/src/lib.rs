@@ -6,6 +6,7 @@
 pub mod bootstrap_cmds;
 pub mod commands;
 pub mod dto;
+pub mod portable_cmds;
 pub mod provider_cmds;
 pub mod runtime_cmds;
 pub mod state;
@@ -55,6 +56,11 @@ pub fn run() {
             // First run: preflight before anything is touched, then fetch.
             bootstrap_cmds::run_preflight,
             bootstrap_cmds::fetch_codex_payload,
+            // Portable install: what it cannot do, and how to remove it. There
+            // is no Apps & Features entry, so this is the whole uninstall path.
+            portable_cmds::get_portable_limitations,
+            portable_cmds::get_cleanup_plan,
+            portable_cmds::execute_cleanup,
             commands::get_system_status,
             commands::list_providers,
             commands::launch_codex,

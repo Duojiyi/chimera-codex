@@ -76,6 +76,161 @@ const invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> 
     ? (window as any).__TAURI_INTERNALS__.invoke
     : async () => undefined;
 
+/** Human-readable size. Never shown as raw bytes — "1073741824" tells nobody anything. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+interface CleanupPlan {
+  entries: { label: string; bytes: number }[];
+  totalBytes: number;
+  leavesKeychainEntries: boolean;
+}
+
+/**
+ * What a portable install cannot do, and how to remove it.
+ *
+ * Both halves of Spec §10 live here because they are the same fact seen twice:
+ * Chimera registers no Apps & Features entry, so it has to state that plainly
+ * AND provide the removal path that absence implies. Shipping one without the
+ * other would leave a user with no way to uninstall and no explanation.
+ */
+function PortablePanel({ mode }: { mode: "limits" | "cleanup" }) {
+  const { t, tf } = useI18n();
+  const [limitKeys, setLimitKeys] = useState<string[]>([]);
+  const [plan, setPlan] = useState<CleanupPlan | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (mode === "limits") {
+      invoke("get_portable_limitations")
+        .then((r) => setLimitKeys(((r ?? []) as { detailKey: string }[]).map((l) => l.detailKey)))
+        .catch(() => {});
+    } else {
+      invoke("get_cleanup_plan")
+        .then((r) => r && setPlan(r as CleanupPlan))
+        .catch(() => {});
+    }
+  }, [mode]);
+
+  async function handleCleanup() {
+    // window.confirm rather than a custom dialog: this is irreversible, and a
+    // native modal is the one control a user cannot mistake for decoration.
+    if (!window.confirm(t("portable.cleanupConfirm"))) return;
+    setBusy(true);
+    setStatus(null);
+    try {
+      await invoke("execute_cleanup");
+      setStatus(t("portable.cleanupDone"));
+      setPlan({ entries: [], totalBytes: 0, leavesKeychainEntries: true });
+    } catch (err: unknown) {
+      setStatus(tf("portable.cleanupFailed", [err instanceof Error ? err.message : String(err)]));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (mode === "limits") {
+    return (
+      <Section label={t("portable.sectionLimits")}>
+        <p style={{ fontSize: 12, color: color.secondary, margin: "4px 0 12px", lineHeight: 1.6 }}>
+          {t("portable.intro")}
+        </p>
+        <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 8 }}>
+          {limitKeys.map((key) => (
+            <li key={key} style={{ fontSize: 12, color: color.muted, lineHeight: 1.6 }}>
+              {t(key as TranslationKey)}
+            </li>
+          ))}
+        </ul>
+      </Section>
+    );
+  }
+
+  return (
+    <Section label={t("portable.sectionCleanup")}>
+      <p style={{ fontSize: 13, color: color.primary, margin: "4px 0 4px" }}>
+        {t("portable.cleanupTitle")}
+      </p>
+      <p style={{ fontSize: 12, color: color.secondary, margin: "0 0 12px", lineHeight: 1.6 }}>
+        {t("portable.cleanupDescription")}
+      </p>
+
+      {plan && plan.entries.length === 0 ? (
+        <p style={{ fontSize: 12, color: color.muted, margin: "0 0 12px" }}>
+          {t("portable.cleanupEmpty")}
+        </p>
+      ) : (
+        <ul
+          aria-label={t("portable.cleanupAriaLabel")}
+          style={{ margin: "0 0 10px", padding: 0, listStyle: "none", display: "grid", gap: 4 }}
+        >
+          {(plan?.entries ?? []).map((e) => (
+            <li
+              key={e.label}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                fontSize: 12,
+                color: color.muted,
+              }}
+            >
+              <span>{e.label}</span>
+              <span>{formatBytes(e.bytes)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {plan && plan.totalBytes > 0 && (
+        <p style={{ fontSize: 12, color: color.secondary, margin: "0 0 12px" }}>
+          {tf("portable.cleanupTotal", [formatBytes(plan.totalBytes)])}
+        </p>
+      )}
+
+      {/* Stated even when the list is empty: a user who already cleaned up
+          still needs to know their keys were never part of it. */}
+      {plan?.leavesKeychainEntries && (
+        <p style={{ fontSize: 12, color: color.muted, margin: "0 0 14px", lineHeight: 1.6 }}>
+          {t("portable.cleanupKeychainNote")}
+        </p>
+      )}
+
+      <button
+        type="button"
+        onClick={handleCleanup}
+        disabled={busy || !plan || plan.entries.length === 0}
+        style={{
+          background: color.dangerBg,
+          border: `${hairline}px solid ${color.dangerBorder}`,
+          borderRadius: radius.sm,
+          padding: "8px 16px",
+          fontSize: 13,
+          color: color.danger,
+          fontFamily: "inherit",
+          cursor: busy ? "wait" : "pointer",
+          opacity: busy || !plan || plan.entries.length === 0 ? 0.5 : 1,
+        }}
+      >
+        {t("portable.cleanupButton")}
+      </button>
+
+      <div role="status" aria-live="polite" style={{ minHeight: 16, marginTop: 10 }}>
+        {status && <span style={{ fontSize: 12, color: color.secondary }}>{status}</span>}
+      </div>
+    </Section>
+  );
+}
+
 function Toggle({
   checked,
   label,
@@ -458,6 +613,10 @@ export function SettingsFeature() {
                 </Item>
               </Section>
             </>
+          ) : active === "advanced" ? (
+            <PortablePanel mode="cleanup" />
+          ) : active === "about" ? (
+            <PortablePanel mode="limits" />
           ) : (
             <Section label={t("settings.secStatus")}>
               <div style={{ height: size.settingsItemRow, display: "flex", alignItems: "center" }}>

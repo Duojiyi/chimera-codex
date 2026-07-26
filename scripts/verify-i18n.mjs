@@ -118,9 +118,8 @@ function strip(text) {
 const componentDirs = [join(SRC, "features"), join(SRC, "shell")];
 const files = componentDirs.flatMap((d) => walk(d));
 
-// Rule 4: t(...) must not appear at module scope (column 0 indentation inside
-// a top-level const/array/object). Detected by finding t( before the first
-// exported function in the file.
+// Rule 4: t(...) must not be evaluated at import time — that freezes the
+// string and breaks instant language switching.
 const moduleScopeOffenders = [];
 // Rule 3: JSX text and user-facing attributes must not be literal strings.
 const literalOffenders = [];
@@ -128,7 +127,57 @@ const literalOffenders = [];
 // Attributes a screen reader or the user reads directly.
 const USER_FACING_ATTRS = /(?:aria-label|placeholder|title|aria-description)\s*=\s*"([^"]{2,})"/g;
 // JSX text between tags: >Some text<
-const JSX_TEXT = />([^<>{}\n]*[A-Za-z]{2}[^<>{}\n]*)</g;
+//
+// `>` must not be followed by `=`, and `<` must not be preceded by `=`, `!` or
+// `<`. Without those guards a comparison like `value >= 1024 && unit < n` reads
+// as JSX text and produces a phantom finding. A real JSX tag close is never
+// `>=`, and a real tag open is never preceded by a comparison operator.
+const JSX_TEXT = />(?!=)([^<>{}\n]*[A-Za-z]{2}[^<>{}\n]*)(?<![=!<])</g;
+
+/**
+ * The top-level `const`/`let`/`var` declarations — the code that runs at import.
+ *
+ * What this replaced, and why twice:
+ *
+ * The original rule was "everything before the first `export function`". It
+ * both over- and under-reported: a non-exported component declared above the
+ * exported one was wrongly flagged, and `const X = t(...)` placed AFTER the
+ * first function was missed entirely — which is exactly the case that breaks
+ * language switching.
+ *
+ * The obvious fix, brace-matching every function body away, is worse. A header
+ * regex cannot reliably span a parameter list containing an object type
+ * (`function Form(props: { a: string })`), so it latches onto the wrong brace
+ * and spills JSX into the "module scope" residue. It produced a confident false
+ * positive on providers/index.tsx.
+ *
+ * So: find declarations that start at column 0, track bracket depth to their
+ * end, and skip any whose initialiser contains `=>` — that is a function
+ * definition, not import-time work. Predictable, and wrong only in one narrow
+ * case (a `t()` call in a top-level arrow's default parameter), which is not a
+ * shape this codebase uses.
+ */
+function moduleLevelDeclarations(text) {
+  const lines = text.split("\n");
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^(?:export\s+)?(?:const|let|var)\s/.test(lines[i])) continue;
+
+    // Consume until every bracket opened by this statement is closed.
+    let depth = 0;
+    let statement = "";
+    for (; i < lines.length; i++) {
+      statement += lines[i] + "\n";
+      for (const ch of lines[i]) {
+        if ("([{".includes(ch)) depth++;
+        else if (")]}".includes(ch)) depth--;
+      }
+      if (depth <= 0) break;
+    }
+    if (!statement.includes("=>")) out.push(statement);
+  }
+  return out.join("\n");
+}
 
 for (const file of files) {
   const rel = relative(ROOT, file).split(sep).join("/");
@@ -143,9 +192,8 @@ for (const file of files) {
   // closing tag always has one, so this cannot eat real markup.
   const text = strip(raw).replace(/\b[A-Z][A-Za-z0-9_]*<[^<>/]*>/g, "GENERIC");
 
-  // Rule 4 — find module scope: everything before the first `export function`.
-  const firstExport = text.search(/^export\s+(?:default\s+)?function/m);
-  const moduleScope = firstExport === -1 ? text : text.slice(0, firstExport);
+  // Rule 4 — top-level declarations are what runs at import time.
+  const moduleScope = moduleLevelDeclarations(text);
   if (/\bt\(|\btf\(|\btranslateStatic\(/.test(moduleScope)) {
     moduleScopeOffenders.push(rel);
   }
