@@ -5,3 +5,5 @@
 pub mod capability;
 pub mod cas;
 pub mod manifest;
+pub mod signature;
+pub mod store;

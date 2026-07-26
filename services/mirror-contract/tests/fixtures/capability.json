@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "bound_raw_digest": "sha256:raw-A",
+  "codex_version": "26.732.0.0",
+  "generated_at": "2026-07-20T09:58:00Z",
+  "skin_compat": {
+    "compatible": true,
+    "checks": [
+      { "name": "cdp_loopback_only", "passed": true, "detail": null },
+      { "name": "no_asar_write", "passed": true, "detail": null }
+    ]
+  }
+}

@@ -1,4 +1,6 @@
 // Task 4 — Mirror contract schema and CAS validation tests.
+use ed25519_dalek::{Signer, SigningKey};
+use getrandom::{SysRng, rand_core::UnwrapErr};
 use mirror_contract::capability::{CapabilityManifest, SkinCompatibility};
 use mirror_contract::cas::{
     CasError, StablePointer, validate_stable_promotion, verify_manifest_digest,
@@ -6,6 +8,7 @@ use mirror_contract::cas::{
 use mirror_contract::manifest::{
     CompatibilityStatus, MirrorManifest, OfficialIdentity, SourceProvenance,
 };
+use mirror_contract::signature::{SignatureError, VerifyingKeyBytes, verify_manifest_signature};
 
 // ── Manifest ──────────────────────────────────────────────────────────────────
 
@@ -164,6 +167,22 @@ fn sample_manifest(channel: &str, compat: CompatibilityStatus) -> MirrorManifest
             etag: Some("abc123".to_string()),
             observed_at: "2026-07-26T00:00:00Z".to_string(),
         },
+        // Absent here on purpose: the capability triple is generated at
+        // promotion time, so a bare sample carries none. capability_binding.rs
+        // covers the declared case.
+        // Spec 9.2: a real stable entry always names its capability manifest.
+        // Raw entries have none, because capabilities are computed at promotion.
+        capability_manifest_url: if channel == "stable" {
+            Some("https://mirror.chimera.io/windows/x64/capability-26.721.json".to_string())
+        } else {
+            None
+        },
+        capability_manifest_size_bytes: if channel == "stable" { Some(512) } else { None },
+        capability_manifest_sha256: if channel == "stable" {
+            Some("b".repeat(64))
+        } else {
+            None
+        },
     }
 }
 
@@ -175,4 +194,117 @@ fn pointer(seq: u64) -> StablePointer {
         promoted_at: "2026-07-26T00:00:00Z".into(),
         sequence: seq,
     }
+}
+
+/// Generate a fresh Ed25519 keypair using the system CSPRNG, for tests that
+/// need a real signature rather than a fixed one.
+fn generate_signing_key() -> SigningKey {
+    let mut csprng = UnwrapErr(SysRng);
+    SigningKey::generate(&mut csprng)
+}
+
+// ── Capability manifest binding (Spec 9.2) ─────────────────────────────────────
+
+#[test]
+fn stable_manifest_that_binds_capability_manifest_is_stable_compatible() {
+    let m = sample_manifest("stable", CompatibilityStatus::Compatible);
+    assert!(m.binds_capability_manifest());
+    assert!(
+        m.is_stable_compatible(),
+        "a stable manifest that binds a capability manifest must be stable-compatible"
+    );
+}
+
+#[test]
+fn stable_manifest_that_does_not_bind_capability_manifest_is_not_stable_compatible() {
+    let mut m = sample_manifest("stable", CompatibilityStatus::Compatible);
+    // Strip the capability triple entirely: a stable entry with nothing to
+    // bind must not be treated as usable, even though channel and
+    // compatibility_status both look fine on their own.
+    m.capability_manifest_url = None;
+    m.capability_manifest_size_bytes = None;
+    m.capability_manifest_sha256 = None;
+
+    assert!(!m.binds_capability_manifest());
+    assert!(
+        !m.is_stable_compatible(),
+        "a stable manifest with no capability binding must not be stable-compatible"
+    );
+}
+
+#[test]
+fn binds_capability_manifest_rejects_wrong_length_digest() {
+    let mut m = sample_manifest("stable", CompatibilityStatus::Compatible);
+    m.capability_manifest_sha256 = Some("b".repeat(63)); // one char short
+    assert!(!m.binds_capability_manifest());
+}
+
+#[test]
+fn binds_capability_manifest_rejects_non_hex_digest() {
+    let mut m = sample_manifest("stable", CompatibilityStatus::Compatible);
+    // 64 chars, but 'g' is not a hex digit.
+    m.capability_manifest_sha256 = Some(format!("g{}", "b".repeat(63)));
+    assert!(!m.binds_capability_manifest());
+}
+
+// ── Signature verification ─────────────────────────────────────────────────────
+
+#[test]
+fn valid_ed25519_signature_over_manifest_bytes_verifies() {
+    let signing_key = generate_signing_key();
+    let verifying_key = VerifyingKeyBytes(signing_key.verifying_key().to_bytes());
+    let manifest_json = br#"{"schema_version":1,"channel":"stable"}"#;
+
+    let signature = signing_key.sign(manifest_json);
+
+    assert!(
+        verify_manifest_signature(manifest_json, &signature.to_bytes(), &verifying_key).is_ok(),
+        "a genuine signature over the exact bytes must verify"
+    );
+}
+
+#[test]
+fn signature_over_different_bytes_fails_with_mismatch() {
+    let signing_key = generate_signing_key();
+    let verifying_key = VerifyingKeyBytes(signing_key.verifying_key().to_bytes());
+    let original = br#"{"schema_version":1,"channel":"stable"}"#;
+    let tampered = br#"{"schema_version":2,"channel":"stable"}"#;
+
+    let signature = signing_key.sign(original);
+
+    let err = verify_manifest_signature(tampered, &signature.to_bytes(), &verifying_key)
+        .expect_err("a signature over the wrong bytes must not verify");
+    assert!(matches!(err, SignatureError::Mismatch));
+}
+
+#[test]
+fn malformed_key_bytes_return_malformed_key_error_not_a_panic() {
+    let signing_key = generate_signing_key();
+    let manifest_json = br#"{"schema_version":1}"#;
+    let signature = signing_key.sign(manifest_json);
+
+    // A high last byte with the rest zeroed decodes to a y-coordinate that is
+    // not less than the field prime, so it is not a valid compressed Edwards
+    // point. Key decoding must fail cleanly rather than panicking.
+    let mut bad_bytes = [0u8; 32];
+    bad_bytes[31] = 0xFF;
+    let bad_key = VerifyingKeyBytes(bad_bytes);
+
+    let err = verify_manifest_signature(manifest_json, &signature.to_bytes(), &bad_key)
+        .expect_err("a malformed key must not verify");
+    assert!(matches!(err, SignatureError::MalformedKey));
+}
+
+#[test]
+fn malformed_signature_bytes_return_malformed_signature_error_not_a_panic() {
+    let signing_key = generate_signing_key();
+    let verifying_key = VerifyingKeyBytes(signing_key.verifying_key().to_bytes());
+    let manifest_json = br#"{"schema_version":1}"#;
+
+    // Only 3 bytes: nowhere near the required 64-byte signature length.
+    let bad_signature = [1u8, 2, 3];
+
+    let err = verify_manifest_signature(manifest_json, &bad_signature, &verifying_key)
+        .expect_err("a malformed signature must not verify");
+    assert!(matches!(err, SignatureError::MalformedSignature));
 }

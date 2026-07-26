@@ -35,6 +35,26 @@ function validateManifest(manifest, name) {
   check(`${name}: channel is raw|stable|candidate`,
     ["raw", "stable", "candidate"].includes(manifest.channel));
   check(`${name}: asset_url is https`, (manifest.asset_url ?? "").startsWith("https://"));
+
+  // Spec 9.2: a stable entry must name the capability manifest generated for
+  // the same raw build, with size and digest so it can be verified BEFORE use.
+  // All three are required together — a URL alone cannot be checked.
+  if (manifest.channel === "stable") {
+    check(
+      `${name}: stable declares capability_manifest_url`,
+      typeof manifest.capability_manifest_url === "string" &&
+        manifest.capability_manifest_url.startsWith("https://"),
+    );
+    check(
+      `${name}: stable declares capability_manifest_size_bytes > 0`,
+      Number.isInteger(manifest.capability_manifest_size_bytes) &&
+        manifest.capability_manifest_size_bytes > 0,
+    );
+    check(
+      `${name}: stable declares capability_manifest_sha256 (64 hex)`,
+      /^[0-9a-f]{64}$/i.test(manifest.capability_manifest_sha256 ?? ""),
+    );
+  }
   check(`${name}: size_bytes > 0`, (manifest.size_bytes ?? 0) > 0);
 
   // Raw channel must NOT have compatibility_status = "compatible"
@@ -118,11 +138,16 @@ const rawManifest = {
 };
 validateManifest(rawManifest, "inline-raw");
 
-// 2. Stable manifest must have compatible status
+// 2. Stable manifest must have compatible status AND a complete capability
+//    triple (Spec 9.2): a stable entry that names no capability manifest would
+//    let the skin engine run against a build whose capabilities are unknown.
 const stableManifest = {
   ...rawManifest, channel: "stable",
   compatibility_status: "compatible",
   promoted_from_raw_digest: "sha256:" + "b".repeat(60),
+  capability_manifest_url: "https://example.com/capability-26.721.json",
+  capability_manifest_size_bytes: 512,
+  capability_manifest_sha256: "c".repeat(64),
 };
 validateManifest(stableManifest, "inline-stable");
 
@@ -130,6 +155,43 @@ validateManifest(stableManifest, "inline-stable");
 validateCasSequence([
   { sequence: 1 }, { sequence: 2 }, { sequence: 3 },
 ]);
+
+// 4. Self-test: the capability requirement must actually bite. A gate that
+//    only ever passes proves nothing, so drop each field in turn and confirm
+//    the validator rejects it. Failures raised here are expected and are not
+//    counted against the run.
+const CAPABILITY_FIELDS = [
+  "capability_manifest_url",
+  "capability_manifest_size_bytes",
+  "capability_manifest_sha256",
+];
+let selfTestBroken = 0;
+for (const field of CAPABILITY_FIELDS) {
+  const incomplete = { ...stableManifest };
+  delete incomplete[field];
+
+  const before = failures;
+  const realLog = console.log;
+  console.log = () => {}; // the expected failure output would be noise
+  validateManifest(incomplete, `selftest-missing-${field}`);
+  console.log = realLog;
+
+  const raised = failures - before;
+  failures = before; // these failures were expected; do not fail the run
+  if (raised === 0) {
+    selfTestBroken += 1;
+    failures += 1;
+    console.log(
+      `${FAIL} self-test: a stable manifest missing ${field} was accepted — ` +
+        `the capability requirement is not enforced`,
+    );
+  }
+}
+if (selfTestBroken === 0) {
+  console.log(
+    `${PASS} self-test: dropping any of the 3 capability fields is rejected`,
+  );
+}
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 

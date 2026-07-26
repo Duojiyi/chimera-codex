@@ -25,6 +25,8 @@ repository = "https://github.com/Duojiyi/chimera-codex"
 
 [workspace.dependencies]
 aes-gcm = "0.10"
+ed25519-dalek = "3.0.0"
+hex = "0.4.3"
 anyhow = "1"
 base64 = "0.22"
 directories = "6"

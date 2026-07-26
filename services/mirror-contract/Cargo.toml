@@ -10,6 +10,9 @@ description = "Chimera++ 2.0 — Mirror manifest schema, stable CAS, capability 
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+ed25519-dalek = { workspace = true }
+hex = { workspace = true }
+fs2 = { workspace = true }
 url = { workspace = true }
 sha2 = { workspace = true }
 semver = { workspace = true }
@@ -17,4 +20,5 @@ chimera-domain = { path = "../../crates/chimera-domain" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-serde_json = { workspace = true }
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
+getrandom = { version = "0.4.2", features = ["sys_rng"] }
