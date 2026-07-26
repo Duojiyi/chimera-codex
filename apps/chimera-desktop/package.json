@@ -10,6 +10,7 @@
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "node --experimental-strip-types --test src/**/*.test.ts",
     "test:a11y": "node ../../scripts/design-verify/a11y.mjs",
+    "depcruise": "depcruise src --config .dependency-cruiser.cjs",
     "vite:dev": "vite --host 127.0.0.1 --port 1421",
     "vite:build": "vite build",
     "vite:preview": "vite preview --host 127.0.0.1"

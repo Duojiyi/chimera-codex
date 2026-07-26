@@ -21,6 +21,22 @@ const skipArg  = args.find(a => a.startsWith("--skip="))?.split("=")[1];
 const onlySet  = onlyArg  ? new Set(onlyArg.split(","))  : null;
 const skipSet  = skipArg  ? new Set(skipArg.split(","))  : new Set();
 
+// The v2 crates. V7 is scoped to these rather than `cargo test --workspace`:
+// the 1.x suite is red on this branch by construction (codex-plus-manager's
+// upstream_sync_* tests assert on sync-upstream.yml, which v2 deleted per ADR).
+// Enumerating keeps the gate honest instead of hiding a real failure behind a
+// blanket exclusion — and V15 check 1 separately proves no v2 crate depends on
+// the 1.x tree, so nothing v2 ships is covered by those tests.
+const V2_CRATES = [
+  "chimera-domain",
+  "chimera-platform",
+  "chimera-provider",
+  "chimera-runtime",
+  "chimera-theme",
+  "chimera-migration",
+  "mirror-contract",
+];
+
 const CHECKS = [
   {
     id: "V1",
@@ -32,11 +48,18 @@ const CHECKS = [
   },
   {
     id: "V7",
-    label: "Rust workspace tests",
+    label: `Rust v2 crate tests (${V2_CRATES.length} crates)`,
     cmd: "cargo",
-    args: ["test", "--workspace", "--locked"],
+    args: ["test", "--locked", ...V2_CRATES.flatMap(c => ["-p", c])],
     cwd: ROOT,
     skipIfMissing: "Cargo.toml",
+  },
+  {
+    id: "V9",
+    label: "Mirror contract",
+    cmd: "node",
+    args: ["scripts/test-mirror-contract.mjs"],
+    cwd: ROOT,
   },
   {
     id: "V11",
@@ -60,21 +83,46 @@ const CHECKS = [
     cwd: ROOT,
   },
   {
+    id: "V15s",
+    label: "Architecture gate self-test",
+    cmd: "node",
+    args: ["scripts/verify-v2-architecture.mjs", "--self-test"],
+    cwd: ROOT,
+  },
+  {
     id: "V15",
     label: "Architecture constraints",
     cmd: "node",
     args: ["scripts/verify-v2-architecture.mjs"],
     cwd: ROOT,
   },
+  {
+    id: "V16",
+    label: "Design tokens match .pen",
+    cmd: "node",
+    args: ["scripts/verify-design-tokens.mjs"],
+    cwd: ROOT,
+  },
+  {
+    id: "V17",
+    label: "i18n contract",
+    cmd: "node",
+    args: ["scripts/verify-i18n.mjs"],
+    cwd: ROOT,
+  },
 ];
 
 // V8 and V9/V10 are conditional on directories existing
 if (existsSync(join(ROOT, "apps", "chimera-desktop", "package.json"))) {
+  // Mirrors the CI frontend job exactly. `npm run build` is deliberately NOT
+  // used: it is `tauri build`, a full signed-installer run that needs the
+  // release Rust toolchain and a bundler. CI builds the web assets with
+  // vite:build and compiles the shell separately in the Rust job.
   CHECKS.splice(2, 0, {
     id: "V8",
-    label: "Frontend check + test + a11y + build",
+    label: "Frontend check + test + build + a11y",
     cmd: "npm",
-    args: ["run", "check", "&&", "npm", "test", "&&", "npm", "run", "test:a11y", "&&", "npm", "run", "build"],
+    args: ["run", "check", "&&", "npm", "test", "&&", "npm", "run", "vite:build", "&&", "npm", "run", "test:a11y"],
     cwd: join(ROOT, "apps", "chimera-desktop"),
     shell: true,
   });

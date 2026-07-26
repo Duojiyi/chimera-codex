@@ -179,8 +179,13 @@ if (moduleScopeOffenders.length > 0) {
 }
 
 if (literalOffenders.length > 0) {
+  // Print every hit. An earlier revision capped this at 4 per file, and four
+  // copies of one false positive filled the slice in every file — which hid
+  // that home/index.tsx had never been translated at all. Truncation that
+  // silently drops findings reads as "clean" when it is not.
   for (const o of literalOffenders) {
-    fail(`${o.rel}: untranslated literal(s) — ${o.hits.slice(0, 4).join("; ")}`);
+    fail(`${o.rel}: ${o.hits.length} untranslated literal(s)`);
+    for (const h of o.hits) console.log(`     | ${h}`);
   }
 } else {
   pass(`no hardcoded user-facing literals in ${files.length} component file(s)`);

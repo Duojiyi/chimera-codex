@@ -45,6 +45,15 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: ${{ env.FRONTEND_DIR }}/package-lock.json
+
+      # V15 runs dependency-cruiser for real, so the frontend deps must exist.
+      # It refuses to skip when they are missing — an unrunnable gate is a
+      # failed gate, which is how the App.tsx <-> TopRail cycle survived.
+      - name: Install frontend dependencies
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npm ci
 
       - name: V11 license and third-party source registry
         run: node scripts/verify-license.mjs
@@ -55,11 +64,17 @@ jobs:
       - name: V9 mirror contract
         run: node scripts/test-mirror-contract.mjs
 
+      - name: V15 self-test (the gate must be able to go red)
+        run: node scripts/verify-v2-architecture.mjs --self-test
+
       - name: V15 architecture boundaries
         run: node scripts/verify-v2-architecture.mjs
 
       - name: V16 design tokens match .pen design file
         run: node scripts/verify-design-tokens.mjs
+
+      - name: V17 i18n contract
+        run: node scripts/verify-i18n.mjs
 
       - name: V14 whitespace and text errors
         run: git diff --check ${{ github.event.pull_request.base.sha || 'HEAD~1' }} HEAD
@@ -120,11 +135,14 @@ jobs:
       - name: mirror-contract
         run: cargo test -p mirror-contract --locked
 
-      # V7 is scoped to v2 crates. `cargo test --workspace` currently aborts in
-      # the 1.x codex-plus-core launcher suite (STATUS_STACK_BUFFER_OVERRUN from
-      # a runaway allocation) on commit 2ce80f2c, before any v2 work. That is a
-      # 1.x maintenance-branch defect; v2 must not depend on codex-plus-core (G2),
-      # so the v2 gate does not inherit it. Build the shell to keep it compiling.
+      # V7 is scoped to the v2 crates enumerated above, not `cargo test
+      # --workspace`. The 1.x suite is red on this branch by construction:
+      # codex-plus-manager's `upstream_sync_*` and `release_gates_*` tests
+      # assert on .github/workflows/sync-upstream.yml, which v2 deleted per ADR
+      # (v2 does not follow CodexPlusPlus upstream tags). Those five failures
+      # are the ADR working as intended, not a regression — and v2 must not
+      # depend on the 1.x tree at all (G2, enforced by V15 check 1). Build the
+      # shell to keep it compiling.
       - name: v2 desktop shell compiles
         run: cargo build -p chimera-desktop --locked
 
@@ -161,3 +179,10 @@ jobs:
       - name: V8 production build
         working-directory: ${{ env.FRONTEND_DIR }}
         run: npm run vite:build
+
+      # G16: zero serious/critical axe findings is a release gate, so it has to
+      # run on every push rather than on demand. Needs the build above, since
+      # the harness serves dist/ and drives each screen via ?screen=.
+      - name: V8 accessibility (axe, WCAG 2.2 AA)
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npm run test:a11y

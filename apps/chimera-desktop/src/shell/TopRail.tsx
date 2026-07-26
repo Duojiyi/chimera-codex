@@ -1,4 +1,4 @@
-import type { ActiveFeature } from "../App";
+import type { ActiveFeature } from "./nav";
 import { color, type as font, size, radius, hairline, indicator } from "../design/tokens.ts";
 import { useI18n, type TranslationKey } from "../i18n/index.tsx";
 

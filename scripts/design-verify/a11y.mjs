@@ -6,6 +6,9 @@
 // real computed styles. A jsdom shim would silently skip exactly those rules.
 //
 // Usage:  node a11y.mjs [--lang zh|en]
+// With no --lang it checks every locale that ships. Both are released, so
+// passing on one proves nothing about the other: translated strings change
+// text length, wrapping and therefore what overlaps or clips.
 // Exit 0 = zero serious/critical findings. Exit 1 = gate fails.
 
 import { chromium } from "playwright";
@@ -28,8 +31,9 @@ const SCREENS = ["home", "providers", "codex", "appearance", "settings"];
 // WCAG 2.2 AA and everything it subsumes.
 const TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
+const SHIPPED_LANGS = ["zh", "en"];
 const langArg = process.argv.indexOf("--lang");
-const LANG = langArg !== -1 ? process.argv[langArg + 1] : "zh";
+const LANGS = langArg !== -1 ? [process.argv[langArg + 1]] : SHIPPED_LANGS;
 
 const GREEN = "\x1b[32m";
 const RED = "\x1b[31m";
@@ -73,53 +77,55 @@ try {
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 
-  for (const screen of SCREENS) {
-    await page.goto(`${BASE}/?screen=${screen}&lang=${LANG}`, {
-      waitUntil: "networkidle",
-    });
-    await page.addScriptTag({ content: AXE_SOURCE });
+  for (const LANG of LANGS) {
+    for (const screen of SCREENS) {
+      await page.goto(`${BASE}/?screen=${screen}&lang=${LANG}`, {
+        waitUntil: "networkidle",
+      });
+      await page.addScriptTag({ content: AXE_SOURCE });
 
-    const result = await page.evaluate(
-      async (tags) =>
-        await window.axe.run(document, {
-          runOnly: { type: "tag", values: tags },
-        }),
-      TAGS,
-    );
-
-    const blocking = result.violations.filter(
-      (v) => v.impact === "serious" || v.impact === "critical",
-    );
-    const minor = result.violations.filter(
-      (v) => v.impact !== "serious" && v.impact !== "critical",
-    );
-
-    if (blocking.length === 0) {
-      console.log(
-        `${GREEN}✓${RESET} ${screen} (${LANG}): no serious/critical` +
-          (minor.length ? ` ${YELLOW}(${minor.length} minor/moderate)${RESET}` : ""),
+      const result = await page.evaluate(
+        async (tags) =>
+          await window.axe.run(document, {
+            runOnly: { type: "tag", values: tags },
+          }),
+        TAGS,
       );
-    } else {
-      failed++;
-      seriousCritical += blocking.length;
-      console.log(`${RED}✗${RESET} ${screen} (${LANG}): ${blocking.length} serious/critical`);
-      for (const v of blocking) {
-        console.log(`    [${v.impact}] ${v.id} — ${v.help}`);
-        for (const node of v.nodes.slice(0, 3)) {
-          console.log(`      ${node.target.join(" ")}`);
-          if (node.failureSummary) {
-            const first = node.failureSummary.split("\n").filter(Boolean)[1];
-            if (first) console.log(`        ${first.trim()}`);
+
+      const blocking = result.violations.filter(
+        (v) => v.impact === "serious" || v.impact === "critical",
+      );
+      const minor = result.violations.filter(
+        (v) => v.impact !== "serious" && v.impact !== "critical",
+      );
+
+      if (blocking.length === 0) {
+        console.log(
+          `${GREEN}✓${RESET} ${screen} (${LANG}): no serious/critical` +
+            (minor.length ? ` ${YELLOW}(${minor.length} minor/moderate)${RESET}` : ""),
+        );
+      } else {
+        failed++;
+        seriousCritical += blocking.length;
+        console.log(`${RED}✗${RESET} ${screen} (${LANG}): ${blocking.length} serious/critical`);
+        for (const v of blocking) {
+          console.log(`    [${v.impact}] ${v.id} — ${v.help}`);
+          for (const node of v.nodes.slice(0, 3)) {
+            console.log(`      ${node.target.join(" ")}`);
+            if (node.failureSummary) {
+              const first = node.failureSummary.split("\n").filter(Boolean)[1];
+              if (first) console.log(`        ${first.trim()}`);
+            }
+          }
+          if (v.nodes.length > 3) {
+            console.log(`      … and ${v.nodes.length - 3} more node(s)`);
           }
         }
-        if (v.nodes.length > 3) {
-          console.log(`      … and ${v.nodes.length - 3} more node(s)`);
-        }
       }
-    }
 
-    for (const v of minor) {
-      console.log(`  ${YELLOW}·${RESET} ${screen}: [${v.impact}] ${v.id} — ${v.help}`);
+      for (const v of minor) {
+        console.log(`  ${YELLOW}·${RESET} ${screen} (${LANG}): [${v.impact}] ${v.id} — ${v.help}`);
+      }
     }
   }
 
@@ -128,13 +134,14 @@ try {
   server.kill();
 }
 
+const scope = `${SCREENS.length} screen(s) x ${LANGS.join(", ")}`;
 console.log("");
 if (failed === 0) {
-  console.log(`${GREEN}✓ test:a11y (${LANG}): WCAG 2.2 AA — zero serious/critical${RESET}`);
+  console.log(`${GREEN}✓ test:a11y: WCAG 2.2 AA — zero serious/critical (${scope})${RESET}`);
   process.exit(0);
 } else {
   console.log(
-    `${RED}✗ test:a11y (${LANG}): ${seriousCritical} serious/critical finding(s) on ${failed} screen(s)${RESET}`,
+    `${RED}✗ test:a11y: ${seriousCritical} serious/critical finding(s) on ${failed} screen/locale pair(s)${RESET}`,
   );
   process.exit(1);
 }

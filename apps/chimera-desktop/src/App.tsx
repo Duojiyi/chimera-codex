@@ -11,16 +11,7 @@ import { AppearanceFeature } from "@/features/appearance";
 import { SettingsFeature }   from "@/features/settings";
 import { TopRail }           from "@/shell/TopRail";
 import { I18nProvider }      from "@/i18n";
-
-export type ActiveFeature = "home" | "providers" | "codex" | "appearance" | "settings";
-
-const FEATURES: readonly ActiveFeature[] = [
-  "home",
-  "providers",
-  "codex",
-  "appearance",
-  "settings",
-] as const;
+import { FEATURES, type ActiveFeature } from "@/shell/nav";
 
 /**
  * Resolve the screen to open from `?screen=<name>`.
