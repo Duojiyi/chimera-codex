@@ -5,6 +5,7 @@
 pub mod canonical_path;
 pub mod lock;
 pub mod process;
+pub mod webview2;
 
 pub use canonical_path::CanonicalPath;
 pub use lock::{LockGuard, OperationLock};
