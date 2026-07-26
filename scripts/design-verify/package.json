@@ -1,0 +1,14 @@
+{
+  "name": "chimera-design-verify",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-only design-conformance harness. Not a CI dependency: it needs a real browser, so it is deliberately isolated from apps/chimera-desktop so `npm ci` in CI never pulls Playwright.",
+  "scripts": {
+    "verify": "node verify.mjs"
+  },
+  "devDependencies": {
+    "axe-core": "^4.10.2",
+    "playwright": "1.62.0"
+  }
+}

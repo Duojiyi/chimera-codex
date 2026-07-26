@@ -9,9 +9,10 @@
     "build": "tauri build",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "node --experimental-strip-types --test src/**/*.test.ts",
-    "test:a11y": "node scripts/test-a11y.mjs",
+    "test:a11y": "node ../../scripts/design-verify/a11y.mjs",
     "vite:dev": "vite --host 127.0.0.1 --port 1421",
-    "vite:build": "vite build"
+    "vite:build": "vite build",
+    "vite:preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
     "@fontsource/outfit": "^5.2.8",
