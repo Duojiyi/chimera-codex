@@ -8,6 +8,10 @@ members = [
   "crates/chimera-runtime",
   "crates/chimera-theme",
   "crates/chimera-migration",
+  # Chimera's own updater. Separate from chimera-runtime on purpose: G8/G15
+  # require the app's trust root to be independent of the Codex mirror's, and
+  # sharing a crate is how those two domains start sharing state.
+  "crates/chimera-update",
   "services/mirror-contract",
   "apps/chimera-desktop/src-tauri",
   # ── 1.x legacy (maintenance only, no new features) ─────────────────────

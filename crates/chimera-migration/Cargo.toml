@@ -11,7 +11,15 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+toml = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
 chimera-domain = { path = "../chimera-domain" }
+# chimera-platform is layer 1 (ports over OS capabilities); reusing its file
+# lock is allowed. chimera-provider/-runtime/-theme are sibling layer-2
+# adapters and MUST NOT be added here (scripts/verify-v2-architecture.mjs G1) —
+# narrow ports in src/ports.rs are the seam the desktop shell wires instead.
+chimera-platform = { path = "../chimera-platform" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

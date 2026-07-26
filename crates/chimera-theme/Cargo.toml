@@ -11,8 +11,18 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+zip = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+ed25519-dalek = { workspace = true }
+url = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
 chimera-domain = { path = "../chimera-domain" }
 chimera-platform = { path = "../chimera-platform" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
+getrandom = { version = "0.4.2", features = ["sys_rng"] }

@@ -34,6 +34,7 @@ const V2_CRATES = [
   "chimera-runtime",
   "chimera-theme",
   "chimera-migration",
+  "chimera-update",
   "mirror-contract",
 ];
 

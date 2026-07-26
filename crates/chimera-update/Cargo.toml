@@ -1,0 +1,23 @@
+[package]
+name = "chimera-update"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Chimera++ 2.0 — the app's own TUF-style updater, trust-isolated from the Codex mirror"
+
+[dependencies]
+anyhow = { workspace = true }
+ed25519-dalek = { workspace = true }
+hex = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+chimera-domain = { path = "../chimera-domain" }
+chimera-platform = { path = "../chimera-platform" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

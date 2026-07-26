@@ -139,6 +139,9 @@ jobs:
       - name: V6 chimera-migration
         run: cargo test -p chimera-migration --locked
 
+      - name: chimera-update
+        run: cargo test -p chimera-update --locked
+
       - name: chimera-platform
         run: cargo test -p chimera-platform --locked
 
