@@ -19,7 +19,7 @@
 
 use crate::legacy_source::LegacyProtocol;
 use crate::secret::RedactedSecret;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::path::PathBuf;
 use thiserror::Error;
 

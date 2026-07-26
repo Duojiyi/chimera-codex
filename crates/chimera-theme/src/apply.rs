@@ -147,6 +147,18 @@ impl<A: SkinApplier> SkinStateTransaction<A> {
         })
     }
 
+    /// Mutable access to the applier.
+    ///
+    /// Narrow on purpose: the caller that owns the live CDP session needs to
+    /// ask whether the browser is still running, and that question belongs to
+    /// the session rather than to this transaction. The transaction
+    /// deliberately cannot end the process itself — it pushes CSS and records
+    /// state, and giving it the power to kill Codex would make `Drop` order
+    /// something skin logic had to reason about.
+    pub fn applier_mut(&mut self) -> &mut A {
+        &mut self.applier
+    }
+
     /// The last *committed* state — never reflects an in-progress
     /// [`Self::try_skin`], which is precisely the point (see module docs).
     pub fn current(&self) -> &SkinState {

@@ -93,6 +93,12 @@ pub struct AppState {
     /// backend and no command can silently fall back to an in-memory double.
     pub keychain: OsKeychain,
     pub runtime: RuntimeLayout,
+    /// The live skin session, opened lazily.
+    ///
+    /// Behind a mutex because a CDP session is a single owned browser process:
+    /// two commands driving it concurrently would interleave stylesheet
+    /// commands on one socket.
+    pub skins: Mutex<crate::skin_cmds::SkinRuntime>,
 }
 
 impl AppState {
@@ -128,6 +134,7 @@ impl AppState {
             db: Mutex::new(db),
             keychain: OsKeychain::new(),
             runtime,
+            skins: Mutex::new(Default::default()),
         })
     }
 

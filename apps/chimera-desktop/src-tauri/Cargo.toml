@@ -27,6 +27,7 @@ uuid.workspace = true
 chimera-domain = { path = "../../../crates/chimera-domain" }
 chimera-provider = { path = "../../../crates/chimera-provider" }
 chimera-migration = { path = "../../../crates/chimera-migration" }
+chimera-theme = { path = "../../../crates/chimera-theme" }
 chimera-runtime = { path = "../../../crates/chimera-runtime" }
 chimera-platform = { path = "../../../crates/chimera-platform" }
 

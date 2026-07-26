@@ -21,7 +21,7 @@ use chimera_provider::transaction::{SwitchTransaction, TransactionOutcome, TxErr
 use chimera_runtime::health::check_runtime_health;
 use chimera_runtime::process::{LaunchError, launch_managed_codex};
 
-use crate::dto::{ProviderDto, ProviderTestDto, RuntimeInfoDto, SkinDto, SystemStatusDto};
+use crate::dto::{ProviderDto, ProviderTestDto, RuntimeInfoDto, SystemStatusDto};
 use crate::state::AppState;
 
 /// Relabel the tray menu when the user changes language.
@@ -338,34 +338,3 @@ fn launch_error_message(e: &LaunchError) -> String {
 // ── Appearance: skins ────────────────────────────────────────────────────────
 // chimera-theme is a stub until Task 8. These commands return the honest
 // default-only state rather than fabricating a skin library.
-
-#[tauri::command]
-pub fn list_skins() -> Result<Vec<SkinDto>, String> {
-    Ok(vec![SkinDto {
-        id: "default".to_string(),
-        name: "Default".to_string(),
-        description: "No modifications to official app files".to_string(),
-        is_default: true,
-        applied: true,
-    }])
-}
-
-#[tauri::command]
-pub fn apply_skin(_skin_id: String) -> Result<(), String> {
-    Err("Skins are not enabled in this build. Task 8 adds the restricted skin engine.".to_string())
-}
-
-#[tauri::command]
-pub fn try_skin(_skin_id: String) -> Result<(), String> {
-    Err(
-        "Skin preview is not enabled in this build. Task 8 adds the restricted skin engine."
-            .to_string(),
-    )
-}
-
-/// Always available: restoring the default is the recovery path, so it must
-/// never fail even when the skin engine is absent.
-#[tauri::command]
-pub fn restore_default_skin() -> Result<(), String> {
-    Ok(())
-}

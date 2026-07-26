@@ -10,6 +10,7 @@ pub mod migration_cmds;
 pub mod portable_cmds;
 pub mod provider_cmds;
 pub mod runtime_cmds;
+pub mod skin_cmds;
 pub mod state;
 pub mod tray;
 
@@ -73,10 +74,13 @@ pub fn run() {
             provider_cmds::add_provider,
             provider_cmds::delete_provider,
             provider_cmds::test_existing_provider,
-            commands::list_skins,
-            commands::apply_skin,
-            commands::try_skin,
-            commands::restore_default_skin,
+            // Skins, driving a real CDP session (Step 8.2/8.3).
+            skin_cmds::import_skin,
+            skin_cmds::list_skins,
+            skin_cmds::apply_skin,
+            skin_cmds::try_skin,
+            skin_cmds::cancel_try_skin,
+            skin_cmds::restore_default_skin,
             // Codex screen — every command the tab calls must be here, or it
             // fails at runtime with "command not found" the moment it opens.
             runtime_cmds::get_runtime_status,

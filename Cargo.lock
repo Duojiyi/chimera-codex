@@ -573,6 +573,7 @@ dependencies = [
  "chimera-platform",
  "chimera-provider",
  "chimera-runtime",
+ "chimera-theme",
  "directories",
  "fs2",
  "serde",
