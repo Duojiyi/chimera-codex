@@ -291,6 +291,9 @@ export const en: Record<TranslationKey, string> = {
     "Not ready yet — these need fixing first. Nothing on your machine has been changed.",
   "preflight.recheck": "Check again",
 
+  "appearance.importSkin": "Import skin…",
+  "appearance.errImport": "Could not import that skin.",
+
   // ── Generic ───────────────────────────────────────────────────────────────
   "common.dash": "—",
   "common.loading": "Loading…",

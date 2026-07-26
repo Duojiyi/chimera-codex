@@ -284,6 +284,9 @@ export const zh = {
   "preflight.blockedIntro": "还不能继续，以下问题需要先解决。你的机器目前没有被改动。",
   "preflight.recheck": "重新检查",
 
+  "appearance.importSkin": "导入皮肤…",
+  "appearance.errImport": "导入皮肤失败。",
+
   // ── Generic ───────────────────────────────────────────────────────────────
   "common.dash": "—",
   "common.loading": "加载中…",

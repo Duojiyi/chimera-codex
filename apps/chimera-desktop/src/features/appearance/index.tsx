@@ -3,7 +3,7 @@
 // Every dimension/colour comes from src/design/tokens.ts — no literals here.
 // Note: the skeleton preview bars in the mock spec at #1C1C1C have no exact
 // token; color.ink2 (#181818) is the nearest defined surface tone.
-import { useState, useEffect } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { color, type, size, radius, hairline, ruleOpacity } from "../../design/tokens.ts";
 import { useI18n, type TranslationKey } from "../../i18n/index.tsx";
 
@@ -17,15 +17,18 @@ interface Skin {
   // Skins loaded from disk/backend carry their own display strings — they
   // are not part of the translation dictionary, so these are plain text.
   name?: string;
-  subtitle?: string;
+  /// The backend's SkinDto calls this `description`; a package that no longer
+  /// validates puts its error here, so it is shown rather than hidden.
+  description?: string;
   applied?: boolean;
 }
 
+// Only the built-in default. The three sample skins that used to sit here were
+// placeholders with no package behind them: once list_skins became real they
+// would have been offered to a user and then failed to apply, which is worse
+// than an empty list. Everything else arrives from the backend.
 const DEFAULT_SKINS: Skin[] = [
   { id: "default", nameKey: "appearance.defaultName", subtitleKey: "appearance.defaultSubtitle", applied: true },
-  { id: "terminal", nameKey: "appearance.terminalName", subtitleKey: "appearance.terminalDesc" },
-  { id: "minimal", nameKey: "appearance.minimalName", subtitleKey: "appearance.minimalDesc" },
-  { id: "high-contrast", nameKey: "appearance.highContrastName", subtitleKey: "appearance.highContrastDesc" },
 ];
 
 const SAFETY_ROWS: { labelKey: TranslationKey; valueKey: TranslationKey }[] = [
@@ -56,10 +59,10 @@ export function AppearanceFeature() {
     return skin.nameKey ? t(skin.nameKey) : skin.name ?? "";
   }
   function skinSubtitle(skin: Skin): string {
-    return skin.subtitleKey ? t(skin.subtitleKey) : skin.subtitle ?? "";
+    return skin.subtitleKey ? t(skin.subtitleKey) : skin.description ?? "";
   }
 
-  useEffect(() => {
+  const reload = useCallback(() => {
     invoke("list_skins")
       .then(list => {
         if (Array.isArray(list) && list.length > 0) {
@@ -72,12 +75,34 @@ export function AppearanceFeature() {
       .catch(() => {});
   }, []);
 
+  useEffect(() => { reload(); }, [reload]);
+
+  /// Pick a .codexskin and import it. Validation happens in the backend before
+  /// the file is stored, so a rejected package is never written to disk.
+  async function handleImport() {
+    setBusy(true); setError(null);
+    try {
+      const dialog = (globalThis as { __TAURI__?: { dialog?: { open?: (o: unknown) => Promise<unknown> } } }).__TAURI__?.dialog;
+      const picked = await dialog?.open?.({
+        multiple: false,
+        filters: [{ name: "Codex skin", extensions: ["codexskin"] }],
+      });
+      if (typeof picked !== "string") return;
+      await invoke("import_skin", { path: picked });
+      reload();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : t("appearance.errImport"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const selectedSkin = skins.find(s => s.id === selectedId) ?? skins[0];
 
   async function handleApply() {
     setBusy(true); setError(null);
     try {
-      await invoke("apply_skin", { id: selectedSkin.id });
+      await invoke("apply_skin", { skinId: selectedSkin.id });
       setSkins(list => list.map(s => ({ ...s, applied: s.id === selectedSkin.id })));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : t("appearance.errApply"));
@@ -89,7 +114,7 @@ export function AppearanceFeature() {
   async function handleTry() {
     setBusy(true); setError(null);
     try {
-      await invoke("try_skin", { id: selectedSkin.id });
+      await invoke("try_skin", { skinId: selectedSkin.id });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : t("appearance.errTry"));
     } finally {
@@ -296,6 +321,20 @@ export function AppearanceFeature() {
                 }}
               >
                 {t("appearance.restoreDefault")}
+              </button>
+              {/* Without this there is no way to get a skin into the app at
+                  all — the list can only ever show the built-in default. */}
+              <button
+                onClick={handleImport}
+                disabled={busy}
+                aria-label={t("appearance.importSkin")}
+                style={{
+                  background: color.ink3, color: color.primary, border: `${hairline}px solid ${color.rule}`,
+                  borderRadius: radius.sm, padding: "9px 18px", fontSize: 13, fontFamily: "inherit",
+                  cursor: busy ? "wait" : "pointer", opacity: busy ? 0.7 : 1,
+                }}
+              >
+                {t("appearance.importSkin")}
               </button>
             </div>
 
