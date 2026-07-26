@@ -85,6 +85,43 @@ pub enum TrustError {
 
     #[error("{role:?} signatures do not satisfy its role")]
     Signature { role: Role },
+
+    #[error(
+        "the compiled-in development trust root is not usable in a release build; \
+         it must be replaced by a root from a real offline key ceremony"
+    )]
+    DevelopmentRootRefused,
+}
+
+/// What a caller is willing to trust.
+///
+/// Exists for one reason: a review found that `bundled_root::is_development_root`
+/// was defined and never called, so the placeholder root shipped in the binary
+/// would have been accepted in production exactly like a real one. A detection
+/// hook nobody invokes is not a control.
+///
+/// Kept as a parameter rather than a `cfg!(debug_assertions)` check inside the
+/// verifier, because a rule that only exists in release builds is a rule no
+/// test can ever observe firing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrustPolicy {
+    /// Only ever true for a development build talking to a development mirror.
+    pub allow_development_root: bool,
+}
+
+impl TrustPolicy {
+    /// What a shipped build uses.
+    pub const RELEASE: Self = Self {
+        allow_development_root: false,
+    };
+
+    /// What `verify_chain` selects automatically. A debug build may bootstrap
+    /// from the bundled placeholder; a release build never can.
+    pub fn for_this_build() -> Self {
+        Self {
+            allow_development_root: cfg!(debug_assertions),
+        }
+    }
 }
 
 fn sha256_hex(payload: &str) -> String {
@@ -177,6 +214,30 @@ pub fn verify_chain(
     clock: &dyn Clock,
     previous: Option<&TrustedVersions>,
 ) -> Result<VerifiedChain, TrustError> {
+    verify_chain_with_policy(
+        root_doc,
+        timestamp_doc,
+        snapshot_doc,
+        targets_doc,
+        clock,
+        previous,
+        TrustPolicy::for_this_build(),
+    )
+}
+
+/// [`verify_chain`] with the trust policy stated explicitly.
+///
+/// The only reason to call this directly is to assert release behaviour from a
+/// test that is itself running in a debug build.
+pub fn verify_chain_with_policy(
+    root_doc: &SignedPayload,
+    timestamp_doc: &SignedPayload,
+    snapshot_doc: &SignedPayload,
+    targets_doc: &SignedPayload,
+    clock: &dyn Clock,
+    previous: Option<&TrustedVersions>,
+    policy: TrustPolicy,
+) -> Result<VerifiedChain, TrustError> {
     let now = clock.now();
 
     // ── Root ────────────────────────────────────────────────────────────────
@@ -184,6 +245,13 @@ pub fn verify_chain(
     // document is refused here rather than later by a signature mismatch that
     // could be misread as "the mirror rotated a key" (G8/G15).
     let root = parse_root(&root_doc.payload)?;
+
+    // Before any cryptography: the compiled-in placeholder is a valid,
+    // self-consistent root, so every signature check below would pass on it.
+    // Only this refuses it.
+    if !policy.allow_development_root && crate::bundled_root::is_development_root(&root) {
+        return Err(TrustError::DevelopmentRootRefused);
+    }
 
     // Root is self-signed by definition — it is the document that declares
     // which key root is. Accepting one signed by anything else would mean

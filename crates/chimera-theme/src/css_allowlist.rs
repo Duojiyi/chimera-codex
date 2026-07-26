@@ -90,6 +90,8 @@ pub enum CssError {
     UnbundledUrl(String),
     #[error("value contains a known CSS-to-script vector: {0:?}")]
     ScriptVector(String),
+    #[error("value contains a CSS escape sequence, which is not permitted in a skin: {0:?}")]
+    EscapeRefused(String),
 }
 
 /// Validate a stylesheet against the allowlist.
@@ -261,6 +263,26 @@ fn validate_declarations(body: &str, bundled_assets: &HashSet<String>) -> Result
         }
         if !ALLOWED_PROPERTIES.contains(&prop.as_str()) {
             return Err(CssError::DisallowedProperty(prop));
+        }
+
+        // Refuse escape sequences outright, before anything else looks at the
+        // value.
+        //
+        // An adversarial review reproduced this end to end: the url() scanner
+        // searched for the literal bytes `url(`, but CSS's escaped-code-point
+        // grammar means `\75rl(` decodes to `url(` in every standards-compliant
+        // tokenizer — including the Chromium engine this crate injects into —
+        // so the argument never reached the check that rejects remote schemes.
+        // A skin could load remote content, which G9 forbids outright.
+        //
+        // Teaching the scanner to decode escapes would be an arms race
+        // (`\75`, `\000075`, `\75 rl(`, mixed case, escapes inside the argument
+        // itself) against a tokenizer whose behaviour is not ours to define,
+        // and we would only ever be one spelling behind. A skin has no
+        // legitimate need for an escape sequence, so this removes the surface
+        // instead of chasing it. That is the whole point of an allowlist.
+        if value.contains('\\') {
+            return Err(CssError::EscapeRefused(value.to_string()));
         }
 
         let lower_value = value.to_ascii_lowercase();

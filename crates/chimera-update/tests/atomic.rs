@@ -231,3 +231,100 @@ fn a_current_schema_document_is_read_without_calling_upgrade() {
     s.write(&doc).unwrap();
     assert_eq!(s.read().unwrap(), Some(doc));
 }
+
+// ── The atomicity the store is named for ────────────────────────────────────
+//
+// An adversarial review pointed out that replacing the whole tmp-file + fsync +
+// rename sequence with a plain `File::create(primary)` left all nine tests
+// green. The one property this module exists for had no coverage at all: every
+// test checked what `read` returns, and none checked that a *failed* write
+// leaves the previous content intact.
+//
+// The observable difference is what these pin. A direct write truncates the
+// primary before it can fail; a staged write cannot touch the primary until
+// the staged copy is complete.
+
+/// Make the staging path unusable by putting a directory where the temp file
+/// needs to be. `File::create` on a directory fails on every platform.
+fn block_the_staging_path(store_path: &std::path::Path) {
+    fs::create_dir_all(store_path.with_extension("json.tmp")).unwrap();
+}
+
+#[test]
+fn a_write_that_cannot_stage_leaves_the_previous_content_intact() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("doc.json");
+    let store: AtomicStore<Doc> = AtomicStore::new(&path);
+
+    let first = Doc {
+        name: "first".into(),
+        count: 1,
+        nickname: "one".into(),
+    };
+    store.write(&first).unwrap();
+
+    block_the_staging_path(&path);
+
+    let second = Doc {
+        name: "second".into(),
+        count: 2,
+        nickname: "two".into(),
+    };
+    let result = store.write(&second);
+
+    assert!(
+        result.is_err(),
+        "a write that cannot stage must be reported, not silently skipped"
+    );
+    assert_eq!(
+        store.read().unwrap(),
+        Some(first),
+        "the previous document was destroyed by a write that never completed"
+    );
+}
+
+#[test]
+fn a_write_that_cannot_stage_does_not_create_the_document_at_all() {
+    // The same property on a fresh store: a failed first write must leave
+    // nothing behind, not an empty or half-written file that `read` would
+    // then report as corrupt for the rest of the install's life.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("doc.json");
+    let store: AtomicStore<Doc> = AtomicStore::new(&path);
+
+    block_the_staging_path(&path);
+    let result = store.write(&Doc {
+        name: "x".into(),
+        count: 1,
+        nickname: "y".into(),
+    });
+
+    assert!(result.is_err());
+    assert!(
+        !path.exists(),
+        "a failed first write created the primary anyway"
+    );
+    assert_eq!(store.read().unwrap(), None);
+}
+
+#[test]
+fn a_successful_write_leaves_no_staging_file_behind() {
+    // A leftover .tmp is how a later read picks up a document nobody
+    // committed, and it is the cheapest signal that the rename actually ran.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("doc.json");
+    let store: AtomicStore<Doc> = AtomicStore::new(&path);
+
+    store
+        .write(&Doc {
+            name: "a".into(),
+            count: 1,
+            nickname: "b".into(),
+        })
+        .unwrap();
+
+    assert!(
+        !path.with_extension("json.tmp").exists(),
+        "the staging file survived a successful write"
+    );
+}

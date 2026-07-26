@@ -224,12 +224,54 @@ pub fn apply_migration(
             continue;
         }
 
-        let Ok(base_url) = Url::parse(&candidate.base_url) else {
-            skipped.push(SkippedCandidate {
-                source_id: candidate.source_id.clone(),
-                reason: "had an invalid base URL and was not migrated".to_string(),
-            });
-            continue;
+        // `Url::parse` alone is not a policy. It accepts `http://`, `ftp://`
+        // and a URL carrying `user:pass@` — so an imported 1.x or CC Switch
+        // entry pointing at a plaintext endpoint would have had its API key
+        // written to the credential store and a provider row created, while
+        // the identical URL typed into the Add Provider form is refused.
+        //
+        // Migration is an import path, not an exemption. A rule that only
+        // applies to values the user typed is not a rule. Mirrors
+        // `chimera_provider::probe::validate_provider_url` — deliberately
+        // re-stated rather than imported, since adapter crates may not depend
+        // on each other (G1, enforced by verify-v2-architecture).
+        let base_url = match Url::parse(&candidate.base_url) {
+            Ok(url) if url.scheme() != "https" => {
+                skipped.push(SkippedCandidate {
+                    source_id: candidate.source_id.clone(),
+                    reason: "used a non-HTTPS endpoint and was not migrated. Re-add it manually \
+                             if the endpoint supports HTTPS."
+                        .to_string(),
+                });
+                continue;
+            }
+            Ok(url) if !url.username().is_empty() || url.password().is_some() => {
+                // Migrating this would carry a password into the projected
+                // config, where nothing else in v2 ever puts one.
+                skipped.push(SkippedCandidate {
+                    source_id: candidate.source_id.clone(),
+                    reason: "embedded a username or password in its URL, which v2 does not \
+                             support. Re-add it manually using the API key field."
+                        .to_string(),
+                });
+                continue;
+            }
+            Ok(url) if url.fragment().is_some() => {
+                skipped.push(SkippedCandidate {
+                    source_id: candidate.source_id.clone(),
+                    reason: "had a URL fragment, which is not valid for an API endpoint"
+                        .to_string(),
+                });
+                continue;
+            }
+            Ok(url) => url,
+            Err(_) => {
+                skipped.push(SkippedCandidate {
+                    source_id: candidate.source_id.clone(),
+                    reason: "had an invalid base URL and was not migrated".to_string(),
+                });
+                continue;
+            }
         };
 
         let provider_id = deterministic_provider_id(candidate.source_kind, &candidate.source_id);
