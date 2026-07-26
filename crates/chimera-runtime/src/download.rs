@@ -106,10 +106,16 @@ pub enum Preflight {
 /// the filesystem did not report it, which is not a reason to refuse: the
 /// write itself already fails safely, and blocking an install because we could
 /// not measure a disk would be worse than letting it try.
-pub fn preflight(layout: &RuntimeLayout, payload_bytes: u64, available_bytes: Option<u64>) -> Preflight {
+pub fn preflight(
+    layout: &RuntimeLayout,
+    payload_bytes: u64,
+    available_bytes: Option<u64>,
+) -> Preflight {
     let root = layout.root();
     if !root.is_dir() {
-        return Preflight::NotWritable { path: root.to_path_buf() };
+        return Preflight::NotWritable {
+            path: root.to_path_buf(),
+        };
     }
     // Probing with a real write catches read-only mounts and ACLs that a
     // metadata check reports as fine.
@@ -118,7 +124,11 @@ pub fn preflight(layout: &RuntimeLayout, payload_bytes: u64, available_bytes: Op
         Ok(()) => {
             let _ = fs::remove_file(&probe);
         }
-        Err(_) => return Preflight::NotWritable { path: root.to_path_buf() },
+        Err(_) => {
+            return Preflight::NotWritable {
+                path: root.to_path_buf(),
+            };
+        }
     }
 
     if let Some(available) = available_bytes {
@@ -197,7 +207,10 @@ fn stream_to_file(
         // Checked mid-stream, not after: a body that ignores the declared size
         // must not be allowed to fill the disk and then be rejected.
         if written > spec.size_bytes {
-            return Err(DownloadError::SizeMismatch { expected: spec.size_bytes, actual: written });
+            return Err(DownloadError::SizeMismatch {
+                expected: spec.size_bytes,
+                actual: written,
+            });
         }
 
         hasher.update(&buf[..n]);
@@ -206,7 +219,10 @@ fn stream_to_file(
 
     // Truncation never trips the check above, so it needs its own.
     if written != spec.size_bytes {
-        return Err(DownloadError::SizeMismatch { expected: spec.size_bytes, actual: written });
+        return Err(DownloadError::SizeMismatch {
+            expected: spec.size_bytes,
+            actual: written,
+        });
     }
 
     file.flush().map_err(DownloadError::storage)?;
@@ -215,7 +231,10 @@ fn stream_to_file(
 
     let actual = format!("{:x}", hasher.finalize());
     if !actual.eq_ignore_ascii_case(&spec.sha256) {
-        return Err(DownloadError::DigestMismatch { expected: spec.sha256.clone(), actual });
+        return Err(DownloadError::DigestMismatch {
+            expected: spec.sha256.clone(),
+            actual,
+        });
     }
 
     Ok(())

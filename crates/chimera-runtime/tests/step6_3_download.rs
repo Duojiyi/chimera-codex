@@ -45,10 +45,16 @@ struct FakeSource {
 
 impl FakeSource {
     fn ok(body: &[u8]) -> Self {
-        Self { body: body.to_vec(), fail_after: None }
+        Self {
+            body: body.to_vec(),
+            fail_after: None,
+        }
     }
     fn drops_after(body: &[u8], n: usize) -> Self {
-        Self { body: body.to_vec(), fail_after: Some(n) }
+        Self {
+            body: body.to_vec(),
+            fail_after: Some(n),
+        }
     }
 }
 
@@ -62,7 +68,10 @@ impl Read for FakeReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if let Some(limit) = self.fail_after {
             if self.pos >= limit {
-                return Err(io::Error::new(io::ErrorKind::ConnectionReset, "connection reset"));
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "connection reset",
+                ));
             }
         }
         let remaining = self.body.len().saturating_sub(self.pos);
@@ -78,7 +87,11 @@ impl Read for FakeReader {
 
 impl PayloadSource for FakeSource {
     fn open(&self, _url: &str) -> Result<Box<dyn Read + Send>, DownloadError> {
-        Ok(Box::new(FakeReader { body: self.body.clone(), pos: 0, fail_after: self.fail_after }))
+        Ok(Box::new(FakeReader {
+            body: self.body.clone(),
+            pos: 0,
+            fail_after: self.fail_after,
+        }))
     }
 }
 
@@ -113,7 +126,10 @@ fn a_matching_payload_lands_in_staging() {
 
     let staged = fetch_payload(&l, &spec(&body), &FakeSource::ok(&body)).expect("download");
 
-    assert!(staged.exists(), "the payload must be where the caller was told");
+    assert!(
+        staged.exists(),
+        "the payload must be where the caller was told"
+    );
     assert_eq!(std::fs::read(&staged).unwrap(), body);
 }
 
@@ -131,7 +147,10 @@ fn a_wrong_digest_is_refused_and_discarded() {
 
     let err = fetch_payload(&l, &wrong, &FakeSource::ok(&body)).unwrap_err();
 
-    assert!(matches!(err, DownloadError::DigestMismatch { .. }), "got {err:?}");
+    assert!(
+        matches!(err, DownloadError::DigestMismatch { .. }),
+        "got {err:?}"
+    );
     assert!(
         staging_is_clean(&l),
         "a payload that failed verification must not survive anywhere on disk"
@@ -151,7 +170,10 @@ fn a_size_mismatch_is_refused_before_the_whole_body_is_read() {
 
     let err = fetch_payload(&l, &lying, &FakeSource::ok(&body)).unwrap_err();
 
-    assert!(matches!(err, DownloadError::SizeMismatch { .. }), "got {err:?}");
+    assert!(
+        matches!(err, DownloadError::SizeMismatch { .. }),
+        "got {err:?}"
+    );
     assert!(staging_is_clean(&l));
 }
 
@@ -168,7 +190,10 @@ fn a_short_body_is_refused_even_though_it_never_exceeds_the_size() {
     let err = fetch_payload(&l, &s, &FakeSource::ok(&body[..5_000])).unwrap_err();
 
     assert!(
-        matches!(err, DownloadError::SizeMismatch { .. } | DownloadError::DigestMismatch { .. }),
+        matches!(
+            err,
+            DownloadError::SizeMismatch { .. } | DownloadError::DigestMismatch { .. }
+        ),
         "got {err:?}"
     );
     assert!(staging_is_clean(&l));
@@ -231,7 +256,10 @@ fn preflight_refuses_when_free_space_is_below_what_the_payload_needs() {
 
     let verdict = preflight(&l, 500, /* available_bytes */ Some(400));
 
-    assert!(matches!(verdict, Preflight::InsufficientSpace { .. }), "got {verdict:?}");
+    assert!(
+        matches!(verdict, Preflight::InsufficientSpace { .. }),
+        "got {verdict:?}"
+    );
 }
 
 #[test]
@@ -254,7 +282,10 @@ fn preflight_demands_headroom_beyond_the_payload_itself() {
 fn preflight_passes_with_ample_space() {
     let dir = TempDir::new().unwrap();
     let l = layout(&dir);
-    assert!(matches!(preflight(&l, 1_000, Some(1_000_000_000)), Preflight::Ok));
+    assert!(matches!(
+        preflight(&l, 1_000, Some(1_000_000_000)),
+        Preflight::Ok
+    ));
 }
 
 #[test]
@@ -273,7 +304,10 @@ fn preflight_refuses_an_unwritable_runtime_root() {
     let l = RuntimeLayout::new(dir.path().join("never-created"));
     // initialise() deliberately not called: the directory does not exist.
     let verdict = preflight(&l, 1_000, Some(1_000_000_000));
-    assert!(matches!(verdict, Preflight::NotWritable { .. }), "got {verdict:?}");
+    assert!(
+        matches!(verdict, Preflight::NotWritable { .. }),
+        "got {verdict:?}"
+    );
 }
 
 // ── Errors are safe to show a user ──────────────────────────────────────────
@@ -292,7 +326,13 @@ fn error_messages_do_not_leak_the_url_or_raw_io_text() {
     let err = fetch_payload(&l, &s, &FakeSource::ok(&body)).unwrap_err();
     let shown = err.to_string();
 
-    assert!(!shown.contains("secret-path"), "URL leaked into the message: {shown}");
+    assert!(
+        !shown.contains("secret-path"),
+        "URL leaked into the message: {shown}"
+    );
     assert!(!shown.contains("os error"), "raw io text leaked: {shown}");
-    assert!(shown.len() > 10, "message must actually say something: {shown}");
+    assert!(
+        shown.len() > 10,
+        "message must actually say something: {shown}"
+    );
 }
