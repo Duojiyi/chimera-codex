@@ -64,6 +64,16 @@ jobs:
       - name: V9 mirror contract
         run: node scripts/test-mirror-contract.mjs
 
+      # D6 forbids shipping the Codex payload. This is the gate that would
+      # notice it coming back, so it runs on every push, not only on release.
+      - name: V10 bundle contract
+        run: node scripts/test-bundle-contract.mjs
+
+      - name: Release tooling self-tests
+        run: |
+          node scripts/v2-release-manifest.mjs --self-test
+          node scripts/sign-manifest.mjs --self-test
+
       - name: V15 self-test (the gate must be able to go red)
         run: node scripts/verify-v2-architecture.mjs --self-test
 

@@ -62,6 +62,27 @@ const CHECKS = [
     cwd: ROOT,
   },
   {
+    id: "V10",
+    label: "Bundle contract",
+    cmd: "node",
+    args: ["scripts/test-bundle-contract.mjs"],
+    cwd: ROOT,
+  },
+  {
+    id: "V10r",
+    label: "Release tooling self-tests",
+    cmd: "node",
+    args: ["scripts/v2-release-manifest.mjs", "--self-test"],
+    cwd: ROOT,
+  },
+  {
+    id: "V10s",
+    label: "Manifest signing self-test",
+    cmd: "node",
+    args: ["scripts/sign-manifest.mjs", "--self-test"],
+    cwd: ROOT,
+  },
+  {
     id: "V11",
     label: "License compliance",
     cmd: "node",
