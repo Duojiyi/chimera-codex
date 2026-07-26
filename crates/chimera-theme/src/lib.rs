@@ -15,6 +15,7 @@
 //! on `session` and `fingerprint` for the specific seams.
 
 pub mod apply;
+pub mod cdp_transport;
 pub mod css_allowlist;
 pub mod fingerprint;
 pub mod package;

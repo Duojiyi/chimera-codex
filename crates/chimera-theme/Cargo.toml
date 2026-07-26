@@ -17,7 +17,9 @@ hex = { workspace = true }
 ed25519-dalek = { workspace = true }
 url = { workspace = true }
 tokio = { workspace = true, features = ["net"] }
-tokio-tungstenite = { workspace = true }
+tungstenite = { workspace = true }
+# Blocking, for the one HTTP GET that CDP target discovery needs.
+reqwest = { workspace = true, features = ["blocking"] }
 futures-util = { workspace = true }
 chimera-domain = { path = "../chimera-domain" }
 chimera-platform = { path = "../chimera-platform" }
