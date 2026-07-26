@@ -130,4 +130,17 @@ impl AppState {
             runtime,
         })
     }
+
+    /// Persisted settings, or the shipped defaults.
+    ///
+    /// Deliberately infallible: the callers that need settings before the
+    /// window exists — tray setup, initial visibility — have no way to report a
+    /// read failure, and a missing or corrupt file is a recoverable state, not
+    /// a reason to refuse to start.
+    pub fn settings(&self) -> crate::dto::SettingsDto {
+        std::fs::read_to_string(self.paths.settings())
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
 }

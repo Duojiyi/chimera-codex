@@ -8,8 +8,10 @@ pub mod dto;
 pub mod provider_cmds;
 pub mod runtime_cmds;
 pub mod state;
+pub mod tray;
 
 use state::AppState;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -23,10 +25,32 @@ pub fn run() {
         }
     };
 
+    // Read once, before the builder takes ownership: the tray and the initial
+    // window visibility both depend on it.
+    let start_minimized = app_state.settings().start_minimized;
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
+        .setup(move |app| {
+            let handle = app.handle();
+            // Chinese is the product default; the frontend calls
+            // set_tray_language once it knows the user's choice.
+            tray::install(handle, "zh")?;
+            if !tray::should_show_window_on_start(start_minimized) {
+                if let Some(window) = handle.get_webview_window("main") {
+                    window.hide()?;
+                }
+            }
+            Ok(())
+        })
+        // Closing hides to the tray. Without this the "start minimized" setting
+        // would be a one-way trip: hide the window, no way to bring it back.
+        .on_window_event(|window, event| {
+            tray::handle_window_event(window.app_handle(), event);
+        })
         .invoke_handler(tauri::generate_handler![
+            commands::set_tray_language,
             commands::get_system_status,
             commands::list_providers,
             commands::launch_codex,

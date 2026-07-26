@@ -17,6 +17,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
@@ -24,6 +25,23 @@ import {
 
 import { zh, type TranslationKey } from "./zh.ts";
 import { en } from "./en.ts";
+
+/**
+ * Tell the backend which language the tray menu should use.
+ *
+ * The tray is built during Tauri setup, before any webview exists to ask, so it
+ * starts in Chinese and is corrected from here. Best-effort by design: outside
+ * the desktop shell (the design-verify harness runs in a plain browser) there
+ * is no tray and no invoke, and the UI must not break because of it.
+ */
+function syncTrayLanguage(lang: Language): void {
+  const invoke = (
+    globalThis as { __TAURI__?: { core?: { invoke?: (c: string, a?: unknown) => Promise<unknown> } } }
+  ).__TAURI__?.core?.invoke;
+  void invoke?.("set_tray_language", { lang })?.catch(() => {
+    // A tray that failed to relabel is cosmetic; never surface it.
+  });
+}
 
 export type { TranslationKey };
 export type Language = "zh" | "en";
@@ -82,6 +100,18 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     if (typeof document !== "undefined") {
       document.documentElement.lang = next === "zh" ? "zh-Hans" : "en";
     }
+    syncTrayLanguage(next);
+  }, []);
+
+  // The initial language can come from storage or ?lang=, neither of which the
+  // backend saw when it built the tray. Reconcile once on mount.
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      document.documentElement.lang = lang === "zh" ? "zh-Hans" : "en";
+    }
+    syncTrayLanguage(lang);
+    // Mount only: later changes go through setLang.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const value = useMemo<I18nValue>(() => {

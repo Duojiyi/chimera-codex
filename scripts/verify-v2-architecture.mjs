@@ -256,7 +256,36 @@ if (process.argv.includes("--self-test")) {
   }
 }
 
-// ── Check 6: ChimeraHub's URL comes from brand/product.toml ────────────────
+// ── Check 6: declared Tauri features must actually be built ────────────────
+// `tray-icon` was enabled in Cargo.toml with no TrayIconBuilder anywhere, while
+// Settings offered "start minimized to tray" — a toggle that could only hide
+// the window with nothing to restore it from. A paid-for capability that is
+// never constructed is worse than one that was never declared, because the UI
+// starts promising it.
+{
+  const toml = join(FRONTEND, "src-tauri", "Cargo.toml");
+  const srcDir = join(FRONTEND, "src-tauri", "src");
+  // feature name -> the symbol that proves it was built
+  const MUST_BUILD = { "tray-icon": "TrayIconBuilder" };
+
+  if (!existsSync(toml)) {
+    fail("apps/chimera-desktop/src-tauri/Cargo.toml missing");
+  } else {
+    const declared = readFileSync(toml, "utf8");
+    const sources = walkFiles(srcDir, ".rs").map(f => readFileSync(f, "utf8")).join("\n");
+    const unbuilt = Object.entries(MUST_BUILD)
+      .filter(([feat, symbol]) => declared.includes(`"${feat}"`) && !sources.includes(symbol));
+    if (unbuilt.length === 0) {
+      pass("Every declared Tauri feature is actually constructed");
+    } else {
+      for (const [feat, symbol] of unbuilt) {
+        fail(`Tauri feature "${feat}" is declared but no ${symbol} exists in src-tauri/src`);
+      }
+    }
+  }
+}
+
+// ── Check 7: ChimeraHub's URL comes from brand/product.toml ────────────────
 // brand/product.toml is the single source of truth (G1: one writer). v2 hand-
 // wrote `api.chimerahub.io` in five places while the real host has always been
 // `api.chimerahub.org` — every ChimeraHub preset pointed at a domain that does

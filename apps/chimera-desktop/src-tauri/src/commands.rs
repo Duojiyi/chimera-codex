@@ -24,6 +24,18 @@ use chimera_runtime::process::{LaunchError, launch_managed_codex};
 use crate::dto::{ProviderDto, ProviderTestDto, RuntimeInfoDto, SkinDto, SystemStatusDto};
 use crate::state::AppState;
 
+/// Relabel the tray menu when the user changes language.
+///
+/// The tray is created during setup, before any webview has told us what
+/// language the user prefers, so it starts in Chinese. The frontend calls this
+/// on mount and on every switch; without it the tray would be the one part of
+/// the UI stuck in the wrong language.
+#[tauri::command]
+pub fn set_tray_language(app: tauri::AppHandle, lang: String) -> Result<(), String> {
+    crate::tray::set_language(&app, &lang)
+        .map_err(|_| "Could not update the tray menu language.".to_string())
+}
+
 /// Map a ProviderRow to its wire DTO. Deliberately drops `secret_ref` entirely —
 /// only whether one exists (G4: keys never cross the IPC boundary).
 pub fn row_to_dto(row: &ProviderRow) -> ProviderDto {
