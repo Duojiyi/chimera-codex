@@ -239,3 +239,110 @@ fn stream_to_file(
 
     Ok(())
 }
+
+// ── The real transport ─────────────────────────────────────────────────────
+
+/// Maximum redirects to follow before giving up.
+const MAX_REDIRECTS: usize = 5;
+
+/// How long to wait for the server to start responding.
+///
+/// Only the handshake, not the transfer: a large payload on a slow connection
+/// is legitimately slow, and a total timeout would make the download impossible
+/// rather than just slow for exactly the users least able to retry it.
+const CONNECT_TIMEOUT_SECS: u64 = 15;
+
+/// May a redirect be followed while fetching a payload?
+///
+/// The manifest names one host and vouches for one digest. A redirect to a
+/// different origin is a different host than the one that was signed for, so it
+/// is refused even though the digest check would eventually catch a substituted
+/// file — refusing early means we never spend the bandwidth, and it keeps the
+/// failure attributable to the redirect rather than surfacing as "corrupt
+/// download" and sending the user to re-try forever.
+///
+/// The rule lives in `chimera-domain` because `chimera-provider`'s probe needs
+/// the identical one and adapter crates may not depend on each other.
+pub fn redirect_allowed(from: &str, to: &str) -> bool {
+    chimera_domain::same_origin(from, to)
+}
+
+/// Fetches payloads over HTTPS.
+///
+/// Deliberately blocking. The download is one streamed file behind a
+/// `std::io::Read`, and introducing an async runtime here would push it onto
+/// every caller for no benefit the sync path does not already have.
+pub struct HttpPayloadSource {
+    client: reqwest::blocking::Client,
+}
+
+impl HttpPayloadSource {
+    /// Build the client. Performs no I/O, so an offline machine fails at the
+    /// download with a network error rather than at construction with something
+    /// unrelated to what the user attempted.
+    pub fn new() -> Self {
+        let policy = reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= MAX_REDIRECTS {
+                return attempt.error("too many redirects");
+            }
+            let from = attempt
+                .previous()
+                .last()
+                .map(|u| u.to_string())
+                .unwrap_or_default();
+            if redirect_allowed(&from, attempt.url().as_str()) {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        });
+
+        // A builder failure here would mean TLS could not be initialised at
+        // all. Falling back to the default client keeps construction
+        // infallible; the request itself then fails with a real network error
+        // the caller can report, instead of a panic at startup.
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
+            .redirect(policy)
+            .build()
+            .unwrap_or_default();
+
+        Self { client }
+    }
+}
+
+impl Default for HttpPayloadSource {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PayloadSource for HttpPayloadSource {
+    fn open(&self, url: &str) -> Result<Box<dyn Read + Send>, DownloadError> {
+        // Only https. The manifest is signed, but a plaintext fetch would let
+        // anyone on the path see exactly which version a user is installing.
+        if !url.starts_with("https://") {
+            return Err(DownloadError::MalformedSpec);
+        }
+
+        let response = self.client.get(url).send().map_err(|e| {
+            if e.is_timeout() {
+                DownloadError::Transport(std::io::ErrorKind::TimedOut)
+            } else {
+                DownloadError::Unreachable
+            }
+        })?;
+
+        let status = response.status();
+        if status.is_redirection() {
+            // The policy stopped rather than followed, which only happens when
+            // the destination left the origin the manifest named.
+            return Err(DownloadError::Unreachable);
+        }
+        if !status.is_success() {
+            return Err(DownloadError::Unreachable);
+        }
+
+        Ok(Box::new(response))
+    }
+}

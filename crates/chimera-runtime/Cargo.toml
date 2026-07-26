@@ -12,6 +12,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 sha2 = { workspace = true }
+# `blocking` because PayloadSource yields a std::io::Read: the download is a
+# single streamed file, not something that benefits from an async runtime, and
+# pulling one in here would push it into every caller.
+reqwest = { workspace = true, features = ["blocking"] }
 chimera-domain = { path = "../chimera-domain" }
 chimera-platform = { path = "../chimera-platform" }
 

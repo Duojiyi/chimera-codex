@@ -251,12 +251,14 @@ const MAX_REDIRECTS: usize = 5;
 /// key safety a property of a transitive dependency's defaults; here it is a
 /// property of our own code, with tests.
 ///
+/// The rule itself lives in `chimera-domain` because the payload downloader in
+/// `chimera-runtime` needs the same one, and adapter crates may not depend on
+/// each other. Kept as a named function here so this module's tests still
+/// describe the redirect decision rather than a generic URL comparison.
+///
 /// Fails closed: anything that cannot be parsed is refused.
 pub fn redirect_verdict(from: &str, to: &str) -> bool {
-    match (Url::parse(from), Url::parse(to)) {
-        (Ok(a), Ok(b)) => a.origin() == b.origin(),
-        _ => false,
-    }
+    chimera_domain::same_origin(from, to)
 }
 
 /// Probe a provider endpoint with the given key.

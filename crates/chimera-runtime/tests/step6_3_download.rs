@@ -336,3 +336,41 @@ fn error_messages_do_not_leak_the_url_or_raw_io_text() {
         "message must actually say something: {shown}"
     );
 }
+
+// ── The real HTTP source ────────────────────────────────────────────────────
+// Its network behaviour cannot be unit-tested without a server, so what is
+// pinned here is the part that does not need one: the redirect rule, which is
+// what stops a mirror from bouncing the request to a host the manifest never
+// named.
+
+#[test]
+fn the_http_source_refuses_an_off_origin_redirect() {
+    use chimera_runtime::download::redirect_allowed;
+
+    assert!(redirect_allowed(
+        "https://mirror.example.com/a/codex.zip",
+        "https://mirror.example.com/b/codex.zip",
+    ));
+    assert!(!redirect_allowed(
+        "https://mirror.example.com/codex.zip",
+        "https://elsewhere.example.net/codex.zip",
+    ));
+    assert!(!redirect_allowed(
+        "https://mirror.example.com/codex.zip",
+        "http://mirror.example.com/codex.zip",
+    ));
+    // Fails closed on anything unparseable.
+    assert!(!redirect_allowed(
+        "https://mirror.example.com/codex.zip",
+        "«"
+    ));
+}
+
+#[test]
+fn the_http_source_is_constructible_without_touching_the_network() {
+    // Building the client must not perform I/O. If it did, an offline machine
+    // would fail at construction with an error that has nothing to do with the
+    // download the user actually attempted.
+    use chimera_runtime::download::HttpPayloadSource;
+    let _ = HttpPayloadSource::new();
+}

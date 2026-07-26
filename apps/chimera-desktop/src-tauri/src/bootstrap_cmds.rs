@@ -17,7 +17,10 @@ use serde::Serialize;
 use tauri::State;
 
 use chimera_platform::webview2;
-use chimera_runtime::download::{Preflight, preflight};
+use chimera_runtime::download::{
+    HttpPayloadSource, PayloadSpec, Preflight, fetch_payload, preflight,
+};
+use chimera_runtime::update::RuntimeLayout;
 
 use crate::state::AppState;
 
@@ -102,18 +105,45 @@ pub fn run_preflight(
 /// that the bytes are checked against something signed, and a command that
 /// fetched both the payload and its expectations from the same place would
 /// verify nothing.
+///
+/// Returns the staged file's name on success. The caller commits it into the
+/// managed runtime as a separate step, so a download that succeeded and an
+/// install that failed remain distinguishable.
 #[tauri::command]
 pub async fn fetch_codex_payload(
-    _state: State<'_, AppState>,
-    _version: String,
-    _url: String,
-    _size_bytes: u64,
-    _sha256: String,
-) -> Result<(), String> {
-    // The HTTP PayloadSource lands with the mirror client (Step 6.3's network
-    // half). Returning an honest "not enabled" beats a stub that reports
-    // success and leaves the user with no runtime and no error.
-    Err("Downloading Codex is not enabled in this build yet.".to_string())
+    state: State<'_, AppState>,
+    version: String,
+    url: String,
+    size_bytes: u64,
+    sha256: String,
+) -> Result<String, String> {
+    // Only the root is captured: `State` cannot cross into the blocking pool,
+    // and rebuilding the layout there costs nothing.
+    let root = state.paths.runtime_root();
+
+    // The download is blocking I/O. Running it on the async runtime's worker
+    // would stall every other command for the length of a multi-megabyte
+    // transfer — including the ones the progress UI needs.
+    tauri::async_runtime::spawn_blocking(move || {
+        let layout = RuntimeLayout::new(root);
+        let spec = PayloadSpec {
+            version,
+            url,
+            size_bytes,
+            sha256,
+        };
+        fetch_payload(&layout, &spec, &HttpPayloadSource::new())
+            // DownloadError's Display is already actionable and carries no URL
+            // or raw io text; anything else here would undo that.
+            .map_err(|e| e.to_string())
+            .map(|path| {
+                path.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            })
+    })
+    .await
+    .map_err(|_| "The download was interrupted. Nothing was installed; try again.".to_string())?
 }
 
 /// Compile-time proof that the DTO the frontend destructures is camelCase.
@@ -123,7 +153,6 @@ pub async fn fetch_codex_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chimera_runtime::download::PayloadSpec;
 
     #[test]
     fn preflight_dto_is_camel_case() {
