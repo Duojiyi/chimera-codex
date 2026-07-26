@@ -573,6 +573,7 @@ dependencies = [
  "chimera-provider",
  "chimera-runtime",
  "directories",
+ "fs2",
  "serde",
  "serde_json",
  "tauri",
@@ -600,10 +601,14 @@ version = "1.2.42-chimera.1"
 dependencies = [
  "anyhow",
  "chimera-domain",
+ "chimera-platform",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
+ "toml 0.8.2",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -660,10 +665,37 @@ dependencies = [
  "anyhow",
  "chimera-domain",
  "chimera-platform",
+ "ed25519-dalek",
+ "futures-util",
+ "getrandom 0.4.2",
+ "hex",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
+ "url",
+ "zip",
+]
+
+[[package]]
+name = "chimera-update"
+version = "1.2.42-chimera.1"
+dependencies = [
+ "anyhow",
+ "chimera-domain",
+ "chimera-platform",
+ "ed25519-dalek",
+ "hex",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "url",
 ]
 
 [[package]]

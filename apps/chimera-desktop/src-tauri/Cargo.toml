@@ -15,6 +15,7 @@ name = "chimera-desktop"
 path = "src/main.rs"
 
 [dependencies]
+fs2 = { workspace = true }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

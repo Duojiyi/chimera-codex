@@ -3,6 +3,7 @@
 // chimera-platform. Tauri commands are thin adapters: validate input, call a
 // service, return a serialisable result.
 
+pub mod bootstrap_cmds;
 pub mod commands;
 pub mod dto;
 pub mod provider_cmds;
@@ -51,6 +52,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::set_tray_language,
+            // First run: preflight before anything is touched, then fetch.
+            bootstrap_cmds::run_preflight,
+            bootstrap_cmds::fetch_codex_payload,
             commands::get_system_status,
             commands::list_providers,
             commands::launch_codex,
