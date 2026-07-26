@@ -1,6 +1,7 @@
 //! Steps 5.3/5.4 — Runtime directory layout, current pointer, staging, commit, rollback.
 //! Spec 8.2: versions/<v>/, staging/<tx>/, backup/<v>/, current.json, operation.lock
 
+use chimera_platform::lock::{LockError, OperationLock};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
@@ -19,6 +20,18 @@ pub enum UpdateError {
     Io(#[from] std::io::Error),
     #[error("json error: {0}")]
     Json(String),
+    #[error("another operation holds the runtime lock (holder pid: {holder_pid:?})")]
+    Locked { holder_pid: Option<u32> },
+}
+
+impl From<LockError> for UpdateError {
+    fn from(e: LockError) -> Self {
+        match e {
+            LockError::AlreadyHeld { holder_pid } => UpdateError::Locked { holder_pid },
+            // A lock we cannot even open is an IO problem, not contention.
+            LockError::Io { source, .. } => UpdateError::Io(source),
+        }
+    }
 }
 
 /// Active version pointer, written as `current.json` in the runtime root.
@@ -55,6 +68,13 @@ impl RuntimeLayout {
     pub fn version_dir(&self, version: &str) -> PathBuf {
         self.versions_dir().join(version)
     }
+    /// Cross-process lock guarding every mutation of the runtime tree.
+    /// Spec 8.2 names this file; commit and rollback both take it so two
+    /// Chimera processes cannot interleave a version swap.
+    pub fn operation_lock_path(&self) -> PathBuf {
+        self.root.join("operation.lock")
+    }
+
     pub fn current_pointer_path(&self) -> PathBuf {
         self.root.join("current.json")
     }
@@ -104,6 +124,12 @@ pub fn commit_version(
     version: &str,
     source_manifest_digest: &str,
 ) -> Result<UpdatePointer, UpdateError> {
+    // Hold the lock for the whole swap. Without it, two processes can each read
+    // current.json, then both write it — losing one previous_version link and
+    // leaving the rollback chain pointing at a version that no longer exists.
+    let lock = OperationLock::new(layout.operation_lock_path());
+    let _guard = lock.try_acquire("commit_version")?;
+
     let staged = layout.staging_dir().join(version);
     let version_dir = layout.version_dir(version);
 
@@ -132,6 +158,11 @@ pub fn commit_version(
 
 /// Roll back to the previous version.
 pub fn rollback_to_last_known(layout: &RuntimeLayout) -> Result<UpdatePointer, UpdateError> {
+    // Same lock as commit: a rollback racing an update would otherwise read a
+    // pointer that the other operation is mid-way through replacing.
+    let lock = OperationLock::new(layout.operation_lock_path());
+    let _guard = lock.try_acquire("rollback_to_last_known")?;
+
     let current = layout
         .read_current_pointer()?
         .ok_or(UpdateError::NoPreviousVersion)?;

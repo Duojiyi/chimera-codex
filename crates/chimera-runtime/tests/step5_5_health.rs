@@ -3,6 +3,7 @@
 use chimera_runtime::health::{check_runtime_health, is_process_owned_by_runtime};
 use chimera_runtime::update::RuntimeLayout;
 use std::fs;
+use std::path::Path;
 use tempfile::tempdir;
 
 fn make_layout_with_version(tmp: &tempfile::TempDir, version: &str) -> RuntimeLayout {
@@ -76,6 +77,31 @@ fn process_outside_runtime_root_is_not_owned() {
     assert!(
         !is_process_owned_by_runtime(&other_path, &runtime_root),
         "exe outside runtime root must NOT be considered owned"
+    );
+}
+
+#[test]
+fn sibling_directory_sharing_a_name_prefix_is_not_owned() {
+    // Regression: a raw string `starts_with` reports true here, which would let
+    // us act on an install we do not own (G5). Segment comparison rejects it.
+    let root = Path::new("C:/rt");
+    assert!(
+        !is_process_owned_by_runtime(Path::new("C:/rt-evil/Codex.exe"), root),
+        "a sibling dir sharing a name prefix must not count as owned"
+    );
+    assert!(
+        !is_process_owned_by_runtime(Path::new("C:/rtx/Codex.exe"), root),
+        "a longer sibling name must not count as owned"
+    );
+    // The genuine child still passes.
+    assert!(
+        is_process_owned_by_runtime(Path::new("C:/rt/versions/1/Codex.exe"), root),
+        "a real descendant must still count as owned"
+    );
+    // The root itself is not a process under the root.
+    assert!(
+        !is_process_owned_by_runtime(root, root),
+        "the root path itself is not an owned process"
     );
 }
 

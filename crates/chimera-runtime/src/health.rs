@@ -57,11 +57,26 @@ fn find_codex_exe(version_dir: &Path) -> Option<std::path::PathBuf> {
 /// Returns true iff the executable at `exe_path` is inside `runtime_root`.
 /// Used to prevent accidentally killing external ChatGPT / MSIX Codex processes.
 pub fn is_process_owned_by_runtime(exe_path: &Path, runtime_root: &Path) -> bool {
-    // Normalise separators for cross-platform comparison
-    let exe_str = exe_path.to_string_lossy().replace('\\', "/").to_lowercase();
-    let root_str = runtime_root
-        .to_string_lossy()
-        .replace('\\', "/")
-        .to_lowercase();
-    exe_str.starts_with(&root_str)
+    // Compare path SEGMENTS, not the raw string. A string prefix test reports
+    // true for `C:/rt-evil/Codex.exe` against root `C:/rt`, which would let us
+    // terminate or replace an install we do not own — a G5 violation.
+    fn segments(p: &Path) -> Vec<String> {
+        p.to_string_lossy()
+            .replace('\\', "/")
+            .to_lowercase()
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    let exe = segments(exe_path);
+    let root = segments(runtime_root);
+
+    // An empty root would match everything; the exe must also live strictly
+    // below the root, never be the root itself.
+    if root.is_empty() || exe.len() <= root.len() {
+        return false;
+    }
+    exe[..root.len()] == root[..]
 }

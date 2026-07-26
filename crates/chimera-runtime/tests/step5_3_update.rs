@@ -130,3 +130,86 @@ fn staging_does_not_modify_current_pointer() {
         "staging must not create current.json"
     );
 }
+
+// ── Operation lock (Spec 8.2) ─────────────────────────────────────────────────
+// The runtime root names `operation.lock`, but commit/rollback never took it.
+// Two concurrent updates could interleave the 3-step commit (remove old dir →
+// rename staged → write pointer) and leave `previous_version` pointing at a
+// directory the other writer already deleted.
+
+#[test]
+fn commit_is_refused_while_the_operation_lock_is_held() {
+    let tmp = tempdir().unwrap();
+    let layout = make_layout(&tmp);
+    layout.initialise().unwrap();
+
+    let staged = stage_version(&layout, "26.732").unwrap();
+    fs::write(staged.join("Codex.exe"), b"v1").unwrap();
+
+    // Simulate another Chimera process mid-update.
+    let lock = chimera_platform::lock::OperationLock::new(layout.operation_lock_path());
+    let _held = lock.try_acquire("other_process").expect("first acquire");
+
+    let err = commit_version(&layout, "26.732", "sha256:v1")
+        .expect_err("commit must not proceed while another process holds the lock");
+    assert!(
+        matches!(err, chimera_runtime::update::UpdateError::Locked { .. }),
+        "expected Locked, got {err:?}"
+    );
+
+    // Nothing may have been written.
+    assert!(
+        layout.read_current_pointer().unwrap().is_none(),
+        "a refused commit must not write current.json"
+    );
+}
+
+#[test]
+fn rollback_is_refused_while_the_operation_lock_is_held() {
+    let tmp = tempdir().unwrap();
+    let layout = make_layout(&tmp);
+    layout.initialise().unwrap();
+
+    let s1 = stage_version(&layout, "26.721").unwrap();
+    fs::write(s1.join("Codex.exe"), b"v1").unwrap();
+    commit_version(&layout, "26.721", "sha256:v1").unwrap();
+    let s2 = stage_version(&layout, "26.732").unwrap();
+    fs::write(s2.join("Codex.exe"), b"v2").unwrap();
+    commit_version(&layout, "26.732", "sha256:v2").unwrap();
+
+    let lock = chimera_platform::lock::OperationLock::new(layout.operation_lock_path());
+    let _held = lock.try_acquire("other_process").expect("first acquire");
+
+    let err = rollback_to_last_known(&layout)
+        .expect_err("rollback must not proceed while another process holds the lock");
+    assert!(
+        matches!(err, chimera_runtime::update::UpdateError::Locked { .. }),
+        "expected Locked, got {err:?}"
+    );
+
+    // The pointer must still name the version that was active before.
+    let after = layout.read_current_pointer().unwrap().unwrap();
+    assert_eq!(
+        after.active_version, "26.732",
+        "a refused rollback must not move the pointer"
+    );
+}
+
+#[test]
+fn commit_releases_the_lock_so_a_later_commit_succeeds() {
+    let tmp = tempdir().unwrap();
+    let layout = make_layout(&tmp);
+    layout.initialise().unwrap();
+
+    let s1 = stage_version(&layout, "26.721").unwrap();
+    fs::write(s1.join("Codex.exe"), b"v1").unwrap();
+    commit_version(&layout, "26.721", "sha256:v1").unwrap();
+
+    // If commit leaked the guard, this second call would fail.
+    let s2 = stage_version(&layout, "26.732").unwrap();
+    fs::write(s2.join("Codex.exe"), b"v2").unwrap();
+    let second = commit_version(&layout, "26.732", "sha256:v2")
+        .expect("lock must be released when commit returns");
+    assert_eq!(second.active_version, "26.732");
+    assert_eq!(second.previous_version.as_deref(), Some("26.721"));
+}
