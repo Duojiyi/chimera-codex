@@ -85,6 +85,17 @@ impl MigrationCandidate {
         }
     }
 
+    /// Whether this candidate carries a key, without exposing it.
+    ///
+    /// The UI needs to tell a user that a provider will migrate without its
+    /// credential — they have to re-enter it — and that is the entire question
+    /// it may ask. Returning the key itself, even to a caller inside this
+    /// workspace, would create the plain-`String` moment `RedactedSecret`
+    /// exists to prevent.
+    pub fn has_secret(&self) -> bool {
+        self.key.is_some()
+    }
+
     /// Build from a 1.x relay profile already read by `legacy_source`.
     pub fn from_legacy(candidate: &LegacyProviderCandidate) -> Self {
         Self {

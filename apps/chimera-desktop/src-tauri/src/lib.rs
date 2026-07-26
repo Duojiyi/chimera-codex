@@ -6,6 +6,7 @@
 pub mod bootstrap_cmds;
 pub mod commands;
 pub mod dto;
+pub mod migration_cmds;
 pub mod portable_cmds;
 pub mod provider_cmds;
 pub mod runtime_cmds;
@@ -58,6 +59,9 @@ pub fn run() {
             bootstrap_cmds::fetch_codex_payload,
             // Portable install: what it cannot do, and how to remove it. There
             // is no Apps & Features entry, so this is the whole uninstall path.
+            // 1.x / CC Switch migration: preview reads only, run writes.
+            migration_cmds::preview_migration,
+            migration_cmds::run_migration,
             portable_cmds::get_portable_limitations,
             portable_cmds::get_cleanup_plan,
             portable_cmds::execute_cleanup,
