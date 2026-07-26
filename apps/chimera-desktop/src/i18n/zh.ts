@@ -287,6 +287,18 @@ export const zh = {
   "appearance.importSkin": "导入皮肤…",
   "appearance.errImport": "导入皮肤失败。",
 
+  "migration.section": "从旧版导入",
+  "migration.nothingFound": "没有检测到 Chimera++ 1.x 或 CC Switch 的可导入供应商。",
+  "migration.foundCount": "检测到 {0} 个可导入的供应商。源文件全程只读，不会被修改。",
+  "migration.listAriaLabel": "可导入的供应商",
+  "migration.withKey": "含密钥",
+  "migration.withoutKey": "无密钥，需手动重填",
+  "migration.droppedIntro": "下列 1.x 功能不会迁移（2.0 已明确不做）：",
+  "migration.run": "开始导入",
+  "migration.confirm": "开始导入？导入前会先快照当前配置，任何一步失败都会原样还原。",
+  "migration.done": "已导入 {0} 个，{1} 个此前已导入，{2} 个被跳过。",
+  "migration.failed": "导入失败，配置已还原到导入前的状态。",
+
   // ── Generic ───────────────────────────────────────────────────────────────
   "common.dash": "—",
   "common.loading": "加载中…",

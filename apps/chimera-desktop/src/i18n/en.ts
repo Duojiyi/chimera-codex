@@ -294,6 +294,18 @@ export const en: Record<TranslationKey, string> = {
   "appearance.importSkin": "Import skin…",
   "appearance.errImport": "Could not import that skin.",
 
+  "migration.section": "Import from an older version",
+  "migration.nothingFound": "No Chimera++ 1.x or CC Switch providers were found to import.",
+  "migration.foundCount": "Found {0} provider(s) to import. The source files are only ever read, never modified.",
+  "migration.listAriaLabel": "Providers available to import",
+  "migration.withKey": "with key",
+  "migration.withoutKey": "no key — re-enter it after importing",
+  "migration.droppedIntro": "These 1.x features are deliberately not carried over:",
+  "migration.run": "Import",
+  "migration.confirm": "Import now? Your current configuration is snapshotted first, and any failure restores it exactly.",
+  "migration.done": "Imported {0}, {1} already present, {2} skipped.",
+  "migration.failed": "Import failed. Your configuration was restored to how it was.",
+
   // ── Generic ───────────────────────────────────────────────────────────────
   "common.dash": "—",
   "common.loading": "Loading…",

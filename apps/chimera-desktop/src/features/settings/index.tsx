@@ -231,6 +231,142 @@ function PortablePanel({ mode }: { mode: "limits" | "cleanup" }) {
   );
 }
 
+interface MigrationCandidate {
+  source: string;
+  sourceId: string;
+  displayName: string;
+  host: string;
+  hasKey: boolean;
+}
+
+interface MigrationPreview {
+  candidates: MigrationCandidate[];
+  droppedFeatures: string[];
+  warnings: string[];
+}
+
+/**
+ * Import providers from Chimera++ 1.x and CC Switch.
+ *
+ * Preview and run are separate commands on purpose, and the UI keeps them
+ * separate too: the preview only reads, so it can run on every visit, and it is
+ * what the user actually approves. Nothing is written until they press the
+ * button.
+ */
+function MigrationPanel() {
+  const { t, tf } = useI18n();
+  const [preview, setPreview] = useState<MigrationPreview | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    invoke("preview_migration")
+      .then((r) => r && setPreview(r as MigrationPreview))
+      .catch(() => {});
+  }, []);
+
+  async function handleMigrate() {
+    if (!window.confirm(t("migration.confirm"))) return;
+    setBusy(true);
+    setStatus(null);
+    try {
+      const r = (await invoke("run_migration")) as
+        | { migrated: number; alreadyMigrated: number; skipped: { sourceId: string; reason: string }[] }
+        | undefined;
+      if (!r) return;
+      setStatus(tf("migration.done", [r.migrated, r.alreadyMigrated, r.skipped.length]));
+      // Re-read rather than assuming: a skipped candidate is still in the
+      // source and should keep showing, with its reason.
+      const next = (await invoke("preview_migration")) as MigrationPreview | undefined;
+      if (next) setPreview(next);
+    } catch (err: unknown) {
+      setStatus(err instanceof Error ? err.message : t("migration.failed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const found = preview?.candidates ?? [];
+
+  return (
+    <Section label={t("migration.section")}>
+      {found.length === 0 ? (
+        <p style={{ fontSize: 12, color: color.muted, margin: "4px 0 0", lineHeight: 1.6 }}>
+          {t("migration.nothingFound")}
+        </p>
+      ) : (
+        <>
+          <p style={{ fontSize: 12, color: color.secondary, margin: "4px 0 12px", lineHeight: 1.6 }}>
+            {tf("migration.foundCount", [found.length])}
+          </p>
+          <ul
+            aria-label={t("migration.listAriaLabel")}
+            style={{ margin: "0 0 12px", padding: 0, listStyle: "none", display: "grid", gap: 6 }}
+          >
+            {found.map((c) => (
+              <li
+                key={`${c.source}:${c.sourceId}`}
+                style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: color.muted }}
+              >
+                <span>{c.displayName} · {c.host}</span>
+                <span style={{ color: c.hasKey ? color.secondary : color.danger }}>
+                  {c.hasKey ? t("migration.withKey") : t("migration.withoutKey")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {/* Stated before migrating, not discovered afterwards. */}
+      {(preview?.droppedFeatures.length ?? 0) > 0 && (
+        <>
+          <p style={{ fontSize: 12, color: color.secondary, margin: "0 0 6px" }}>
+            {t("migration.droppedIntro")}
+          </p>
+          <ul style={{ margin: "0 0 12px", paddingLeft: 18, display: "grid", gap: 4 }}>
+            {preview?.droppedFeatures.map((d) => (
+              <li key={d} style={{ fontSize: 12, color: color.muted, lineHeight: 1.6 }}>{d}</li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {(preview?.warnings.length ?? 0) > 0 && (
+        <ul style={{ margin: "0 0 12px", paddingLeft: 18, display: "grid", gap: 4 }}>
+          {preview?.warnings.map((w) => (
+            <li key={w} style={{ fontSize: 12, color: color.danger, lineHeight: 1.6 }}>{w}</li>
+          ))}
+        </ul>
+      )}
+
+      <button
+        type="button"
+        onClick={handleMigrate}
+        disabled={busy || found.length === 0}
+        style={{
+          background: color.accent,
+          color: color.ink0,
+          border: "none",
+          borderRadius: radius.sm,
+          padding: "8px 18px",
+          fontSize: 13,
+          fontWeight: 700,
+          fontFamily: "inherit",
+          cursor: busy ? "wait" : "pointer",
+          opacity: busy || found.length === 0 ? 0.5 : 1,
+        }}
+      >
+        {t("migration.run")}
+      </button>
+
+      <div role="status" aria-live="polite" style={{ minHeight: 16, marginTop: 10 }}>
+        {status && <span style={{ fontSize: 12, color: color.secondary }}>{status}</span>}
+      </div>
+    </Section>
+  );
+}
+
 function Toggle({
   checked,
   label,
@@ -614,7 +750,10 @@ export function SettingsFeature() {
               </Section>
             </>
           ) : active === "advanced" ? (
-            <PortablePanel mode="cleanup" />
+            <>
+              <MigrationPanel />
+              <PortablePanel mode="cleanup" />
+            </>
           ) : active === "about" ? (
             <PortablePanel mode="limits" />
           ) : (
