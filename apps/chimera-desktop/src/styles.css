@@ -1,3 +1,40 @@
 @import "tailwindcss";
-:root { color-scheme: dark; }
-body { background: #0C0C0C; color: #EBEBEB; font-family: "Outfit", sans-serif; margin: 0; }
+
+/* Outfit — weights used by the Pencil design spec (400/500/600/700). */
+@import "@fontsource/outfit/400.css";
+@import "@fontsource/outfit/500.css";
+@import "@fontsource/outfit/600.css";
+@import "@fontsource/outfit/700.css";
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: #0c0c0c;
+  color: #ebebeb;
+  font-family: "Outfit", system-ui, sans-serif;
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Visible keyboard focus on the near-black surface (WCAG 2.2 AA, G16). */
+:focus-visible {
+  outline: 2px solid #ff4d3d;
+  outline-offset: 2px;
+}
+
+button {
+  font-family: inherit;
+}
+
+input,
+select {
+  font-family: inherit;
+}

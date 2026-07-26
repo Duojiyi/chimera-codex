@@ -1,4 +1,5 @@
 import type { ActiveFeature } from "../App";
+import { color, type as font, size, radius, hairline, indicator } from "../design/tokens.ts";
 
 const TABS: { id: ActiveFeature; label: string }[] = [
   { id: "home",       label: "Home" },
@@ -13,51 +14,91 @@ interface Props {
   onNavigate: (f: ActiveFeature) => void;
 }
 
+/**
+ * Top navigation rail. Spec: Pencil `TopRail` frame, identical on all 5 screens.
+ * height 48 · bg ink1 · bottom border rule · Logo padding [0,20] gap 9
+ * · Mark 18x18 r2 accent · AppName 14/600 · tab padding [0,20] 13px
+ * · active tab: 2px accent bottom border + primary/600
+ * · RailRight gap 12 padding [0,20]: dot 6px green + 12px muted text
+ *   + 1x16 separator + 12px dim version
+ */
 export function TopRail({ active, onNavigate }: Props) {
   return (
     <nav
       role="navigation"
       aria-label="Main navigation"
       style={{
-        height: 48, display: "flex", alignItems: "center",
-        borderBottom: "1px solid #282828", background: "#111111",
+        height: size.rail,
+        display: "flex",
+        alignItems: "center",
+        borderBottom: `${hairline}px solid ${color.rule}`,
+        background: color.ink1,
         flexShrink: 0,
       }}
     >
-      {/* Logo */}
       <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "0 20px" }}>
-        <div style={{ width: 18, height: 18, borderRadius: 2, background: "#FF4D3D" }} />
-        <span style={{ fontWeight: 600, fontSize: 14 }}>Chimera++</span>
+        <div
+          style={{
+            width: size.mark,
+            height: size.mark,
+            borderRadius: radius.xs,
+            background: color.accent,
+            flexShrink: 0,
+          }}
+        />
+        <span style={{ fontFamily: font.family, ...font.appName, color: color.primary }}>
+          Chimera++
+        </span>
       </div>
 
-      <div style={{ width: 1, height: 22, background: "#282828" }} />
+      <div style={{ width: hairline, height: 22, background: color.rule }} />
 
-      {/* Tabs */}
-      <div style={{ display: "flex", alignItems: "stretch", height: "100%", flex: 1 }}>
-        {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            role="tab"
-            aria-selected={active === tab.id}
-            onClick={() => onNavigate(tab.id)}
+      <div role="tablist" style={{ display: "flex", alignItems: "stretch", height: "100%", flex: 1 }}>
+        {TABS.map((tab) => {
+          const on = active === tab.id;
+          return (
+            <button
+              key={tab.id}
+              role="tab"
+              aria-selected={on}
+              onClick={() => onNavigate(tab.id)}
+              style={{
+                padding: "0 20px",
+                height: "100%",
+                background: "transparent",
+                border: "none",
+                borderBottom: `${indicator.tabUnderline}px solid ${on ? color.accent : "transparent"}`,
+                color: on ? color.primary : color.muted,
+                fontFamily: font.family,
+                ...(on ? font.uiStrong : font.ui),
+                cursor: "pointer",
+              }}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "0 20px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div
             style={{
-              padding: "0 20px", height: "100%",
-              background: "transparent", border: "none",
-              borderBottom: active === tab.id ? "2px solid #FF4D3D" : "2px solid transparent",
-              color: active === tab.id ? "#EBEBEB" : "#5E5E5E",
-              fontWeight: active === tab.id ? 600 : 400,
-              fontSize: 13, cursor: "pointer",
+              width: size.dot,
+              height: size.dot,
+              borderRadius: "50%",
+              background: color.green,
+              flexShrink: 0,
             }}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Status */}
-      <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "0 20px" }}>
-        <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#34C759" }} />
-        <span style={{ fontSize: 12, color: "#5E5E5E" }}>Ready</span>
+          />
+          <span style={{ fontFamily: font.family, ...font.caption, color: color.muted }}>
+            All systems ready
+          </span>
+        </div>
+        <div style={{ width: hairline, height: 16, background: color.rule }} />
+        <span style={{ fontFamily: font.family, ...font.caption, color: color.dim }}>
+          v2.0.0-beta
+        </span>
       </div>
     </nav>
   );
