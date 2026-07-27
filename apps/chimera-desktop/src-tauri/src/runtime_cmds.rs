@@ -11,8 +11,10 @@ use chimera_platform::lock::OperationLock;
 use chimera_runtime::detection::{DetectedRuntime, detect_external_runtime, detect_runtime};
 use chimera_runtime::health::check_runtime_health;
 use chimera_runtime::manager::{
-    InstallMode, UpdateSource, detect_windows_codex, fetch_windows_release_plan,
-    install_windows_release,
+    InstallMode, MaintenanceRoute, UpdateSource, detect_portable_codex, detect_windows_codex,
+    diagnose_windows_codex, fetch_windows_release_plan, install_windows_release,
+    latest_portable_rollback, maintenance_route, rollback_portable_install,
+    uninstall_windows_codex,
 };
 use chimera_runtime::update::{UpdateError, rollback_to_last_known};
 use chimera_update::atomic::{AtomicError, AtomicStore, Migratable};
@@ -135,6 +137,26 @@ pub fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusDto
             });
         }
     }
+    if history.is_empty() {
+        if let Some(install) = manager_install.as_ref() {
+            history.push(VersionEntryDto {
+                version: install.version.clone(),
+                state: "active".to_string(),
+            });
+            if install.install_mode == "portable" {
+                if let Ok(Some(backup)) =
+                    latest_portable_rollback(&state.paths.data_root.join("codex-portable"))
+                {
+                    if let Some(previous) = detect_portable_codex(&backup) {
+                        history.push(VersionEntryDto {
+                            version: previous.version,
+                            state: "previous".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
 
     // DetectedRuntime is an enum, and only ManagedPortable is ours. An external
     // MSIX or portable install must never be reported as Chimera-verified: the
@@ -176,7 +198,8 @@ pub fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusDto
             _ => None,
         }),
         platform: Some(platform_label()),
-        healthy: health.as_ref().is_some_and(|value| value.exe_present),
+        healthy: manager_install.is_some()
+            || health.as_ref().is_some_and(|value| value.exe_present),
         health_label: None,
         mode: mode_label.clone(),
         ownership: ownership_label.clone(),
@@ -238,28 +261,50 @@ fn diagnostics_for(exe_present: bool, ownership_known: bool) -> Vec<DiagnosticEn
     ]
 }
 
-/// Re-verify the managed runtime.
-///
-/// Fails loudly while the repair path is unimplemented: a silent success would
-/// tell the user their install was fixed when nothing happened.
+/// Repair the detected Codex install by reinstalling a freshly verified copy.
 #[tauri::command]
-pub fn repair_runtime(state: State<'_, AppState>) -> Result<(), String> {
-    match check_runtime_health(&state.runtime) {
-        Ok(h) if h.exe_present => Err(
-            "Runtime is present and no repair is needed. Reinstall repair is not enabled in this build."
-                .to_string(),
-        ),
-        _ => Err(
-            "No managed runtime to repair. Install Codex first — managed install is not enabled in this build."
-                .to_string(),
-        ),
+pub async fn repair_runtime(
+    app: tauri::AppHandle,
+    source: Option<String>,
+    install_mode: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<CodexOperationDto, String> {
+    let portable_root = state.paths.data_root.join("codex-portable");
+    let installed = detect_windows_codex(&portable_root)
+        .ok_or_else(|| "Codex is not installed. Use Install before running Repair.".to_string())?;
+    let mode = install_mode.or_else(|| Some(installed.install_mode));
+    apply_codex_update(app, None, source, mode, state).await
+}
+
+fn operation_dto(result: chimera_runtime::manager::InstallOperationResult) -> CodexOperationDto {
+    CodexOperationDto {
+        version: result.version,
+        requested_mode: result.requested_mode,
+        actual_mode: result.actual_mode,
+        affected_path: result.affected_path,
+        backup_path: result.backup_path,
+        message: result.message,
+        notes: result.notes,
     }
 }
 
-/// Run the diagnostic checks. Read-only, so it always succeeds.
+/// Run signature, package registration, dependency, and launch diagnostics.
 #[tauri::command]
-pub fn run_diagnostics(state: State<'_, AppState>) -> Result<Vec<DiagnosticEntryDto>, String> {
-    get_runtime_status(state).map(|s| s.diagnostics)
+pub async fn run_diagnostics(
+    state: State<'_, AppState>,
+) -> Result<Vec<DiagnosticEntryDto>, String> {
+    let portable_root = state.paths.data_root.join("codex-portable");
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(diagnose_windows_codex(&portable_root)
+            .into_iter()
+            .map(|entry| DiagnosticEntryDto {
+                name: entry.name,
+                result: entry.result,
+            })
+            .collect())
+    })
+    .await
+    .map_err(|_| "Codex diagnostics were interrupted. Try again.".to_string())?
 }
 
 /// Roll back to the previous version in the pointer chain.
@@ -268,7 +313,35 @@ pub fn run_diagnostics(state: State<'_, AppState>) -> Result<Vec<DiagnosticEntry
 /// only the immediately-previous version can be honoured today. Any other
 /// request is rejected rather than silently restoring the wrong build.
 #[tauri::command]
-pub fn rollback_runtime(version: Option<String>, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn rollback_runtime(
+    version: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<CodexOperationDto, String> {
+    let portable_root = state.paths.data_root.join("codex-portable");
+    if let Some(installed) = detect_windows_codex(&portable_root) {
+        return match maintenance_route(Some(&installed)) {
+            MaintenanceRoute::Portable => {
+                let lock_path = state.paths.operation_lock();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let lock = OperationLock::new(lock_path);
+                    let _guard = lock
+                        .try_acquire("rollback_runtime")
+                        .map_err(|_| "Another Chimera++ operation is already running.".to_string())?;
+                    rollback_portable_install(&portable_root)
+                        .map(operation_dto)
+                        .map_err(|error| error.to_string())
+                })
+                .await
+                .map_err(|_| "Codex rollback was interrupted. Run Diagnose before retrying.".to_string())?
+            }
+            MaintenanceRoute::Standard => Err(
+                "Standard MSIX installs are maintained by Windows and do not expose an app rollback backup. Choose Portable to keep local rollback copies."
+                    .to_string(),
+            ),
+            MaintenanceRoute::NotInstalled => Err("Codex is not installed.".to_string()),
+        };
+    }
+
     let pointer = state
         .runtime
         .read_current_pointer()
@@ -286,12 +359,39 @@ pub fn rollback_runtime(version: Option<String>, state: State<'_, AppState>) -> 
     }
 
     match rollback_to_last_known(&state.runtime) {
-        Ok(_) => Ok(()),
+        Ok(pointer) => Ok(CodexOperationDto {
+            version: pointer.active_version,
+            requested_mode: "portable".to_string(),
+            actual_mode: "portable".to_string(),
+            affected_path: Some(state.paths.runtime_root().to_string_lossy().to_string()),
+            backup_path: None,
+            message: "Codex was restored to the previous managed version.".to_string(),
+            notes: Vec::new(),
+        }),
         Err(UpdateError::NoPreviousVersion) => {
             Err("There is no previous version to roll back to.".to_string())
         }
         Err(_) => Err("Rollback failed. Run diagnostics for detail.".to_string()),
     }
+}
+
+/// Uninstall the detected standard or portable Codex installation.
+/// User configuration and provider credentials are deliberately preserved.
+#[tauri::command]
+pub async fn uninstall_codex(state: State<'_, AppState>) -> Result<CodexOperationDto, String> {
+    let portable_root = state.paths.data_root.join("codex-portable");
+    let lock_path = state.paths.operation_lock();
+    tauri::async_runtime::spawn_blocking(move || {
+        let lock = OperationLock::new(lock_path);
+        let _guard = lock
+            .try_acquire("uninstall_codex")
+            .map_err(|_| "Another Chimera++ operation is already running.".to_string())?;
+        uninstall_windows_codex(&portable_root)
+            .map(operation_dto)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| "Codex uninstall was interrupted. Run Diagnose before retrying.".to_string())?
 }
 
 /// Download, verify and install the selected Codex release.
@@ -347,15 +447,7 @@ pub async fn apply_codex_update(
             &progress,
         )
         .map_err(|error| error.to_string())?;
-        Ok(CodexOperationDto {
-            version: result.version,
-            requested_mode: result.requested_mode,
-            actual_mode: result.actual_mode,
-            affected_path: result.affected_path,
-            backup_path: result.backup_path,
-            message: result.message,
-            notes: result.notes,
-        })
+        Ok(operation_dto(result))
     })
     .await
     .map_err(|_| {

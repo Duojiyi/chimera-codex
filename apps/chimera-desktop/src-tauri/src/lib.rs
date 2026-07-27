@@ -89,6 +89,7 @@ pub fn run() {
             runtime_cmds::repair_runtime,
             runtime_cmds::run_diagnostics,
             runtime_cmds::rollback_runtime,
+            runtime_cmds::uninstall_codex,
             runtime_cmds::apply_codex_update,
             // Settings screen
             runtime_cmds::get_settings,

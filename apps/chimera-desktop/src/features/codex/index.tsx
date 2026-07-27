@@ -197,6 +197,7 @@ export function CodexFeature() {
 
   async function runAction(action: () => Promise<unknown>, failMessage: string) {
     setBusy(true);
+    setDownloadProgress({ percent: 0, label: "0%" });
     setError(null);
     setActionMessage(null);
     try {
@@ -211,9 +212,29 @@ export function CodexFeature() {
     }
   }
 
-  const handleRepair = () => runAction(() => invoke("repair_runtime"), t("codex.errRepair"));
-  const handleDiagnose = () => runAction(() => invoke("run_diagnostics"), t("codex.errDiagnose"));
+  const handleRepair = () => runAction(
+    () => invoke("repair_runtime", { source: updateSource, installMode }),
+    t("codex.errRepair"),
+  );
+  const handleDiagnose = async () => {
+    setBusy(true);
+    setError(null);
+    setActionMessage(null);
+    try {
+      const diagnostics = await invoke("run_diagnostics") as RuntimeStatus["diagnostics"];
+      setStatus((current) => ({ ...current, diagnostics }));
+      setActionMessage(t("codex.diagnosticsCompleted"));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : t("codex.errDiagnose"));
+    } finally {
+      setBusy(false);
+    }
+  };
   const handleRollback = () => runAction(() => invoke("rollback_runtime"), t("codex.errRollback"));
+  const handleUninstall = () => {
+    if (!window.confirm(t("codex.uninstallConfirm"))) return;
+    void runAction(() => invoke("uninstall_codex"), t("codex.errUninstall"));
+  };
   const handleUpdate = () =>
     runAction(
       () => invoke("apply_codex_update", { version: status.updateVersion, source: updateSource, installMode }),
@@ -226,6 +247,7 @@ export function CodexFeature() {
   const healthLabel = status.installed ? status.healthLabel ?? (status.healthy ? "100%" : dash) : dash;
   const healthColor = status.installed && status.healthy ? color.green : color.amber;
   const managed = status.ownership === "chimera_verified";
+  const hasRollback = managed && status.history.some((entry) => entry.state === "previous");
 
   const statRows: [string, string, string][] = [
     [t("codex.specHealth"), healthLabel, healthColor],
@@ -292,7 +314,7 @@ export function CodexFeature() {
           <button
             type="button"
             onClick={handleRepair}
-            disabled={busy || !managed}
+            disabled={busy || !status.installed}
             aria-label={t("codex.repairAriaLabel")}
             style={actionButtonStyle}
           >
@@ -300,7 +322,7 @@ export function CodexFeature() {
           </button>
           <button
             type="button"
-            onClick={handleDiagnose}
+            onClick={() => void handleDiagnose()}
             disabled={busy}
             aria-label={t("codex.diagnoseAriaLabel")}
             style={actionButtonStyle}
@@ -310,11 +332,20 @@ export function CodexFeature() {
           <button
             type="button"
             onClick={handleRollback}
-            disabled={busy || !managed}
+            disabled={busy || !hasRollback}
             aria-label={t("codex.rollbackAriaLabel")}
             style={actionButtonStyle}
           >
             {busy ? t("common.loading") : t("codex.rollback")}
+          </button>
+          <button
+            type="button"
+            onClick={handleUninstall}
+            disabled={busy || !status.installed}
+            aria-label={t("codex.uninstallAriaLabel")}
+            style={{ ...actionButtonStyle, color: color.danger }}
+          >
+            {busy ? t("common.loading") : t("codex.uninstall")}
           </button>
         </div>
 
@@ -475,7 +506,7 @@ export function CodexFeature() {
                 <span style={{ fontSize: 13, fontWeight: 600, color: color.primary }}>{entry.version}</span>
                 <span style={{ fontSize: 11, color: color.muted }}>{entry.state}</span>
                 <div style={{ flex: 1 }} />
-                {entry.state.toLowerCase() !== "current" && (
+                {entry.state === "previous" && (
                   <button
                     type="button"
                     onClick={() =>

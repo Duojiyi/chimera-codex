@@ -4,7 +4,9 @@
 //! `codex-win-engine`; this module keeps Chimera's public contract small and
 //! prevents Tauri commands from depending on engine-specific details.
 
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -106,6 +108,27 @@ pub struct InstalledCodex {
     pub install_mode: String,
 }
 
+/// Maintenance route selected from the detected Windows installation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaintenanceRoute {
+    /// A registered Windows MSIX package.
+    Standard,
+    /// A Chimera-managed extracted package.
+    Portable,
+    /// No supported Codex installation was detected.
+    NotInstalled,
+}
+
+/// One evidence-backed runtime diagnostic result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagerDiagnostic {
+    /// Stable diagnostic label rendered by the desktop UI.
+    pub name: String,
+    /// One of `pass`, `warn`, or `fail`.
+    pub result: String,
+}
+
 /// Structured evidence returned after an installation transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -156,6 +179,12 @@ pub enum ManagerError {
     Verification,
     #[error("the Codex installation failed")]
     Install,
+    #[error("Codex is not installed")]
+    NotInstalled,
+    #[error("no portable rollback backup is available")]
+    NoRollback,
+    #[error("the Codex maintenance operation failed")]
+    Maintenance,
 }
 
 /// Parse the mirror manifest and bind it to its declared MSIX checksum.
@@ -222,6 +251,215 @@ pub fn detect_windows_codex(portable_root: &std::path::Path) -> Option<Installed
             "portable".to_string()
         },
     })
+}
+
+/// Detect only the Chimera-managed portable installation at the given root.
+pub fn detect_portable_codex(portable_root: &Path) -> Option<InstalledCodex> {
+    codex_win_engine::detect_portable_install(portable_root).map(|installed| InstalledCodex {
+        version: installed.version,
+        path: installed.path,
+        install_mode: "portable".to_string(),
+    })
+}
+
+/// Select the maintenance implementation for a detected installation.
+pub fn maintenance_route(installed: Option<&InstalledCodex>) -> MaintenanceRoute {
+    match installed.map(|value| value.install_mode.as_str()) {
+        Some("standard") => MaintenanceRoute::Standard,
+        Some("portable") => MaintenanceRoute::Portable,
+        _ => MaintenanceRoute::NotInstalled,
+    }
+}
+
+/// Find the most recently written portable rollback directory.
+///
+/// Only real sibling directories created by the reference engine are accepted;
+/// files, symlinks, and paths outside the install parent are ignored.
+pub fn latest_portable_rollback(portable_root: &Path) -> Result<Option<PathBuf>, ManagerError> {
+    let parent = portable_root.parent().ok_or(ManagerError::Maintenance)?;
+    let entries = std::fs::read_dir(parent).map_err(|_| ManagerError::Maintenance)?;
+    let mut backups = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if name.starts_with("Codex.rollback-") && kind.is_dir() && !kind.is_symlink() {
+            let modified = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(UNIX_EPOCH);
+            backups.push((modified, entry.path()));
+        }
+    }
+    backups.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(backups.pop().map(|(_, path)| path))
+}
+
+/// Run real installation and launch checks without mutating user data.
+pub fn diagnose_windows_codex(portable_root: &Path) -> Vec<ManagerDiagnostic> {
+    let Some(installed) = detect_windows_codex(portable_root) else {
+        return vec![ManagerDiagnostic {
+            name: "installation".to_string(),
+            result: "fail".to_string(),
+        }];
+    };
+    let executable = codex_win_engine::installed_app_exe(Path::new(&installed.path));
+    let mut diagnostics = vec![ManagerDiagnostic {
+        name: "executable".to_string(),
+        result: if executable.is_some() { "pass" } else { "fail" }.to_string(),
+    }];
+    if installed.install_mode == "standard" {
+        let health = codex_win_engine::verify_msix_health();
+        diagnostics.extend([
+            ManagerDiagnostic {
+                name: "package integrity".to_string(),
+                result: if health.package_registered && health.status_ok {
+                    "pass"
+                } else {
+                    "fail"
+                }
+                .to_string(),
+            },
+            ManagerDiagnostic {
+                name: "package registration".to_string(),
+                result: if health.package_registered {
+                    "pass"
+                } else {
+                    "fail"
+                }
+                .to_string(),
+            },
+            ManagerDiagnostic {
+                name: "dependencies".to_string(),
+                result: if health.missing_dependencies.is_empty() {
+                    "pass"
+                } else {
+                    "fail"
+                }
+                .to_string(),
+            },
+            ManagerDiagnostic {
+                name: "launch".to_string(),
+                result: if health.healthy {
+                    "pass"
+                } else if health.verified {
+                    "fail"
+                } else {
+                    "warn"
+                }
+                .to_string(),
+            },
+        ]);
+    } else {
+        // MSIX trust is verified before extraction. The detached portable tree
+        // no longer contains a Windows-verifiable package signature, so do not
+        // fabricate a post-install pass or treat its absence as corruption.
+        diagnostics.push(ManagerDiagnostic {
+            name: "package signature".to_string(),
+            result: "warn".to_string(),
+        });
+        diagnostics.push(ManagerDiagnostic {
+            name: "ownership".to_string(),
+            result: "pass".to_string(),
+        });
+    }
+    diagnostics
+}
+
+/// Restore the newest portable backup while preserving the replaced build.
+pub fn rollback_portable_install(
+    portable_root: &Path,
+) -> Result<InstallOperationResult, ManagerError> {
+    if !portable_root.is_dir() {
+        return Err(ManagerError::NotInstalled);
+    }
+    let backup = latest_portable_rollback(portable_root)?.ok_or(ManagerError::NoRollback)?;
+    codex_win_engine::close_codex_gracefully_for_root(30, portable_root)
+        .map_err(|_| ManagerError::Maintenance)?;
+    let parent = portable_root.parent().ok_or(ManagerError::Maintenance)?;
+    let operation_id = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| ManagerError::Maintenance)?
+        .as_nanos();
+    let replaced = parent.join(format!(
+        "Codex.replaced-{}-{operation_id}",
+        std::process::id()
+    ));
+    codex_win_engine::rename_directory_with_retry(
+        "preserve current portable install",
+        portable_root,
+        &replaced,
+    )
+    .map_err(|_| ManagerError::Maintenance)?;
+    if codex_win_engine::rename_directory_with_retry(
+        "restore portable rollback",
+        &backup,
+        portable_root,
+    )
+    .is_err()
+    {
+        let _ = codex_win_engine::rename_directory_with_retry(
+            "restore current portable install",
+            &replaced,
+            portable_root,
+        );
+        return Err(ManagerError::Maintenance);
+    }
+    let restored = detect_portable_codex(portable_root).ok_or(ManagerError::Maintenance)?;
+    Ok(InstallOperationResult {
+        version: restored.version,
+        requested_mode: "portable".to_string(),
+        actual_mode: "portable".to_string(),
+        affected_path: Some(portable_root.to_string_lossy().to_string()),
+        backup_path: Some(replaced.to_string_lossy().to_string()),
+        message: "Portable Codex was restored from the latest rollback backup.".to_string(),
+        notes: Vec::new(),
+    })
+}
+
+/// Uninstall the currently detected Codex package while preserving user data.
+pub fn uninstall_windows_codex(
+    portable_root: &Path,
+) -> Result<InstallOperationResult, ManagerError> {
+    let installed = detect_windows_codex(portable_root).ok_or(ManagerError::NotInstalled)?;
+    let version = installed.version.clone();
+    match maintenance_route(Some(&installed)) {
+        MaintenanceRoute::Standard => {
+            let report =
+                codex_win_engine::remove_msix_package().map_err(|_| ManagerError::Maintenance)?;
+            if !report.success {
+                return Err(ManagerError::Maintenance);
+            }
+            Ok(InstallOperationResult {
+                version,
+                requested_mode: "standard".to_string(),
+                actual_mode: "uninstalled".to_string(),
+                affected_path: Some(installed.path),
+                backup_path: None,
+                message: report.message,
+                notes: report.notes,
+            })
+        }
+        MaintenanceRoute::Portable => {
+            let report = codex_win_engine::uninstall_portable(portable_root, false)
+                .map_err(|_| ManagerError::Maintenance)?;
+            if !report.success {
+                return Err(ManagerError::Maintenance);
+            }
+            Ok(InstallOperationResult {
+                version,
+                requested_mode: "portable".to_string(),
+                actual_mode: "uninstalled".to_string(),
+                affected_path: Some(report.install_root),
+                backup_path: None,
+                message: report.message,
+                notes: report.notes,
+            })
+        }
+        MaintenanceRoute::NotInstalled => Err(ManagerError::NotInstalled),
+    }
 }
 
 /// Download, verify and install one exact release plan.
