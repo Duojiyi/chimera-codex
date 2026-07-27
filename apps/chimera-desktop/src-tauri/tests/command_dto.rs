@@ -37,6 +37,7 @@ fn system_status_serialises_camel_case_for_frontend() {
 fn system_status_official_mode_has_null_provider_name() {
     let dto = SystemStatusDto {
         provider_name: None,
+        provider_url: None,
         active_provider_id: None,
         provider_health: "unknown".into(),
         codex_version: None,

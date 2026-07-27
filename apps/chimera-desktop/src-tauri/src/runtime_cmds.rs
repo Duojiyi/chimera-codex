@@ -55,7 +55,14 @@ pub async fn check_codex_update(
 
     tauri::async_runtime::spawn_blocking(move || {
         let installed = detect_windows_codex(&portable_root);
-        let current_version = installed.as_ref().map(|value| value.version.clone());
+        let current_version = installed
+            .as_ref()
+            .map(|value| value.version.clone())
+            .or_else(|| match detect_external_runtime() {
+                Some(DetectedRuntime::ExternalMsix { version, .. }) => Some(version),
+                Some(DetectedRuntime::ExternalPortable { version, .. }) => version,
+                _ => None,
+            });
         let plan = fetch_windows_release_plan(source, Some(std::env::consts::ARCH))
             .map_err(|error| error.to_string())?;
         Ok(CodexUpdateDto {
@@ -195,11 +202,16 @@ pub fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusDto
         installed,
         version: version.or_else(|| match detected.as_ref() {
             Some(DetectedRuntime::ExternalMsix { version, .. }) => Some(version.clone()),
+            Some(DetectedRuntime::ExternalPortable { version, .. }) => version.clone(),
             _ => None,
         }),
         platform: Some(platform_label()),
         healthy: manager_install.is_some()
-            || health.as_ref().is_some_and(|value| value.exe_present),
+            || health.as_ref().is_some_and(|value| value.exe_present)
+            || matches!(
+                detected.as_ref(),
+                Some(DetectedRuntime::ExternalPortable { .. })
+            ),
         health_label: None,
         mode: mode_label.clone(),
         ownership: ownership_label.clone(),
@@ -208,7 +220,7 @@ pub fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusDto
             .map(|install| install.path.clone())
             .or_else(|| match detected.as_ref() {
                 Some(DetectedRuntime::ExternalMsix { path, .. })
-                | Some(DetectedRuntime::ExternalPortable { path }) => {
+                | Some(DetectedRuntime::ExternalPortable { path, .. }) => {
                     Some(path.to_string_lossy().to_string())
                 }
                 _ => Some(root.to_string_lossy().to_string()),
@@ -295,7 +307,35 @@ pub async fn run_diagnostics(
 ) -> Result<Vec<DiagnosticEntryDto>, String> {
     let portable_root = state.paths.data_root.join("codex-portable");
     tauri::async_runtime::spawn_blocking(move || {
-        Ok(diagnose_windows_codex(&portable_root)
+        let mut diagnostics = diagnose_windows_codex(&portable_root);
+        if diagnostics.len() == 1
+            && diagnostics[0].name == "installation"
+            && diagnostics[0].result == "fail"
+        {
+            if let Some(DetectedRuntime::ExternalPortable { path, .. }) = detect_external_runtime()
+            {
+                diagnostics = vec![
+                    chimera_runtime::manager::ManagerDiagnostic {
+                        name: "executable".to_string(),
+                        result: if codex_win_engine::installed_app_exe(&path).is_some() {
+                            "pass"
+                        } else {
+                            "fail"
+                        }
+                        .to_string(),
+                    },
+                    chimera_runtime::manager::ManagerDiagnostic {
+                        name: "ownership".to_string(),
+                        result: "warn".to_string(),
+                    },
+                    chimera_runtime::manager::ManagerDiagnostic {
+                        name: "package signature".to_string(),
+                        result: "warn".to_string(),
+                    },
+                ];
+            }
+        }
+        Ok(diagnostics
             .into_iter()
             .map(|entry| DiagnosticEntryDto {
                 name: entry.name,

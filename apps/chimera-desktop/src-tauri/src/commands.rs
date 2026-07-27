@@ -80,13 +80,18 @@ pub fn get_system_status(state: State<'_, AppState>) -> Result<SystemStatusDto, 
             .find(|row| normalize_provider_url(row.base_url.as_str()) == wanted)
     });
     let provider_name = match &configured {
-        ActiveProvider::Custom { display_name, .. } => Some(
+        ActiveProvider::Custom {
+            display_name,
+            base_url,
+            ..
+        } => Some(
             active
                 .map(|row| row.display_name.clone())
-                .unwrap_or_else(|| display_name.clone()),
+                .unwrap_or_else(|| detected_provider_label(display_name, base_url)),
         ),
         ActiveProvider::Official => None,
     };
+    let provider_url = configured_url.clone();
 
     let health = check_runtime_health(&state.runtime);
     let external = detect_external_runtime();
@@ -98,11 +103,15 @@ pub fn get_system_status(state: State<'_, AppState>) -> Result<SystemStatusDto, 
             Some(chimera_runtime::detection::DetectedRuntime::ExternalMsix { version, .. }) => {
                 Some(version.clone())
             }
+            Some(chimera_runtime::detection::DetectedRuntime::ExternalPortable {
+                version, ..
+            }) => version.clone(),
             _ => None,
         });
 
     Ok(SystemStatusDto {
         provider_name,
+        provider_url,
         active_provider_id: active.map(|r| r.id.to_string()),
         provider_health: active
             .map(|r| format!("{:?}", r.health).to_lowercase())
@@ -115,6 +124,48 @@ pub fn get_system_status(state: State<'_, AppState>) -> Result<SystemStatusDto, 
 
 fn normalize_provider_url(value: &str) -> String {
     value.trim().trim_end_matches('/').to_ascii_lowercase()
+}
+
+fn detected_provider_label(display_name: &str, base_url: &str) -> String {
+    let host = base_url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(base_url)
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if host == "api.chimerahub.org" || host.ends_with(".chimerahub.org") {
+        return "ChimeraHub".to_string();
+    }
+    let display_name = display_name.trim();
+    if display_name.is_empty() || display_name.eq_ignore_ascii_case("custom") {
+        return if host.is_empty() {
+            "Custom provider".to_string()
+        } else {
+            host
+        };
+    }
+    display_name.to_string()
+}
+
+#[cfg(test)]
+mod detection_tests {
+    use super::detected_provider_label;
+
+    #[test]
+    fn generic_custom_provider_uses_recognisable_host_label() {
+        assert_eq!(
+            detected_provider_label("custom", "https://api.chimerahub.org/v1"),
+            "ChimeraHub"
+        );
+        assert_eq!(
+            detected_provider_label("custom", "https://gateway.example.com/v1"),
+            "gateway.example.com"
+        );
+    }
 }
 
 /// Providers screen: full list. Keys are never included.

@@ -16,7 +16,11 @@ pub enum DetectedRuntime {
     /// System-registered MSIX; detected but NOT owned by Chimera.
     ExternalMsix { version: String, path: PathBuf },
     /// User or other-manager-owned directory; NOT owned by Chimera.
-    ExternalPortable { path: PathBuf },
+    ExternalPortable {
+        path: PathBuf,
+        /// Human-facing app version when the portable payload can be inspected.
+        version: Option<String>,
+    },
     /// No Codex found at this path.
     Unknown,
 }
@@ -27,43 +31,17 @@ pub enum DetectedRuntime {
 pub fn detect_external_runtime() -> Option<DetectedRuntime> {
     #[cfg(windows)]
     {
-        let mut roots = Vec::new();
-        if let Some(program_files) = std::env::var_os("ProgramFiles") {
-            roots.push(std::path::PathBuf::from(program_files).join("WindowsApps"));
-        }
-        if let Some(program_files) = std::env::var_os("ProgramW6432") {
-            roots.push(std::path::PathBuf::from(program_files).join("WindowsApps"));
-        }
-        roots.push(std::path::PathBuf::from(r"C:\Program Files\WindowsApps"));
-        for root in roots {
-            if let Some(found) = scan_external_root(&root, true) {
-                return Some(found);
+        let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+        let program_files = std::env::var_os("ProgramFiles").map(PathBuf::from);
+        let mut roots = windows_external_roots(local.as_deref(), program_files.as_deref());
+        if let Some(program_w6432) = std::env::var_os("ProgramW6432").map(PathBuf::from) {
+            let windows_apps = program_w6432.join("WindowsApps");
+            if !roots.iter().any(|(root, _)| root == &windows_apps) {
+                roots.push((windows_apps, true));
             }
         }
-
-        let mut user_roots = Vec::new();
-        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            let local = std::path::PathBuf::from(local);
-            user_roots.extend([
-                local.join("OpenAI").join("ChatGPT"),
-                local.join("OpenAI.ChatGPT-Desktop"),
-                local.join("ChatGPT"),
-                local.join("Programs").join("ChatGPT"),
-                local.join("Programs").join("OpenAI").join("ChatGPT"),
-                local.join("OpenAI").join("Codex"),
-                local.join("OpenAI.Codex"),
-                local.join("Codex"),
-            ]);
-        }
-        if let Some(program_files) = std::env::var_os("ProgramFiles") {
-            user_roots.push(
-                std::path::PathBuf::from(program_files)
-                    .join("OpenAI")
-                    .join("ChatGPT"),
-            );
-        }
-        for root in user_roots {
-            if let Some(found) = scan_external_root(&root, false) {
+        for (root, msix) in roots {
+            if let Some(found) = scan_external_root(&root, msix) {
                 return Some(found);
             }
         }
@@ -76,7 +54,10 @@ pub fn detect_external_runtime() -> Option<DetectedRuntime> {
             std::path::PathBuf::from("/Applications/ChatGPT.app"),
         ] {
             if root.exists() {
-                return Some(DetectedRuntime::ExternalPortable { path: root });
+                return Some(DetectedRuntime::ExternalPortable {
+                    path: root,
+                    version: None,
+                });
             }
         }
     }
@@ -84,8 +65,54 @@ pub fn detect_external_runtime() -> Option<DetectedRuntime> {
     None
 }
 
+/// Ordered Windows locations for external Codex discovery.
+///
+/// User-installed portable payloads are checked before `WindowsApps`. Package
+/// directories can remain on disk after deregistration, so filesystem order
+/// must never let a stale MSIX shadow the live user installation.
+pub fn windows_external_roots(
+    local_app_data: Option<&Path>,
+    program_files: Option<&Path>,
+) -> Vec<(PathBuf, bool)> {
+    let mut roots = Vec::new();
+    if let Some(local) = local_app_data {
+        roots.extend(
+            [
+                local.join("Programs").join("Codex"),
+                local.join("OpenAI").join("Codex"),
+                local.join("OpenAI.Codex"),
+                local.join("Codex"),
+                local.join("OpenAI").join("ChatGPT"),
+                local.join("OpenAI.ChatGPT-Desktop"),
+                local.join("ChatGPT"),
+                local.join("Programs").join("ChatGPT"),
+                local.join("Programs").join("OpenAI").join("ChatGPT"),
+            ]
+            .into_iter()
+            .map(|path| (path, false)),
+        );
+    }
+    if let Some(program_files) = program_files {
+        roots.push((program_files.join("OpenAI").join("ChatGPT"), false));
+        roots.push((program_files.join("WindowsApps"), true));
+    }
+    let fallback = PathBuf::from(r"C:\Program Files\WindowsApps");
+    if !roots.iter().any(|(root, _)| root == &fallback) {
+        roots.push((fallback, true));
+    }
+    roots
+}
+
 #[cfg(windows)]
 fn scan_external_root(root: &Path, msix: bool) -> Option<DetectedRuntime> {
+    if !msix {
+        if let Some(installed) = codex_win_engine::detect_portable_install(root) {
+            return Some(DetectedRuntime::ExternalPortable {
+                path: PathBuf::from(installed.path),
+                version: Some(installed.version),
+            });
+        }
+    }
     let mut candidates = vec![root.join("app"), root.to_path_buf()];
     if msix {
         let entries = std::fs::read_dir(root).ok()?;
@@ -124,7 +151,10 @@ fn scan_external_root(root: &Path, msix: bool) -> Option<DetectedRuntime> {
                     path: candidate,
                 })
             } else {
-                Some(DetectedRuntime::ExternalPortable { path: candidate })
+                Some(DetectedRuntime::ExternalPortable {
+                    path: candidate,
+                    version: None,
+                })
             };
         }
     }

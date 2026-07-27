@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 pub struct SystemStatusDto {
     /// Display name of the active provider; `None` in official mode.
     pub provider_name: Option<String>,
+    /// Normalised endpoint detected in Codex's live config, without credentials.
+    pub provider_url: Option<String>,
     /// Stable id used by the Providers screen to restore the active selection.
     pub active_provider_id: Option<String>,
     /// One of: unknown | healthy | auth_failed | unreachable.
@@ -30,6 +32,7 @@ impl Default for SystemStatusDto {
     fn default() -> Self {
         Self {
             provider_name: None,
+            provider_url: None,
             active_provider_id: None,
             provider_health: "unknown".to_string(),
             codex_version: None,

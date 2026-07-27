@@ -25,10 +25,52 @@ export interface ProviderListState {
   officialMode: boolean;
 }
 
+export interface ProviderDetection {
+  activeProviderId: string | null;
+  officialMode: boolean;
+  providerName: string | null;
+  providerUrl: string | null;
+}
+
+export interface ObservedProvider {
+  displayName: string;
+  baseUrl: string;
+}
+
+export interface HydratedProviderView {
+  state: ProviderListState;
+  observedProvider: ObservedProvider | null;
+}
+
 // ── State constructors ────────────────────────────────────────────────────────
 
 export function createInitialState(): ProviderListState {
   return { providers: [], activeId: null, officialMode: true };
+}
+
+/** Merge saved providers with the endpoint Codex is actually using. */
+export function hydrateProviderView(
+  providers: ProviderEntry[],
+  detection: ProviderDetection,
+): HydratedProviderView {
+  const activeId = detection.activeProviderId !== null
+    && providers.some((provider) => provider.id === detection.activeProviderId)
+    ? detection.activeProviderId
+    : null;
+  const observedProvider = !detection.officialMode && activeId === null
+    ? {
+        displayName: detection.providerName?.trim() || "Custom provider",
+        baseUrl: detection.providerUrl?.trim() || "",
+      }
+    : null;
+  return {
+    state: {
+      providers,
+      activeId,
+      officialMode: detection.officialMode,
+    },
+    observedProvider,
+  };
 }
 
 // ── Pure state transitions ────────────────────────────────────────────────────

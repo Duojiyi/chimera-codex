@@ -247,6 +247,7 @@ export function CodexFeature() {
   const healthLabel = status.installed ? status.healthLabel ?? (status.healthy ? "100%" : dash) : dash;
   const healthColor = status.installed && status.healthy ? color.green : color.amber;
   const managed = status.ownership === "chimera_verified";
+  const maintenanceSupported = managed || status.mode === "external_msix";
   const hasRollback = managed && status.history.some((entry) => entry.state === "previous");
 
   const statRows: [string, string, string][] = [
@@ -314,9 +315,13 @@ export function CodexFeature() {
           <button
             type="button"
             onClick={handleRepair}
-            disabled={busy || !status.installed}
+            disabled={busy || !status.installed || !maintenanceSupported}
             aria-label={t("codex.repairAriaLabel")}
-            style={actionButtonStyle}
+            style={{
+              ...actionButtonStyle,
+              cursor: busy ? "wait" : maintenanceSupported ? "pointer" : "not-allowed",
+              opacity: busy || !maintenanceSupported ? 0.5 : 1,
+            }}
           >
             {busy ? t("common.loading") : t("codex.repair")}
           </button>
@@ -341,9 +346,14 @@ export function CodexFeature() {
           <button
             type="button"
             onClick={handleUninstall}
-            disabled={busy || !status.installed}
+            disabled={busy || !status.installed || !maintenanceSupported}
             aria-label={t("codex.uninstallAriaLabel")}
-            style={{ ...actionButtonStyle, color: color.danger }}
+            style={{
+              ...actionButtonStyle,
+              color: color.danger,
+              cursor: busy ? "wait" : maintenanceSupported ? "pointer" : "not-allowed",
+              opacity: busy || !maintenanceSupported ? 0.5 : 1,
+            }}
           >
             {busy ? t("common.loading") : t("codex.uninstall")}
           </button>

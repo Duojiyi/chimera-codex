@@ -129,6 +129,12 @@ export const en: Record<TranslationKey, string> = {
   "providers.submit": "Add Provider",
   "providers.cancel": "Cancel",
   "providers.officialSystemMode": "System login mode",
+  "providers.detectedFromCodex": "Current config · detected from Codex",
+  "providers.detectedMode": "DETECTED THIRD-PARTY PROVIDER",
+  "providers.detectedModeDesc":
+    "Codex is currently using this endpoint, but it is not saved in Chimera++. The existing configuration has not been changed.",
+  "providers.detectedAddHint":
+    "To switch this provider with Chimera++, choose Add and enter its API key.",
   "providers.addSectionLabel": "ADD PROVIDER",
   "providers.fieldType": "Provider type",
   "providers.optionChimeraHub": "ChimeraHub (built-in template)",

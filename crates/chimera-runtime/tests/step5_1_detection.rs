@@ -3,8 +3,8 @@
 use chimera_runtime::detection::{
     DetectedRuntime, InstallKind, OwnershipError, detect_runtime, windows_external_roots,
 };
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 use tempfile::tempdir;
 
 // ── ManagedPortable detection ────────────────────────────────────────────────
@@ -118,14 +118,17 @@ fn user_portable_install_is_checked_before_stale_windowsapps_directories() {
         Some(Path::new(r"C:\Users\tester\AppData\Local")),
         Some(Path::new(r"C:\Program Files")),
     );
+    let expected_portable = Path::new(r"C:\Users\tester\AppData\Local")
+        .join("Programs")
+        .join("Codex");
 
     assert_eq!(
         roots.first().map(|(path, _)| path.as_path()),
-        Some(Path::new(r"C:\Users\tester\AppData\Local\Programs\Codex"))
+        Some(expected_portable.as_path())
     );
     let portable_index = roots
         .iter()
-        .position(|(path, _)| path.ends_with(r"Programs\Codex"))
+        .position(|(path, _)| path.ends_with(Path::new("Programs").join("Codex")))
         .unwrap();
     let windows_apps_index = roots
         .iter()

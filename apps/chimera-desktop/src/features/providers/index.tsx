@@ -3,10 +3,12 @@
 // Layout: 1:1 implementation of the Pencil `Providers` screen spec.
 // Every dimension/colour comes from src/design/tokens.ts — no literals here.
 import { useEffect, useState, type CSSProperties } from "react";
-import type { ProviderEntry, ProviderHealth, ProviderListState } from "./lib/providerState.ts";
+import type {
+  ObservedProvider, ProviderEntry, ProviderHealth, ProviderListState,
+} from "./lib/providerState.ts";
 import {
   createInitialState, addProvider, switchProvider,
-  deleteProvider, setHealth, selectActive,
+  deleteProvider, setHealth, selectActive, hydrateProviderView,
 } from "./lib/providerState.ts";
 import {
   validateCustomProviderInput, validateChimeraHubKey,
@@ -50,6 +52,7 @@ export function ProvidersFeature() {
   const [keyInput, setKeyInput] = useState("");
   const [formErrors, setFormErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [observedProvider, setObservedProvider] = useState<ObservedProvider | null>(null);
   const active = selectActive(state);
 
   // Hydrate the list from the provider database on every visit. Keeping the
@@ -57,8 +60,8 @@ export function ProvidersFeature() {
   // disappeared and made the first click on "switch" a no-op.
   useEffect(() => {
     let cancelled = false;
-    void invoke("list_providers").then((raw) => {
-      if (cancelled || !Array.isArray(raw)) return;
+    void Promise.all([invoke("list_providers"), invoke("get_system_status")]).then(([raw, statusRaw]) => {
+      if (cancelled || !Array.isArray(raw) || !statusRaw || typeof statusRaw !== "object") return;
       const providers: ProviderEntry[] = raw.map((row, index) => {
         const item = row as {
           id?: string; displayName?: string; kind?: string; baseUrl?: string;
@@ -76,20 +79,20 @@ export function ProvidersFeature() {
           sortOrder: index,
         };
       });
-      setState({
-        providers,
-        activeId: providers[0]?.id ?? null,
-        officialMode: providers.length === 0,
+      const status = statusRaw as {
+        activeProviderId?: string | null;
+        officialMode?: boolean;
+        providerName?: string | null;
+        providerUrl?: string | null;
+      };
+      const hydrated = hydrateProviderView(providers, {
+        activeProviderId: status.activeProviderId ?? null,
+        officialMode: status.officialMode ?? true,
+        providerName: status.providerName ?? null,
+        providerUrl: status.providerUrl ?? null,
       });
-      void invoke("get_system_status").then((statusRaw) => {
-        if (cancelled || !statusRaw || typeof statusRaw !== "object") return;
-        const status = statusRaw as { activeProviderId?: string | null; officialMode?: boolean };
-        setState((current) => ({
-          ...current,
-          activeId: status.activeProviderId ?? null,
-          officialMode: status.officialMode ?? current.providers.length === 0,
-        }));
-      });
+      setState(hydrated.state);
+      setObservedProvider(hydrated.observedProvider);
     });
     return () => { cancelled = true; };
   }, []);
@@ -144,6 +147,7 @@ export function ProvidersFeature() {
         sortOrder: state.providers.length,
       };
       setState(s => addProvider(s, entry));
+      setObservedProvider(null);
       setShowAdd(false); setUrlInput(""); setKeyInput("");
     } catch (err: unknown) {
       // The backend message is already actionable and localised-safe.
@@ -155,7 +159,11 @@ export function ProvidersFeature() {
 
   async function handleSwitch(id: string | null) {
     setBusy(true);
-    try { await invoke("switch_provider", { providerId: id }); setState(s => switchProvider(s, id)); }
+    try {
+      await invoke("switch_provider", { providerId: id });
+      setState(s => switchProvider(s, id));
+      setObservedProvider(null);
+    }
     catch (err) { console.error("switch failed", err); }
     finally { setBusy(false); }
   }
@@ -235,6 +243,24 @@ export function ProvidersFeature() {
           <div style={{ fontSize: 13, fontWeight: 600, color: color.primary }}>{t("home.officialCodex")}</div>
           <div style={{ fontSize: 11, color: color.dim }}>{t("providers.officialSystemMode")}</div>
         </button>
+        {observedProvider && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected="true"
+            aria-disabled="true"
+            style={{
+              width: "100%", height: size.providerRow, padding: "0 20px", display: "flex",
+              flexDirection: "column", justifyContent: "center", gap: 3, textAlign: "left",
+              background: color.ink2, border: "none",
+              borderLeft: `${indicator.rowEdge}px solid ${color.accent}`,
+              cursor: "default", fontFamily: type.family,
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 600, color: color.primary }}>{observedProvider.displayName}</div>
+            <div style={{ fontSize: 11, color: color.dim }}>{t("providers.detectedFromCodex")}</div>
+          </button>
+        )}
         {state.providers.map(p => (
           <button
             key={p.id} role="tab" aria-selected={state.activeId === p.id} onClick={() => handleSwitch(p.id)} disabled={busy}
@@ -272,6 +298,8 @@ export function ProvidersFeature() {
             onDelete={handleDelete}
             onTest={handleTest}
           />
+        ) : observedProvider ? (
+          <ObservedProviderDetail provider={observedProvider} />
         ) : (
           <div style={{ padding: "14px 20px 6px 20px" }}>
             <p style={{ ...type.sectionLabel, color: color.dim, margin: "0 0 8px" }}>{t("providers.officialMode")}</p>
@@ -281,6 +309,34 @@ export function ProvidersFeature() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function ObservedProviderDetail({ provider }: { provider: ObservedProvider }) {
+  const { t } = useI18n();
+  return (
+    <div style={{ padding: "28px 32px", maxWidth: 620 }}>
+      <p style={{ ...type.sectionLabel, color: color.accent, margin: "0 0 8px" }}>
+        {t("providers.detectedMode")}
+      </p>
+      <h2 style={{ ...type.pageTitle, color: color.primary, margin: "0 0 8px" }}>
+        {provider.displayName}
+      </h2>
+      <p style={{ ...type.body, color: color.muted, margin: "0 0 24px" }}>
+        {t("providers.detectedModeDesc")}
+      </p>
+      <div style={{ borderTop: `${hairline}px solid ${color.rule}` }}>
+        <div style={{ minHeight: 52, display: "flex", alignItems: "center", gap: 24 }}>
+          <span style={{ ...type.caption, color: color.muted, width: 120 }}>{t("providers.fieldBaseUrl")}</span>
+          <strong style={{ ...type.captionStrong, color: color.secondary, overflowWrap: "anywhere" }}>
+            {provider.baseUrl || t("common.dash")}
+          </strong>
+        </div>
+      </div>
+      <p style={{ ...type.caption, color: color.dim, margin: "18px 0 0" }}>
+        {t("providers.detectedAddHint")}
+      </p>
     </div>
   );
 }
