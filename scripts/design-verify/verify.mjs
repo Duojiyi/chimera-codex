@@ -1,8 +1,9 @@
 // Design-verification harness — Chimera++ 2.0
 //
-// Loads the built frontend in a real browser at the design viewport, captures a
-// screenshot of each screen next to its Pencil reference export, and asserts
-// the geometry the design file pins exactly.
+// Loads the frontend in a real browser at the design viewport, captures a
+// screenshot of each screen, and asserts the geometry pinned by the Soft Bento
+// product design. This is intentionally a browser-level contract: token checks
+// alone cannot catch a shell that renders at the wrong size.
 //
 // This is a LOCAL tool, deliberately not part of CI: it needs a browser binary
 // and a built `dist/`. CI enforces the static half of the same contract via
@@ -34,24 +35,22 @@ const VIEWPORT = { width: 1280, height: 800 };
 const PORT = 4173;
 const BASE = `http://127.0.0.1:${PORT}`;
 
-// Screen id → Pencil frame id, so each capture sits beside its reference.
-const SCREENS = [
-  { id: "home", frame: "qUByL" },
-  { id: "providers", frame: "yHZ03" },
-  { id: "codex", frame: "EiZEM" },
-  { id: "appearance", frame: "JFqAh" },
-  { id: "settings", frame: "upLkQ" },
-];
+const SCREENS = ["home", "providers", "codex", "appearance", "settings"];
 
-// Ground truth from the .pen file. Same numbers V16 asserts statically; here we
-// check the browser actually renders them.
+// Ground truth from the Soft Bento desktop design. Same numbers are asserted
+// statically by verify-design-tokens.mjs; here we check the browser actually
+// renders them.
 const PEN = {
-  railHeight: 48,
+  canvasPadding: 24,
+  windowRadius: 26,
+  windowBarHeight: 58,
+  sidebarWidth: 232,
   tabCount: 5,
-  pageBackground: "rgb(12, 12, 12)", // #0C0C0C
-  accent: "rgb(255, 77, 61)", // #FF4D3D
+  pageBackground: "rgb(168, 207, 210)", // #A8CFD2
+  windowBackground: "rgb(238, 248, 245)", // #EEF8F5
+  activeSurface: "rgb(255, 255, 255)", // #FFFFFF
   fontFamily: /Outfit/,
-  heroHeight: 360, // Home only
+  homeStatCount: 3,
 };
 
 let failures = 0;
@@ -125,16 +124,27 @@ try {
   browser = await chromium.launch();
   const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 2 });
 
-  for (const { id, frame } of SCREENS) {
+  for (const id of SCREENS) {
     console.log(`\n── ${id} ──`);
     await page.goto(`${BASE}/?screen=${id}&lang=zh`, { waitUntil: "load" });
     // Webfonts must be resolved before measuring or screenshotting, or the
     // first paint falls back and every type metric is wrong.
     await page.evaluate(() => document.fonts.ready);
 
-    // Shell geometry — identical on all five screens per the .pen file.
+    // Shell geometry — identical on all five screens per the Soft Bento spec.
+    const canvas = await page.locator(".app-canvas").first();
+    const canvasBox = await canvas.boundingBox();
+    eq(`${id}: canvas width`, Math.round(canvasBox?.width ?? -1), VIEWPORT.width);
+    eq(`${id}: canvas height`, Math.round(canvasBox?.height ?? -1), VIEWPORT.height);
+    const windowBox = await page.locator(".app-window").first().boundingBox();
+    eq(`${id}: window left inset`, Math.round(windowBox?.x ?? -1), PEN.canvasPadding);
+    eq(`${id}: window top inset`, Math.round(windowBox?.y ?? -1), PEN.canvasPadding);
+    eq(`${id}: window width`, Math.round(windowBox?.width ?? -1), VIEWPORT.width - PEN.canvasPadding * 2);
+    eq(`${id}: window height`, Math.round(windowBox?.height ?? -1), VIEWPORT.height - PEN.canvasPadding * 2);
+    const bar = await page.locator(".window-bar").first().boundingBox();
+    eq(`${id}: window bar height`, Math.round(bar?.height ?? -1), PEN.windowBarHeight);
     const rail = await page.locator("nav[role=navigation]").first();
-    eq(`${id}: rail height`, Math.round((await rail.boundingBox()).height), PEN.railHeight);
+    eq(`${id}: sidebar width`, Math.round((await rail.boundingBox())?.width ?? -1), PEN.sidebarWidth);
     eq(
       `${id}: nav tab count`,
       // Scope to the rail. Features build their own vertical tablists (provider
@@ -147,28 +157,26 @@ try {
     const bodyBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
     eq(`${id}: page background`, bodyBg, PEN.pageBackground);
 
+    const windowBg = await page.evaluate(() => getComputedStyle(document.querySelector(".app-window")).backgroundColor);
+    eq(`${id}: window background`, windowBg, PEN.windowBackground);
+
     const bodyFont = await page.evaluate(() => getComputedStyle(document.body).fontFamily);
     matches(`${id}: body font`, bodyFont, PEN.fontFamily);
 
-    // The active tab must carry the accent underline — the single accent rule.
-    const activeBorder = await page.evaluate(() => {
+    // The active sidebar item is the only filled navigation state.
+    const activeSurface = await page.evaluate(() => {
       const el = document.querySelector('nav[role=navigation] [role=tab][aria-selected="true"]');
-      return el ? getComputedStyle(el).borderBottomColor : null;
+      return el ? getComputedStyle(el).backgroundColor : null;
     });
-    eq(`${id}: active tab underline`, activeBorder, PEN.accent);
+    eq(`${id}: active nav surface`, activeSurface, PEN.activeSurface);
 
     // Screen-specific anchor.
     if (id === "home") {
-      const heroH = await page.evaluate(() => {
-        const main = document.querySelector("main");
-        const hero = main?.firstElementChild?.firstElementChild;
-        return hero ? Math.round(hero.getBoundingClientRect().height) : null;
-      });
-      eq("home: hero height", heroH, PEN.heroHeight);
+      eq("home: stat card count", await page.locator("main .home-stat-card").count(), PEN.homeStatCount);
     }
 
     await page.screenshot({ path: join(OUT, `${id}.png`) });
-    ok(`${id}: captured → docs/design/actual/${id}.png (ref: ${frame}.png)`);
+    ok(`${id}: captured → docs/design/actual/${id}.png`);
   }
 
   // Both languages must render without layout collapse. Chinese is the default,

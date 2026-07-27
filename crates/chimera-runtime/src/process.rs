@@ -82,3 +82,26 @@ pub fn launch_managed_codex(layout: &RuntimeLayout) -> Result<LaunchReport, Laun
 
     Ok(LaunchReport { pid, exe_path })
 }
+
+/// Read-only liveness check for the official or Chimera-managed desktop app.
+/// Ownership-sensitive operations must still use the managed runtime guard.
+pub fn codex_process_running() -> bool {
+    #[cfg(windows)]
+    {
+        let output = Command::new("tasklist")
+            .args(["/FO", "CSV", "/NH"])
+            .output();
+        let Ok(output) = output else { return false; };
+        let text = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+        return text.lines().any(|line| line.contains("\"codex.exe\"") || line.contains("\"chatgpt.exe\""));
+    }
+
+    #[cfg(not(windows))]
+    {
+        Command::new("pgrep")
+            .args(["-f", "(^|/)(Codex|ChatGPT)(\\.app)?"])
+            .output()
+            .map(|value| value.status.success())
+            .unwrap_or(false)
+    }
+}

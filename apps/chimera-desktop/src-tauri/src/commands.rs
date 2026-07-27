@@ -19,7 +19,8 @@ use chimera_provider::probe::{UrlValidationError, validate_provider_url};
 use chimera_provider::projection::{ProviderProjection, revert_provider_projection};
 use chimera_provider::transaction::{SwitchTransaction, TransactionOutcome, TxError};
 use chimera_runtime::health::check_runtime_health;
-use chimera_runtime::process::{LaunchError, launch_managed_codex};
+use chimera_runtime::detection::detect_external_runtime;
+use chimera_runtime::process::{LaunchError, codex_process_running, launch_managed_codex};
 
 use crate::dto::{ProviderDto, ProviderTestDto, RuntimeInfoDto, SystemStatusDto};
 use crate::state::AppState;
@@ -72,6 +73,15 @@ pub fn get_system_status(state: State<'_, AppState>) -> Result<SystemStatusDto, 
     let active = projection_active.then(|| rows.first()).flatten();
 
     let health = check_runtime_health(&state.runtime);
+    let external = detect_external_runtime();
+    let codex_version = health
+        .as_ref()
+        .ok()
+        .and_then(|h| h.version.clone())
+        .or_else(|| match external.as_ref() {
+            Some(chimera_runtime::detection::DetectedRuntime::ExternalMsix { version, .. }) => Some(version.clone()),
+            _ => None,
+        });
 
     Ok(SystemStatusDto {
         provider_name: active.map(|r| r.display_name.clone()),
@@ -79,8 +89,8 @@ pub fn get_system_status(state: State<'_, AppState>) -> Result<SystemStatusDto, 
         provider_health: active
             .map(|r| format!("{:?}", r.health).to_lowercase())
             .unwrap_or_else(|| "unknown".to_string()),
-        codex_version: health.as_ref().ok().and_then(|h| h.version.clone()),
-        codex_running: false, // Task 5.5 wires real process liveness
+        codex_version,
+        codex_running: codex_process_running(),
         official_mode: active.is_none(),
     })
 }

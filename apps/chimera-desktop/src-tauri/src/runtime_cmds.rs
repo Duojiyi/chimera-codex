@@ -7,7 +7,7 @@
 
 use tauri::State;
 
-use chimera_runtime::detection::{DetectedRuntime, detect_runtime};
+use chimera_runtime::detection::{DetectedRuntime, detect_external_runtime, detect_runtime};
 use chimera_runtime::health::check_runtime_health;
 use chimera_runtime::update::{UpdateError, rollback_to_last_known};
 use chimera_update::atomic::{AtomicError, AtomicStore, Migratable};
@@ -50,11 +50,12 @@ fn settings_error(error: AtomicError) -> String {
 #[tauri::command]
 pub fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusDto, String> {
     let root = state.paths.runtime_root();
-    let detected = detect_runtime(&root).ok();
+    let detected = detect_runtime(&root).ok().filter(|runtime| !matches!(runtime, DetectedRuntime::Unknown));
+    let detected = detected.or_else(detect_external_runtime);
     let health = check_runtime_health(&state.runtime).ok();
     let pointer = state.runtime.read_current_pointer().ok().flatten();
 
-    let installed = health.as_ref().is_some_and(|h| h.exe_present);
+    let installed = health.as_ref().is_some_and(|h| h.exe_present) || detected.is_some();
     let version = health.as_ref().and_then(|h| h.version.clone());
 
     // History comes from the pointer chain, the only record that exists today.
@@ -94,13 +95,19 @@ pub fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusDto
 
     Ok(RuntimeStatusDto {
         installed,
-        version,
+        version: version.or_else(|| match detected.as_ref() {
+            Some(DetectedRuntime::ExternalMsix { version, .. }) => Some(version.clone()),
+            _ => None,
+        }),
         platform: Some(platform_label()),
-        healthy: installed,
+        healthy: health.as_ref().is_some_and(|value| value.exe_present),
         health_label: None,
         mode: mode_label.clone(),
         ownership: ownership_label.clone(),
-        install_path: Some(root.to_string_lossy().to_string()),
+        install_path: match detected.as_ref() {
+            Some(DetectedRuntime::ExternalMsix { path, .. }) | Some(DetectedRuntime::ExternalPortable { path }) => Some(path.to_string_lossy().to_string()),
+            _ => Some(root.to_string_lossy().to_string()),
+        },
         last_update: None,
         uptime: None,
         // No mirror is reachable yet, so never claim an update is available.
@@ -109,7 +116,7 @@ pub fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusDto
         update_channel: None,
         update_meta: None,
         history,
-        diagnostics: diagnostics_for(installed, detected.is_some()),
+        diagnostics: diagnostics_for(installed, matches!(detected, Some(DetectedRuntime::ManagedPortable(_)))),
     })
 }
 

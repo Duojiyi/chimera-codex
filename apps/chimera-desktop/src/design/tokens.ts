@@ -1,58 +1,38 @@
-// Design tokens — extracted verbatim from D:/Desktop/chimera-ui.pen
-// SOURCE OF TRUTH. Do not hand-edit values; re-extract from the .pen file.
+// Design tokens — Soft Bento desktop shell baseline.
+// Keep visual decisions here so the implementation can be checked against the
+// Pencil frame without scattering one-off values through feature components.
 // Feature components must import from here — scripts/verify-design-tokens.mjs
 // fails CI if a raw hex literal appears under src/features/ or src/shell/.
 
 /** Surface + text colours (Pencil variable names preserved). */
 export const color = {
-  /** Page background */
-  ink0: "#0C0C0C",
-  /** Top rail, side panels, update banner */
-  ink1: "#111111",
-  /** Selected list row background */
-  ink2: "#181818",
-  /** Secondary button / toggle-off / select background */
-  ink3: "#222222",
-  /** Hairline rules and borders */
-  rule: "#282828",
-
-  // ── Text ramp — WCAG 2.2 AA override of the .pen greys ────────────────────
-  // The .pen file specifies #999999 / #5E5E5E / #3A3A3A. Measured against the
-  // four ink surfaces, #5E5E5E reaches only 3.02:1 and #3A3A3A only 1.72:1,
-  // both below the 4.5:1 AA minimum for normal-size text (G16 requires zero
-  // serious axe violations). These tones carry section labels, provider
-  // subtitles and the version string — real structure, so suppressing them
-  // from assistive tech instead of fixing contrast would be the worse trade.
-  //
-  // The ramp below is lifted so every step clears 4.5:1 against the LIGHTEST
-  // surface text sits on (ink3 #222222) while keeping four distinguishable
-  // steps. scripts/verify-design-tokens.mjs asserts both the override values
-  // and their measured contrast, so this cannot silently drift.
-
-  /** Highest-contrast text: hero, active tab, values. Unchanged from .pen. */
-  primary: "#EBEBEB",
-  /** Panel titles, spec-sheet values. AA override of .pen #999999. */
-  secondary: "#B8B8B8",
-  /** Body text, inactive tabs, spec-sheet keys. AA override of .pen #5E5E5E. */
-  muted: "#9A9A9A",
-  /** Eyebrow/section labels, version string. AA override of .pen #3A3A3A. */
-  dim: "#8A8A8A",
-
-  /** Single accent — logo mark, active tab underline, primary action */
-  accent: "#FF4D3D",
-  /** Accent at 10% — active tag / applied badge background */
-  accentDim: "#FF4D3D1A",
+  /** Pencil outer canvas and app desktop window surfaces. */
+  ink0: "#A8CFD2",
+  ink1: "#E8F3F0",
+  ink2: "#F7F9F8",
+  ink3: "#FFFFFF",
+  rule: "#D6E4E2",
+  primary: "#182526",
+  secondary: "#375456",
+  muted: "#3A595C",
+  dim: "#345154",
+  accent: "#192626",
+  accentDim: "#EDF8F1",
+  sidebar: "#E8F3F0",
+  window: "#FBFEFC",
+  promo: "#B5D8D8",
+  promoCircle: "#FFE23D",
+  brandMark: "#C6E8E3",
+  brandCore: "#FFD93D",
+  accountAvatar: "#D7E7FA",
+  cardAlt: "#F5FBEA",
 
   /** Healthy / running / passed */
-  green: "#34C759",
-  /** Update available / degraded */
-  amber: "#FF9F0A",
-  /** Destructive action + auth failure */
-  danger: "#FF453A",
-  /** Danger button background */
-  dangerBg: "#FF453A11",
-  /** Danger button border */
-  dangerBorder: "#FF453A33",
+  green: "#35A96B",
+  amber: "#E8B657",
+  danger: "#C85252",
+  dangerBg: "#FCEBE8",
+  dangerBorder: "#EBC5C0",
 
   /** Explicit transparent (Pencil emits #00000000) */
   transparent: "transparent",
@@ -63,33 +43,33 @@ export const type = {
   family: '"Outfit", system-ui, -apple-system, sans-serif',
 
   /** Home hero provider name */
-  hero: { fontSize: 88, fontWeight: 700, lineHeight: 0.9 },
+  hero: { fontSize: 42, fontWeight: 700, lineHeight: 1.05 },
   /** Codex managed-runtime version */
-  version: { fontSize: 72, fontWeight: 700, lineHeight: 0.9 },
+  version: { fontSize: 48, fontWeight: 700, lineHeight: 1 },
   /** Codex update-banner version comparison */
-  versionCompare: { fontSize: 52, fontWeight: 700 },
+  versionCompare: { fontSize: 36, fontWeight: 700 },
   /** Providers detail title */
-  detailTitle: { fontSize: 44, fontWeight: 700, lineHeight: 0.92 },
+  detailTitle: { fontSize: 28, fontWeight: 700, lineHeight: 1.05 },
   /** Settings page title */
-  pageTitle: { fontSize: 36, fontWeight: 700 },
+  pageTitle: { fontSize: 28, fontWeight: 700 },
   /** Appearance skin detail title */
-  skinTitle: { fontSize: 30, fontWeight: 700 },
+  skinTitle: { fontSize: 24, fontWeight: 700 },
   /** Home hero metric row */
-  metric: { fontSize: 26, fontWeight: 600 },
+  metric: { fontSize: 22, fontWeight: 600 },
   /** Home hero subtitle, Codex runtime name */
-  subtitle: { fontSize: 20, fontWeight: 400 },
+  subtitle: { fontSize: 16, fontWeight: 400 },
   /** Primary action button label */
-  actionLabel: { fontSize: 16, fontWeight: 700 },
+  actionLabel: { fontSize: 13, fontWeight: 700 },
   /** Codex runtime platform line */
-  runtimeName: { fontSize: 16, fontWeight: 400 },
+  runtimeName: { fontSize: 14, fontWeight: 400 },
   /** App name in rail, settings page subtitle */
-  appName: { fontSize: 14, fontWeight: 600 },
+  appName: { fontSize: 15, fontWeight: 700 },
   /** Settings page subtitle, Providers detail body */
-  body: { fontSize: 14, fontWeight: 400 },
+  body: { fontSize: 13, fontWeight: 400 },
   /** Nav tab, panel title, settings item key */
-  ui: { fontSize: 13, fontWeight: 400 },
+  ui: { fontSize: 13, fontWeight: 500 },
   /** Panel titles + active tab (semibold 13) */
-  uiStrong: { fontSize: 13, fontWeight: 600 },
+  uiStrong: { fontSize: 13, fontWeight: 700 },
   /** Spec-sheet keys/values, status text, version string */
   caption: { fontSize: 12, fontWeight: 400 },
   /** Spec-sheet values (medium) */
@@ -97,13 +77,13 @@ export const type = {
   /** Home hero eyebrow */
   eyebrow: { fontSize: 11, fontWeight: 500, letterSpacing: 1.5 },
   /** Section labels — uppercase, tracked */
-  sectionLabel: { fontSize: 10, fontWeight: 600, letterSpacing: 1.5 },
+  sectionLabel: { fontSize: 10, fontWeight: 700, letterSpacing: 1.5 },
 } as const;
 
 /** Fixed dimensions the design pins exactly. */
 export const size = {
   /** Top rail height */
-  rail: 48,
+  rail: 58,
   /** Panel/detail header height */
   panelHead: 52,
   /** Logo mark square */
@@ -112,16 +92,16 @@ export const size = {
   dot: 6,
 
   /** Providers list panel */
-  providerList: 300,
+  providerList: 280,
   /** Providers detail left column */
-  providerDetailLeft: 440,
+  providerDetailLeft: 420,
   /** Providers detail right column */
   providerDetailRight: 240,
   /** Providers list row */
   providerRow: 68,
 
   /** Codex left pane */
-  codexLeftPane: 520,
+  codexLeftPane: 440,
   /** Codex spec-sheet key column */
   codexSpecKey: 140,
   /** Codex spec-sheet row */
@@ -130,14 +110,14 @@ export const size = {
   codexHistoryRow: 44,
 
   /** Appearance skin list */
-  skinList: 260,
+  skinList: 280,
   /** Appearance skin row */
   skinRow: 64,
   /** Appearance metadata column */
   skinMeta: 220,
 
   /** Settings category nav */
-  settingsNav: 220,
+  settingsNav: 232,
   /** Settings category row */
   settingsCatRow: 40,
   /** Settings item row */
@@ -157,15 +137,15 @@ export const size = {
   /** Home hero right pane */
   heroRight: 300,
   /** Home hero zone height (.pen frame X2mpmJ) */
-  heroHeight: 360,
+  heroHeight: 280,
   /** Home hero vertical padding */
-  heroPadY: 56,
+  heroPadY: 32,
   /** Home hero horizontal padding */
-  heroPadX: 48,
+  heroPadX: 36,
   /** Home data-strip column vertical padding */
-  dataPadY: 26,
+  dataPadY: 20,
   /** Home data-strip column horizontal padding */
-  dataPadX: 32,
+  dataPadX: 24,
   /** Home data-strip key column width */
   dataKeyWidth: 130,
   /** Home hero: gap between eyebrow label and hero title (EyebrowGap spacer) */
@@ -175,13 +155,13 @@ export const size = {
 /** Corner radii the design uses. */
 export const radius = {
   /** Logo mark, applied badge */
-  xs: 2,
+  xs: 6,
   /** Buttons, selects */
-  sm: 3,
+  sm: 8,
   /** Primary action button */
-  md: 4,
+  md: 12,
   /** Active tag pill */
-  pill: 20,
+  pill: 999,
 } as const;
 
 /** Hairline width for rules and borders. */

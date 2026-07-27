@@ -1,7 +1,7 @@
 // Feature: codex — Managed Codex runtime status, updates, and diagnostics.
 // Layout is a 1:1 implementation of the Pencil design frame `Codex` (Body).
 // Every dimension/colour comes from src/design/tokens.ts — no literals here.
-import { useState, useEffect } from "react";
+import { useState, useEffect, type CSSProperties } from "react";
 import { color, type as font, size, radius, hairline, ruleOpacity } from "../../design/tokens.ts";
 import { useI18n, type TranslationKey } from "../../i18n/index.tsx";
 
@@ -70,6 +70,17 @@ const RESULT_LABEL_KEY: Record<DiagnosticEntry["result"], TranslationKey> = {
   fail: "codex.diagFail",
 };
 
+const MODE_LABEL_KEY: Record<string, TranslationKey> = {
+  managed_portable: "codex.modeManagedPortable",
+  external_msix: "codex.modeExternalMsix",
+  external_portable: "codex.modeExternalPortable",
+  none: "codex.modeNone",
+};
+
+function runtimeLabel(value: string | null, t: (key: TranslationKey) => string, fallback: string): string {
+  return value && MODE_LABEL_KEY[value] ? t(MODE_LABEL_KEY[value]) : value ?? fallback;
+}
+
 function SectionLabel({ children, textColor }: { children: string; textColor: string }) {
   return (
     <p style={{ ...font.sectionLabel, color: textColor, margin: 0 }}>{children}</p>
@@ -85,6 +96,7 @@ export function CodexFeature() {
   const [status, setStatus] = useState<RuntimeStatus>(EMPTY_STATUS);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
 
   useEffect(() => {
     invoke("get_runtime_status")
@@ -95,10 +107,12 @@ export function CodexFeature() {
   async function runAction(action: () => Promise<unknown>, failMessage: string) {
     setBusy(true);
     setError(null);
+    setActionMessage(null);
     try {
       await action();
       const s = await invoke("get_runtime_status").catch(() => undefined);
       if (s) setStatus(s as RuntimeStatus);
+      setActionMessage(t("codex.actionCompleted"));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : failMessage);
     } finally {
@@ -120,17 +134,18 @@ export function CodexFeature() {
   const platformLabel = status.installed ? status.platform ?? dash : dash;
   const healthLabel = status.installed ? status.healthLabel ?? (status.healthy ? "100%" : dash) : dash;
   const healthColor = status.installed && status.healthy ? color.green : color.amber;
+  const managed = status.ownership === "chimera_verified";
 
   const statRows: [string, string, string][] = [
     [t("codex.specHealth"), healthLabel, healthColor],
-    [t("codex.specMode"), status.installed ? status.mode ?? dash : dash, color.secondary],
-    [t("codex.specOwnership"), status.installed ? status.ownership ?? dash : dash, color.secondary],
+    [t("codex.specMode"), status.installed ? runtimeLabel(status.mode, t, dash) : dash, color.secondary],
+    [t("codex.specOwnership"), status.installed ? (managed ? t("codex.ownershipVerified") : t("codex.ownershipNotOwned")) : dash, managed ? color.green : color.amber],
     [t("codex.specInstallPath"), status.installed ? status.installPath ?? dash : dash, color.muted],
     [t("codex.specLastUpdate"), status.installed ? status.lastUpdate ?? dash : dash, color.secondary],
     [t("codex.specUptime"), status.installed ? status.uptime ?? dash : dash, color.secondary],
   ];
 
-  const actionButtonStyle: React.CSSProperties = {
+  const actionButtonStyle: CSSProperties = {
     background: color.ink3,
     borderRadius: radius.sm,
     padding: "8px 16px",
@@ -186,11 +201,11 @@ export function CodexFeature() {
           <button
             type="button"
             onClick={handleRepair}
-            disabled={busy}
+            disabled={busy || !managed}
             aria-label={t("codex.repairAriaLabel")}
             style={actionButtonStyle}
           >
-            {t("codex.repair")}
+            {busy ? t("common.loading") : t("codex.repair")}
           </button>
           <button
             type="button"
@@ -199,21 +214,22 @@ export function CodexFeature() {
             aria-label={t("codex.diagnoseAriaLabel")}
             style={actionButtonStyle}
           >
-            {t("codex.diagnose")}
+            {busy ? t("common.loading") : t("codex.diagnose")}
           </button>
           <button
             type="button"
             onClick={handleRollback}
-            disabled={busy}
+            disabled={busy || !managed}
             aria-label={t("codex.rollbackAriaLabel")}
             style={actionButtonStyle}
           >
-            {t("codex.rollback")}
+            {busy ? t("common.loading") : t("codex.rollback")}
           </button>
         </div>
 
         <div role="alert" aria-live="polite" style={{ minHeight: 16, marginTop: 12 }}>
           {error && <p style={{ fontSize: 12, color: color.danger, margin: 0 }}>{error}</p>}
+          {!error && actionMessage && <p style={{ fontSize: 12, color: color.green, margin: 0 }}>{actionMessage}</p>}
         </div>
       </div>
 

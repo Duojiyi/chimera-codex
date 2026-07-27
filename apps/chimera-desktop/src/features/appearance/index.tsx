@@ -1,8 +1,8 @@
-// Chimera++ 2.0 — Appearance feature.
+// Chimera++ 2.0 — ChatGPT / Codex appearance feature.
 // Layout is a 1:1 implementation of the Pencil design frame `Appearance`.
 // Every dimension/colour comes from src/design/tokens.ts — no literals here.
-// Note: the skeleton preview bars in the mock spec at #1C1C1C have no exact
-// token; color.ink2 (#181818) is the nearest defined surface tone.
+// The preview mirrors ChatGPT/Codex appearance surfaces; it is intentionally
+// separate from Chimera++'s own shell theme.
 import { useCallback, useState, useEffect } from "react";
 import { color, type, size, radius, hairline, ruleOpacity } from "../../design/tokens.ts";
 import { useI18n, type TranslationKey } from "../../i18n/index.tsx";
@@ -202,7 +202,7 @@ export function AppearanceFeature() {
       </div>
 
       {/* ── Skin detail ── */}
-      <div role="main" aria-label={t("appearance.detailAriaLabel")} style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+      <div role="main" aria-label={t("appearance.detailAriaLabel")} style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <div style={{
           height: size.panelHead, padding: "0 32px", borderBottom: `${hairline}px solid ${color.rule}`,
           display: "flex", alignItems: "center", gap: 16,

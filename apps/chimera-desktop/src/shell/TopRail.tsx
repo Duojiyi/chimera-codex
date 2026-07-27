@@ -1,5 +1,5 @@
 import type { ActiveFeature } from "./nav";
-import { color, type as font, size, radius, hairline, indicator } from "../design/tokens.ts";
+import { color, type as font, radius } from "../design/tokens.ts";
 import { useI18n, type TranslationKey } from "../i18n/index.tsx";
 
 // Module-level constants hold i18n KEYS, never translated text — translation
@@ -19,47 +19,33 @@ interface Props {
 }
 
 /**
- * Top navigation rail. Spec: Pencil `TopRail` frame, identical on all 5 screens.
- * height 48 · bg ink1 · bottom border rule · Logo padding [0,20] gap 9
- * · Mark 18x18 r2 accent · AppName 14/600 · tab padding [0,20] 13px
- * · active tab: 2px accent bottom border + primary/600
- * · RailRight gap 12 padding [0,20]: dot 6px green + 12px muted text
- *   + 1x16 separator + 12px dim version
+ * Left workspace navigation. The parent window bar owns the window chrome;
+ * this rail is the full-height 232px workspace sidebar from the Pencil spec.
  */
 export function TopRail({ active, onNavigate }: Props) {
   const { t } = useI18n();
-  const appVersion = import.meta.env.VITE_APP_VERSION;
   return (
     <nav
       role="navigation"
       aria-label={t("nav.ariaLabel")}
-      style={{
-        height: size.rail,
-        display: "flex",
-        alignItems: "center",
-        borderBottom: `${hairline}px solid ${color.rule}`,
-        background: color.ink1,
-        flexShrink: 0,
-      }}
+      style={{ width: 232, display: "flex", flexDirection: "column", background: color.sidebar, flexShrink: 0, padding: "22px 16px", boxSizing: "border-box" }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "0 20px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 4px", marginBottom: 24 }}>
         <div
           style={{
-            width: size.mark,
-            height: size.mark,
+            width: 30,
+            height: 30,
             borderRadius: radius.xs,
-            background: color.accent,
+            background: color.brandMark,
             flexShrink: 0,
-          }}
-        />
+          }}><span aria-hidden="true" style={{ display: "block", width: 16, height: 16, margin: 7, borderRadius: "50%", background: color.brandCore }} /></div>
         <span style={{ fontFamily: font.family, ...font.appName, color: color.primary }}>
           Chimera++
         </span>
       </div>
 
-      <div style={{ width: hairline, height: 22, background: color.rule }} />
-
-      <div role="tablist" style={{ display: "flex", alignItems: "stretch", height: "100%", flex: 1 }}>
+      <span className="rail-label">{t("shell.workspaceShort")}</span>
+      <div role="tablist" aria-label={t("shell.tabsAriaLabel")} style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
         {TABS.map((tab) => {
           const on = active === tab.id;
           return (
@@ -69,14 +55,16 @@ export function TopRail({ active, onNavigate }: Props) {
               aria-selected={on}
               onClick={() => onNavigate(tab.id)}
               style={{
-                padding: "0 20px",
-                height: "100%",
-                background: "transparent",
+                width: "100%",
+                minHeight: 42,
+                padding: "0 12px",
+                background: on ? color.ink3 : "transparent",
                 border: "none",
-                borderBottom: `${indicator.tabUnderline}px solid ${on ? color.accent : "transparent"}`,
-                color: on ? color.primary : color.muted,
+                borderRadius: radius.sm,
+                color: on ? color.primary : color.secondary,
                 fontFamily: font.family,
                 ...(on ? font.uiStrong : font.ui),
+                textAlign: "left",
                 cursor: "pointer",
               }}
             >
@@ -86,25 +74,15 @@ export function TopRail({ active, onNavigate }: Props) {
         })}
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "0 20px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <div
-            style={{
-              width: size.dot,
-              height: size.dot,
-              borderRadius: "50%",
-              background: color.green,
-              flexShrink: 0,
-            }}
-          />
-          <span style={{ fontFamily: font.family, ...font.caption, color: color.muted }}>
-            {t("shell.statusReady")}
-</span>
-        </div>
-        <div style={{ width: hairline, height: 16, background: color.rule }} />
-        <span style={{ fontFamily: font.family, ...font.caption, color: color.dim }}>
-          v{appVersion}
-        </span>
+      <div className="rail-promo">
+        <strong>{t("shell.promoTitle")}</strong>
+        <span>{t("shell.promoCopy")}</span>
+        <i aria-hidden="true" />
+      </div>
+      <div className="rail-account">
+        <span className="rail-avatar" aria-hidden="true" />
+        <span><strong>{t("shell.localWorkspace")}</strong><small>{t("shell.loggedIn")}</small></span>
+        <span className="rail-chevron" aria-hidden="true">⌄</span>
       </div>
     </nav>
   );

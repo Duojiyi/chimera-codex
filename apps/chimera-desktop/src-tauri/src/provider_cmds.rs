@@ -24,8 +24,8 @@ use chimera_provider::probe::{probe_provider, validate_provider_url};
 use crate::dto::ProviderDto;
 use crate::state::AppState;
 
-/// ChimeraHub's fixed endpoint. Users supply only a key for this kind, so the
-/// URL is ours and never comes from input.
+/// Default endpoint for the built-in template. The user can edit it before
+/// saving; this value is only a convenience in the form.
 const CHIMERA_HUB_URL: &str = "https://api.chimerahub.org/v1";
 
 const LOCK_MSG: &str = "Internal state is locked. Restart Chimera++.";
@@ -41,7 +41,9 @@ fn service_name_for(id: Uuid) -> String {
 
 /// Add a provider, but only if it verifies.
 ///
-/// `base_url` is ignored for the ChimeraHub kind.
+/// `base_url` is accepted for every kind. ChimeraHub uses its default only when
+/// the caller leaves the field blank, which keeps the built-in template useful
+/// without making it a hidden hard-coded override.
 #[tauri::command]
 pub async fn add_provider(
     state: State<'_, AppState>,
@@ -61,20 +63,19 @@ pub async fn add_provider(
     }
 
     // ── Step 1: URL shape ────────────────────────────────────────────────────
-    let resolved_url = match kind {
-        ProviderKind::ChimeraHub => CHIMERA_HUB_URL.to_string(),
-        ProviderKind::Custom => {
-            let validated = validate_provider_url(&base_url, dev_mode)
-                .map_err(|e| crate::commands::url_error_message(&e))?;
-            // An origin-only URL exposes a /v1 candidate. Probing the origin
-            // would fail for most endpoints, so probe the candidate when the
-            // user gave no path — but persist exactly what we probed.
-            validated
-                .v1_candidate
-                .unwrap_or(validated.base_url)
-                .to_string()
-        }
+    let candidate_url = if base_url.trim().is_empty() && kind == ProviderKind::ChimeraHub {
+        CHIMERA_HUB_URL
+    } else {
+        base_url.trim()
     };
+    let validated = validate_provider_url(candidate_url, dev_mode)
+        .map_err(|e| crate::commands::url_error_message(&e))?;
+    // An origin-only URL exposes a /v1 candidate. Probing the origin would fail
+    // for most endpoints, so probe the candidate when the user gave no path.
+    let resolved_url = validated
+        .v1_candidate
+        .unwrap_or(validated.base_url)
+        .to_string();
 
     // ── Step 2: real network verification, nothing persisted yet ─────────────
     let outcome = probe_provider(&resolved_url, api_key.trim()).await;

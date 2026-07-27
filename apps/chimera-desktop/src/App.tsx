@@ -11,7 +11,7 @@ import { AppearanceFeature } from "@/features/appearance";
 import { SettingsFeature }   from "@/features/settings";
 import { TopRail }           from "@/shell/TopRail";
 import { FirstRun }          from "@/shell/FirstRun";
-import { I18nProvider }      from "@/i18n";
+import { I18nProvider, useI18n } from "@/i18n";
 import { FEATURES, type ActiveFeature } from "@/shell/nav";
 
 /**
@@ -43,15 +43,20 @@ export default function App() {
   return (
     <I18nProvider>
       {ready ? (
-        <div style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
-          <TopRail active={active} onNavigate={setActive} />
-          <main style={{ flex: 1, overflow: "hidden" }}>
-            {active === "home"       && <HomeFeature />}
-            {active === "providers"  && <ProvidersFeature />}
-            {active === "codex"      && <CodexFeature />}
-            {active === "appearance" && <AppearanceFeature />}
-            {active === "settings"   && <SettingsFeature />}
-          </main>
+        <div className="app-canvas">
+          <div className="app-window">
+            <WindowBar active={active} />
+            <div className="app-body">
+              <TopRail active={active} onNavigate={setActive} />
+              <main className="app-content">
+                {active === "home"       && <HomeFeature />}
+                {active === "providers"  && <ProvidersFeature />}
+                {active === "codex"      && <CodexFeature />}
+                {active === "appearance" && <AppearanceFeature />}
+                {active === "settings"   && <SettingsFeature />}
+              </main>
+            </div>
+          </div>
         </div>
       ) : (
         <div style={{ height: "100vh", overflow: "hidden" }}>
@@ -59,5 +64,21 @@ export default function App() {
         </div>
       )}
     </I18nProvider>
+  );
+}
+
+function WindowBar({ active }: { active: ActiveFeature }) {
+  const { t } = useI18n();
+  return (
+    <header className="window-bar">
+      <div className="window-bar-left">
+        <span className="window-lights" aria-hidden="true"><i /><i /><i /></span>
+        <span className="window-title">Chimera++ / {t("shell.workspaceShort")}</span>
+      </div>
+      <div className="window-bar-actions">
+        <span className="window-status"><i aria-hidden="true" />{t("shell.statusReady")}</span>
+        <button className="window-more" type="button" aria-label={t("shell.more")}>...</button>
+      </div>
+    </header>
   );
 }

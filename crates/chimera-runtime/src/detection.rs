@@ -21,6 +21,102 @@ pub enum DetectedRuntime {
     Unknown,
 }
 
+/// Scan the standard OS locations for an official/external Codex or ChatGPT
+/// desktop installation. This is read-only and deliberately returns an
+/// external ownership verdict so Chimera never mutates a user's official app.
+pub fn detect_external_runtime() -> Option<DetectedRuntime> {
+    #[cfg(windows)]
+    {
+        let mut roots = Vec::new();
+        if let Some(program_files) = std::env::var_os("ProgramFiles") {
+            roots.push(std::path::PathBuf::from(program_files).join("WindowsApps"));
+        }
+        if let Some(program_files) = std::env::var_os("ProgramW6432") {
+            roots.push(std::path::PathBuf::from(program_files).join("WindowsApps"));
+        }
+        roots.push(std::path::PathBuf::from(r"C:\Program Files\WindowsApps"));
+        for root in roots {
+            if let Some(found) = scan_external_root(&root, true) {
+                return Some(found);
+            }
+        }
+
+        let mut user_roots = Vec::new();
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            let local = std::path::PathBuf::from(local);
+            user_roots.extend([
+                local.join("OpenAI").join("ChatGPT"),
+                local.join("OpenAI.ChatGPT-Desktop"),
+                local.join("ChatGPT"),
+                local.join("Programs").join("ChatGPT"),
+                local.join("Programs").join("OpenAI").join("ChatGPT"),
+                local.join("OpenAI").join("Codex"),
+                local.join("OpenAI.Codex"),
+                local.join("Codex"),
+            ]);
+        }
+        if let Some(program_files) = std::env::var_os("ProgramFiles") {
+            user_roots.push(std::path::PathBuf::from(program_files).join("OpenAI").join("ChatGPT"));
+        }
+        for root in user_roots {
+            if let Some(found) = scan_external_root(&root, false) {
+                return Some(found);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        for root in [
+            std::path::PathBuf::from("/Applications/Codex.app"),
+            std::path::PathBuf::from("/Applications/ChatGPT.app"),
+        ] {
+            if root.exists() {
+                return Some(DetectedRuntime::ExternalPortable { path: root });
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(windows)]
+fn scan_external_root(root: &Path, msix: bool) -> Option<DetectedRuntime> {
+    let mut candidates = vec![root.join("app"), root.to_path_buf()];
+    if msix {
+        let entries = std::fs::read_dir(root).ok()?;
+        for entry in entries.flatten() {
+            let package = entry.path();
+            if !package.is_dir() { continue; }
+            let name = package.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+            if name.starts_with("OpenAI.Codex_") || name.starts_with("OpenAI.ChatGPT-") {
+                candidates.push(package.join("app"));
+                candidates.push(package);
+            }
+        }
+    }
+    let exe_names = ["Codex.exe", "ChatGPT.exe", "codex.exe"];
+    for candidate in candidates {
+        if !candidate.is_dir() {
+            continue;
+        }
+        if exe_names.iter().any(|name| candidate.join(name).exists()) || msix && candidate.file_name().is_some_and(|name| name == "app") {
+            let version = candidate
+                .parent()
+                .and_then(|path| path.file_name())
+                .and_then(|name| name.to_str())
+                .map(|name| name.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            return if msix {
+                Some(DetectedRuntime::ExternalMsix { version, path: candidate })
+            } else {
+                Some(DetectedRuntime::ExternalPortable { path: candidate })
+            };
+        }
+    }
+    None
+}
+
 #[derive(Debug, Error)]
 pub enum OwnershipError {
     #[error("path traversal detected: {0:?}")]

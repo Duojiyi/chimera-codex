@@ -33,20 +33,21 @@ const fail = (m) => {
   failures += 1;
 };
 
-// ── Ground truth: values read out of the .pen design file ────────────────────
-// Source: chimera-v2-screens.pen, frames Home/Providers/Codex/Appearance/Settings.
+// ── Ground truth: values read out of the current Soft Bento .pen file ───────
+// Source: pencil-new.pen, frame 04 Overview - Soft Bento. The compact
+// product palette is intentionally kept here as a mechanical CI contract.
 // Any change here must come from the design file, never from a guess.
 const PEN_COLORS = {
-  ink0: "#0C0C0C",
-  ink1: "#111111",
-  ink2: "#181818",
-  ink3: "#222222",
-  rule: "#282828",
-  primary: "#EBEBEB",
-  accent: "#FF4D3D",
-  green: "#34C759",
-  amber: "#FF9F0A",
-  danger: "#FF453A",
+  ink0: "#A8CFD2",
+  ink1: "#E8F3F0",
+  ink2: "#F7F9F8",
+  ink3: "#FFFFFF",
+  rule: "#D6E4E2",
+  primary: "#182526",
+  accent: "#192626",
+  green: "#35A96B",
+  amber: "#E8B657",
+  danger: "#C85252",
 };
 
 // Deliberate WCAG 2.2 AA overrides of the .pen text greys. The design file's
@@ -56,9 +57,9 @@ const PEN_COLORS = {
 // the divergence stays visible, and the contrast check below proves the
 // replacement actually earns its place — a wrong value fails the gate.
 const A11Y_OVERRIDES = {
-  secondary: { pen: "#999999", use: "#B8B8B8" },
-  muted: { pen: "#5E5E5E", use: "#9A9A9A" },
-  dim: { pen: "#3A3A3A", use: "#8A8A8A" },
+  secondary: { pen: "#657778", use: "#375456" },
+  muted: { pen: "#718283", use: "#3A595C" },
+  dim: { pen: "#7C8E8E", use: "#345154" },
 };
 
 /**
@@ -67,10 +68,10 @@ const A11Y_OVERRIDES = {
  * pass while failing on a panel or a selected row.
  */
 const SURFACES = {
-  ink0: "#0C0C0C",
-  ink1: "#111111",
-  ink2: "#181818",
-  ink3: "#222222",
+  ink0: "#A8CFD2",
+  ink1: "#E8F3F0",
+  ink2: "#F7F9F8",
+  ink3: "#FFFFFF",
 };
 const AA_NORMAL = 4.5;
 
@@ -90,14 +91,14 @@ function contrastRatio(a, b) {
 
 // Display-size anchors: each screen's single largest type element.
 const PEN_ANCHORS = {
-  hero: 88,          // Home — provider name
-  version: 72,       // Codex — managed runtime version
-  detailTitle: 44,   // Providers — detail title
-  pageTitle: 36,     // Settings — page title
-  skinTitle: 30,     // Appearance — skin detail title
+  hero: 42,          // Home — provider name
+  version: 48,       // Codex — managed runtime version
+  detailTitle: 28,   // Providers — detail title
+  pageTitle: 28,     // Settings — page title
+  skinTitle: 24,     // Appearance — skin detail title
 };
 
-const PEN_RAIL_HEIGHT = 48;
+const PEN_RAIL_HEIGHT = 58;
 const PEN_EYEBROW_TRACKING = 1.5;
 
 // ── 1. tokens.ts must exist and match the .pen values ───────────────────────

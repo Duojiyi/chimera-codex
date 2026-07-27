@@ -2,7 +2,7 @@
 // G12: No direct file I/O. State from hooks; actions via Tauri invoke.
 // Layout: 1:1 implementation of the Pencil `Providers` screen spec.
 // Every dimension/colour comes from src/design/tokens.ts — no literals here.
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import type { ProviderEntry, ProviderHealth, ProviderListState } from "./lib/providerState.ts";
 import {
   createInitialState, addProvider, switchProvider,
@@ -101,8 +101,10 @@ export function ProvidersFeature() {
   async function handleAdd() {
     let errors: string[] = [];
     if (addKind === "chimera_hub") {
-      const err = validateChimeraHubKey(keyInput);
-      if (err) errors.push(err.message);
+      const keyError = validateChimeraHubKey(keyInput);
+      if (keyError) errors.push(keyError.message);
+      errors = errors.concat(validateCustomProviderInput({ url: urlInput, apiKey: "chimera-key-placeholder" })
+        .filter(e => e.field === "url" && e.severity === "error").map(e => e.message));
     } else {
       errors = validateCustomProviderInput({ url: urlInput, apiKey: keyInput })
         .filter(e => e.severity === "error").map(e => e.message);
@@ -115,7 +117,7 @@ export function ProvidersFeature() {
       // The key crosses IPC exactly once, here, and is never stored client-side.
       const dto = await invoke("add_provider", {
         kind: addKind,
-        baseUrl: addKind === "chimera_hub" ? "https://api.chimerahub.org/v1" : urlInput.trim(),
+        baseUrl: urlInput.trim(),
         apiKey: keyInput,
         devMode: false,
       }) as {
@@ -203,7 +205,7 @@ export function ProvidersFeature() {
           </span>
           <span style={{ flex: 1 }} />
           <button
-            onClick={() => setShowAdd(true)}
+            onClick={() => { setShowAdd(true); setAddKind("chimera_hub"); setUrlInput("https://api.chimerahub.org/v1"); setFormErrors([]); }}
             aria-label={t("providers.addAriaLabel")}
             style={{
               background: color.ink3, color: color.primary, border: `${hairline}px solid ${color.rule}`,
@@ -261,7 +263,7 @@ export function ProvidersFeature() {
         {showAdd ? (
           <AddProviderForm
             kind={addKind} urlValue={urlInput} keyValue={keyInput} errors={formErrors}
-            onKindChange={setAddKind} onUrlChange={setUrlInput} onKeyChange={setKeyInput}
+            onKindChange={(kind) => { setAddKind(kind); if (kind === "chimera_hub" && !urlInput.trim()) setUrlInput("https://api.chimerahub.org/v1"); }} onUrlChange={setUrlInput} onKeyChange={setKeyInput}
             onSubmit={handleAdd} onCancel={() => { setShowAdd(false); setFormErrors([]); }}
           />
         ) : active ? (
@@ -290,7 +292,7 @@ function AddProviderForm(props: {
   onSubmit: () => void; onCancel: () => void;
 }) {
   const { t } = useI18n();
-  const inp: React.CSSProperties = {
+  const inp: CSSProperties = {
     width: "100%", background: color.ink2, border: `${hairline}px solid ${color.rule}`,
     borderRadius: radius.sm, color: color.primary, padding: "8px 12px", fontSize: 13,
     fontFamily: type.family, boxSizing: "border-box",
@@ -314,8 +316,7 @@ function AddProviderForm(props: {
           <option value="custom">{t("providers.optionCustom")}</option>
         </select>
       </div>
-      {props.kind === "custom" && (
-        <div style={{ marginBottom: 16 }}>
+      <div style={{ marginBottom: 16 }}>
           <label htmlFor="add-url" style={{ fontSize: 12, color: color.muted, display: "block", marginBottom: 6 }}>
             {t("providers.fieldBaseUrl")}
           </label>
@@ -323,8 +324,8 @@ function AddProviderForm(props: {
             id="add-url" type="url" value={props.urlValue} onChange={e => props.onUrlChange(e.target.value)}
             placeholder={t("providers.urlPlaceholder")} style={inp}
           />
-        </div>
-      )}
+          {props.kind === "chimera_hub" && <span style={{ display: "block", marginTop: 5, fontSize: 11, color: color.muted }}>{t("providers.optionChimeraHub")}</span>}
+      </div>
       <div style={{ marginBottom: 16 }}>
         <label htmlFor="add-key" style={{ fontSize: 12, color: color.muted, display: "block", marginBottom: 6 }}>
           {t("providers.fieldApiKey")}
