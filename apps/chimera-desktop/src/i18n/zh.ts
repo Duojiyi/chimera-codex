@@ -96,6 +96,7 @@ export const zh = {
   "providers.fieldHealth": "健康度",
   "providers.testAria": "测试与 {0} 的连接",
   "providers.deleteAria": "删除供应商 {0}",
+  "providers.deleteFailed": "无法删除该供应商，请重试。",
   "providers.confirmDelete": "删除 {0}？",
   "providers.verifying": "正在验证连接…",
   "providers.verifyFailed": "验证失败，未添加该供应商。",

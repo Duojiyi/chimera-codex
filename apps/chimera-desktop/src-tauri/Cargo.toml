@@ -24,12 +24,14 @@ tauri-plugin-dialog = "2"
 directories.workspace = true
 url.workspace = true
 uuid.workspace = true
+toml_edit.workspace = true
 chimera-domain = { path = "../../../crates/chimera-domain" }
 chimera-provider = { path = "../../../crates/chimera-provider" }
 chimera-migration = { path = "../../../crates/chimera-migration" }
 chimera-theme = { path = "../../../crates/chimera-theme" }
 chimera-runtime = { path = "../../../crates/chimera-runtime" }
 chimera-platform = { path = "../../../crates/chimera-platform" }
+chimera-update = { path = "../../../crates/chimera-update" }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

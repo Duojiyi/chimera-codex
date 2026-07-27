@@ -10,6 +10,7 @@ description = "Chimera++ 2.0 — read-only 1.x/CC Switch import, external manage
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+rusqlite = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 url = { workspace = true }

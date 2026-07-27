@@ -16,9 +16,13 @@ sha2 = { workspace = true }
 # single streamed file, not something that benefits from an async runtime, and
 # pulling one in here would push it into every caller.
 reqwest = { workspace = true, features = ["blocking"] }
+# Unpacking the verified payload. `deflate` only: the extra methods are more
+# decoder surface for no benefit, since we control what the mirror publishes.
+zip = { workspace = true }
 chimera-domain = { path = "../chimera-domain" }
 chimera-platform = { path = "../chimera-platform" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 sha2 = { workspace = true }
+zip = { workspace = true }

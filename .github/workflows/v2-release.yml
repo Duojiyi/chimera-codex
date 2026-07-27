@@ -49,9 +49,19 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+
       - name: Install frontend dependencies
         working-directory: ${{ env.FRONTEND_DIR }}
         run: npm ci
+
+      - name: Run V2 Rust tests
+        run: cargo test --locked -p chimera-domain -p chimera-platform -p chimera-provider -p chimera-runtime -p chimera-theme -p chimera-migration -p chimera-update -p mirror-contract
+
+      - name: Run frontend typecheck and unit tests
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npm run check; npm test
 
       - name: V9 mirror contract
         run: node scripts/test-mirror-contract.mjs
@@ -114,7 +124,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/windows
-          find target/release/bundle/nsis -name '*-setup.exe' -exec cp {} dist/windows/ \;
+          installer="$(find target/release/bundle/nsis -name '*-setup.exe' -print -quit)"
+          test -n "$installer"
+          version="${GITHUB_REF_NAME#v}"
+          cp "$installer" "dist/windows/ChimeraPlusPlus-${version}-windows-x64-setup.exe"
           cp NOTICE LICENSE dist/windows/
           cd dist/windows && sha256sum * > checksums.txt
           ls -la
@@ -184,7 +197,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/macos
-          find target/${{ matrix.target }}/release/bundle/dmg -name '*.dmg' -exec cp {} dist/macos/ \;
+          dmg="$(find target/${{ matrix.target }}/release/bundle/dmg -name '*.dmg' -print -quit)"
+          test -n "$dmg"
+          version="${GITHUB_REF_NAME#v}"
+          cp "$dmg" "dist/macos/ChimeraPlusPlus-${version}-macos-${{ matrix.arch }}.dmg"
           cp NOTICE LICENSE dist/macos/
           cd dist/macos && shasum -a 256 * > checksums.txt
           ls -la
@@ -233,16 +249,38 @@ jobs:
           MINIMUM_SUPPORTED_VERSION: ${{ vars.MINIMUM_SUPPORTED_VERSION }}
         run: node scripts/v2-release-manifest.mjs --dist dist --out dist/chimera-app-latest.json
 
-      # Absent key => unsigned manifest, loudly. Making this a visible branch
-      # rather than an omission is the whole point: an unsigned release must be
-      # a decision someone can see in the log, not something nobody noticed.
+      - name: Build legacy updater manifest
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          if [[ "$version" != *-chimera.* ]]; then
+            echo "error: release tag must use the legacy-compatible x.y.z-chimera.n form" >&2
+            exit 1
+          fi
+          mkdir -p release-assets
+          find dist -type f -name 'ChimeraPlusPlus-*.exe' -exec cp {} release-assets/ \;
+          find dist -type f -name 'ChimeraPlusPlus-*.dmg' -exec cp {} release-assets/ \;
+          MINIMUM_SUPPORTED_VERSION="$version" node scripts/release-manifest.mjs --generate release-assets
+
+      # Stable releases fail closed without the production app trust key. A
+      # beta build may be published unsigned solely for manual QA; the client
+      # must refuse it for automatic installation and the release is marked
+      # prerelease below.
       - name: Sign manifest
         env:
           CHIMERA_APP_SIGNING_KEY: ${{ secrets.CHIMERA_APP_SIGNING_KEY }}
+          TAG: ${{ github.ref_name }}
         run: |
           if [ -z "${CHIMERA_APP_SIGNING_KEY:-}" ]; then
-            echo "::warning::CHIMERA_APP_SIGNING_KEY is not set — publishing an UNSIGNED update manifest."
-            echo "::warning::Clients that require a signature will refuse this release. See ADR-008."
+            if [[ "$TAG" != *-beta.* && "$TAG" != *-alpha.* && "$TAG" != *-rc.* ]]; then
+              echo "error: CHIMERA_APP_SIGNING_KEY is required for a stable release" >&2
+              exit 1
+            fi
+            echo "::warning::publishing an unsigned prerelease for manual QA only"
             exit 0
           fi
           node scripts/sign-manifest.mjs \
@@ -253,7 +291,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: chimera-manifest
-          path: dist/chimera-app-latest.json*
+          path: |
+            dist/chimera-app-latest.json*
+            latest.json
           if-no-files-found: error
 
   publish:
@@ -278,9 +318,14 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          prerelease_flag=""
+          if [[ "$TAG" == *-beta.* || "$TAG" == *-alpha.* || "$TAG" == *-rc.* ]]; then
+            prerelease_flag="--prerelease"
+          fi
           gh release create "$TAG" \
             --repo "${{ github.repository }}" \
             --draft \
             --title "Chimera++ $TAG" \
-            --notes "Unsigned build (see ADR-008). Windows: SmartScreen will warn on first run. macOS: right-click → Open, the app is ad-hoc signed and not notarized." \
+            $prerelease_flag \
+            --notes "Cloud-built Chimera++ $TAG. Prereleases are for manual QA; automatic updates require a signed app manifest. Windows: SmartScreen may warn on first run. macOS: right-click → Open for the ad-hoc build." \
             $(find dist -type f | tr '\n' ' ')

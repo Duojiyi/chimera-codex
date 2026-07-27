@@ -61,14 +61,21 @@ pub fn get_system_status(state: State<'_, AppState>) -> Result<SystemStatusDto, 
         .list_all()
         .map_err(|_| "Could not read the provider list. Run Diagnose.".to_string())?;
 
-    // Official mode = no provider row is marked active. Task 6 will persist the
-    // active id; until then an empty list means official login is in use.
-    let active = rows.first();
+    // The first row is the active marker maintained by ProviderDb. The
+    // projection flag is the source of truth for Official mode, so a provider
+    // list can exist without implying that one is currently selected.
+    let projection_active = fs::read_to_string(state.paths.codex_config())
+        .ok()
+        .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok())
+        .and_then(|doc| doc.get("chimera_managed").and_then(|v| v.as_bool()))
+        .unwrap_or(false);
+    let active = projection_active.then(|| rows.first()).flatten();
 
     let health = check_runtime_health(&state.runtime);
 
     Ok(SystemStatusDto {
         provider_name: active.map(|r| r.display_name.clone()),
+        active_provider_id: active.map(|r| r.id.to_string()),
         provider_health: active
             .map(|r| format!("{:?}", r.health).to_lowercase())
             .unwrap_or_else(|| "unknown".to_string()),
@@ -165,10 +172,8 @@ pub fn url_error_message(e: &UrlValidationError) -> String {
 
 /// Switch the live provider, or pass `null` to restore official login.
 ///
-/// Not yet wired to SwitchTransaction: Task 6 connects the CAS transaction so
-/// the command is transactional end to end. Returning an explicit error is
-/// deliberate — a silent success here would make the UI lie about the live
-/// config, which is worse than a visible "not yet available".
+/// The command delegates the file mutation to the CAS transaction and only
+/// updates the provider ordering after the projection commits successfully.
 #[tauri::command]
 pub fn switch_provider(
     provider_id: Option<String>,
@@ -229,7 +234,16 @@ pub fn switch_provider(
     };
 
     match tx.execute(&projection, &state.keychain, &secret_ref) {
-        Ok(TransactionOutcome::Committed) => Ok(()),
+        Ok(TransactionOutcome::Committed) => {
+            let db = state
+                .db
+                .lock()
+                .map_err(|_| "Internal state is locked. Restart Chimera++.".to_string())?;
+            db.mark_active(id).map_err(|_| {
+                "Provider switched, but its active state could not be saved.".to_string()
+            })?;
+            Ok(())
+        }
         // CAS caught a write between snapshot and commit. Nothing was changed,
         // so the honest response is to ask for a retry rather than clobber it.
         Ok(TransactionOutcome::Conflict(_)) => Err(
@@ -245,6 +259,9 @@ fn restore_official(state: &State<'_, AppState>) -> Result<(), String> {
     let config_path = state.paths.codex_config();
     if !config_path.exists() {
         // Nothing was ever projected, so official mode is already the state.
+        if let Ok(db) = state.db.lock() {
+            let _ = db.clear_active();
+        }
         return Ok(());
     }
 
@@ -259,7 +276,11 @@ fn restore_official(state: &State<'_, AppState>) -> Result<(), String> {
         .map_err(|e| format!("Could not update Codex's config.toml: {e}"))?;
 
     atomic_write(&config_path, &reverted)
-        .map_err(|e| format!("Could not write Codex's config.toml: {e}"))
+        .map_err(|e| format!("Could not write Codex's config.toml: {e}"))?;
+    if let Ok(db) = state.db.lock() {
+        let _ = db.clear_active();
+    }
+    Ok(())
 }
 
 /// Write via temp file + rename so a crash can never leave a partial config.

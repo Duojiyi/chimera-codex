@@ -145,9 +145,23 @@ impl AppState {
     /// read failure, and a missing or corrupt file is a recoverable state, not
     /// a reason to refuse to start.
     pub fn settings(&self) -> crate::dto::SettingsDto {
-        std::fs::read_to_string(self.paths.settings())
+        let text = match std::fs::read_to_string(self.paths.settings()) {
+            Ok(text) => text,
+            Err(_) => return crate::dto::SettingsDto::default(),
+        };
+
+        // Settings are stored by chimera-update::AtomicStore as a versioned
+        // envelope. Keep a plain JSON fallback for the one-time 1.x migration
+        // and for a startup path that must remain available before Tauri
+        // commands can surface a recovery message.
+        serde_json::from_str::<crate::dto::SettingsDto>(&text)
             .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
+            .or_else(|| {
+                serde_json::from_str::<serde_json::Value>(&text)
+                    .ok()
+                    .and_then(|value| value.get("data").cloned())
+                    .and_then(|value| serde_json::from_value(value).ok())
+            })
             .unwrap_or_default()
     }
 }

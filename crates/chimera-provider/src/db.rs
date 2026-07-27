@@ -148,6 +148,25 @@ impl ProviderDb {
         Ok(())
     }
 
+    /// Put one provider first in the stable list so the active projection can
+    /// be recovered after a restart without storing a credential in settings.
+    pub fn mark_active(&self, id: Uuid) -> rusqlite::Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("UPDATE providers SET sort_order = sort_order + 1", [])?;
+        tx.execute(
+            "UPDATE providers SET sort_order = 0 WHERE id = ?1",
+            [id.to_string()],
+        )?;
+        tx.commit()
+    }
+
+    /// Remove the active marker while preserving deterministic provider order.
+    pub fn clear_active(&self) -> rusqlite::Result<()> {
+        self.conn
+            .execute("UPDATE providers SET sort_order = sort_order + 1", [])?;
+        Ok(())
+    }
+
     pub fn delete(&self, id: Uuid) -> rusqlite::Result<()> {
         self.conn
             .execute("DELETE FROM providers WHERE id=?1", [id.to_string()])?;

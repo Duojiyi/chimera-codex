@@ -574,6 +574,7 @@ dependencies = [
  "chimera-provider",
  "chimera-runtime",
  "chimera-theme",
+ "chimera-update",
  "directories",
  "fs2",
  "serde",
@@ -581,6 +582,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "toml_edit",
  "tempfile",
  "url",
  "uuid",
@@ -659,6 +661,7 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
+ "zip",
 ]
 
 [[package]]

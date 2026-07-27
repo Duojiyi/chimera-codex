@@ -146,6 +146,21 @@ pub fn delete_provider(state: State<'_, AppState>, provider_id: String) -> Resul
         .map_err(|e| format!("Could not read the provider: {e}"))?
         .ok_or_else(|| "That provider no longer exists.".to_string())?;
 
+    let projection_active = std::fs::read_to_string(state.paths.codex_config())
+        .ok()
+        .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok())
+        .and_then(|doc| doc.get("chimera_managed").and_then(|v| v.as_bool()))
+        .unwrap_or(false);
+    let is_active = projection_active
+        && db
+            .list_all()
+            .ok()
+            .and_then(|rows| rows.first().map(|active| active.id == id))
+            .unwrap_or(false);
+    if is_active {
+        return Err("Switch to Official Codex before deleting the active provider.".to_string());
+    }
+
     if let Some(ref r) = row.secret_ref {
         // Idempotent by contract, so an already-absent credential is fine.
         let _ = state.keychain.delete(&SecretRef::new(r.clone()));

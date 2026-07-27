@@ -1,7 +1,7 @@
 {
   "productName": "Chimera++",
-  "version": "2.0.0",
-  "identifier": "io.chimerahub.chimera-desktop",
+  "version": "2.0.0-chimera.1",
+  "identifier": "com.bigpizzav3.codexplusplus.manager",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://127.0.0.1:1421",

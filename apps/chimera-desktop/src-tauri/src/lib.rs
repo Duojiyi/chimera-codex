@@ -58,6 +58,7 @@ pub fn run() {
             // First run: preflight before anything is touched, then fetch.
             bootstrap_cmds::run_preflight,
             bootstrap_cmds::fetch_codex_payload,
+            bootstrap_cmds::install_codex_payload,
             // Portable install: what it cannot do, and how to remove it. There
             // is no Apps & Features entry, so this is the whole uninstall path.
             // 1.x / CC Switch migration: preview reads only, run writes.

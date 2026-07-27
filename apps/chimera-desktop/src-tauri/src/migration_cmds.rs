@@ -210,13 +210,13 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// Where CC Switch keeps its config on this platform.
+/// Where current CC Switch releases keep their provider database.
 ///
-/// A best-effort location: if CC Switch is not installed the file simply is not
-/// there, and `read_ccswitch_inventory` reports that as "no source" rather than
-/// an error.
+/// The importer opens this path read-only. A missing database is a normal
+/// "nothing to import" state; an existing but locked/corrupt one is surfaced
+/// as a warning so the user can close CC Switch and retry.
 fn ccswitch_config_path(home: &std::path::Path) -> PathBuf {
-    home.join(".cc-switch").join("config.json")
+    home.join(".cc-switch").join("cc-switch.db")
 }
 
 fn host_of(raw: &str) -> String {

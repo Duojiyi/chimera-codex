@@ -2,7 +2,7 @@
 // G12: No direct file I/O. State from hooks; actions via Tauri invoke.
 // Layout: 1:1 implementation of the Pencil `Providers` screen spec.
 // Every dimension/colour comes from src/design/tokens.ts — no literals here.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ProviderEntry, ProviderHealth, ProviderListState } from "./lib/providerState.ts";
 import {
   createInitialState, addProvider, switchProvider,
@@ -15,8 +15,10 @@ import { color, type, size, radius, hairline, indicator, ruleOpacity } from "../
 import { useI18n, type TranslationKey } from "../../i18n/index.tsx";
 
 const invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> =
-  typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__
-    ? (window as any).__TAURI_INTERNALS__.invoke
+  typeof window !== "undefined" &&
+  (window as { __TAURI_INTERNALS__?: { invoke?: unknown } }).__TAURI_INTERNALS__?.invoke
+    ? (window as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } })
+        .__TAURI_INTERNALS__.invoke
     : async () => undefined;
 
 /** PDot colour: healthy → green, degraded/unknown → amber, failed → danger. */
@@ -49,6 +51,48 @@ export function ProvidersFeature() {
   const [formErrors, setFormErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const active = selectActive(state);
+
+  // Hydrate the list from the provider database on every visit. Keeping the
+  // initial state in memory only made a restart look like all providers had
+  // disappeared and made the first click on "switch" a no-op.
+  useEffect(() => {
+    let cancelled = false;
+    void invoke("list_providers").then((raw) => {
+      if (cancelled || !Array.isArray(raw)) return;
+      const providers: ProviderEntry[] = raw.map((row, index) => {
+        const item = row as {
+          id?: string; displayName?: string; kind?: string; baseUrl?: string;
+          health?: string; selectedModel?: string | null;
+        };
+        return {
+          id: item.id ?? `provider-${index}`,
+          displayName: item.displayName ?? "Provider",
+          kind: item.kind === "chimerahub" || item.kind === "chimera_hub" ? "chimera_hub" : "custom",
+          baseUrl: item.baseUrl ?? "",
+          protocol: "responses",
+          secretRef: null,
+          selectedModel: item.selectedModel ?? null,
+          health: (item.health as ProviderHealth) ?? "unknown",
+          sortOrder: index,
+        };
+      });
+      setState({
+        providers,
+        activeId: providers[0]?.id ?? null,
+        officialMode: providers.length === 0,
+      });
+      void invoke("get_system_status").then((statusRaw) => {
+        if (cancelled || !statusRaw || typeof statusRaw !== "object") return;
+        const status = statusRaw as { activeProviderId?: string | null; officialMode?: boolean };
+        setState((current) => ({
+          ...current,
+          activeId: status.activeProviderId ?? null,
+          officialMode: status.officialMode ?? current.providers.length === 0,
+        }));
+      });
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   // Spec 7.1: a provider is verified BEFORE it is activated. The client-side
   // checks below are only a fast pre-filter; the authoritative step is the
@@ -109,7 +153,7 @@ export function ProvidersFeature() {
 
   async function handleSwitch(id: string | null) {
     setBusy(true);
-    try { await invoke("switch_provider", { id }); setState(s => switchProvider(s, id)); }
+    try { await invoke("switch_provider", { providerId: id }); setState(s => switchProvider(s, id)); }
     catch (err) { console.error("switch failed", err); }
     finally { setBusy(false); }
   }
@@ -117,11 +161,23 @@ export function ProvidersFeature() {
   async function handleTest(id: string) {
     setBusy(true);
     try {
-      const result = await invoke("test_provider", { id }) as { health?: ProviderHealth } | undefined;
+      const result = await invoke("test_existing_provider", { providerId: id }) as { health?: ProviderHealth } | undefined;
       setState(s => setHealth(s, id, result?.health ?? "unknown"));
     } catch (err) {
       console.error("test failed", err);
       setState(s => setHealth(s, id, "unreachable"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    setBusy(true);
+    try {
+      await invoke("delete_provider", { providerId: id });
+      setState(s => deleteProvider(s, id));
+    } catch (err) {
+      setFormErrors([err instanceof Error ? err.message : t("providers.deleteFailed")]);
     } finally {
       setBusy(false);
     }
@@ -211,7 +267,7 @@ export function ProvidersFeature() {
         ) : active ? (
           <ProviderDetail
             provider={active} busy={busy}
-            onDelete={id => setState(s => deleteProvider(s, id))}
+            onDelete={handleDelete}
             onTest={handleTest}
           />
         ) : (

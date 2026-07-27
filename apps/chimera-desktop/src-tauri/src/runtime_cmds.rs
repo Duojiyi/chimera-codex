@@ -10,9 +10,37 @@ use tauri::State;
 use chimera_runtime::detection::{DetectedRuntime, detect_runtime};
 use chimera_runtime::health::check_runtime_health;
 use chimera_runtime::update::{UpdateError, rollback_to_last_known};
+use chimera_update::atomic::{AtomicError, AtomicStore, Migratable};
 
 use crate::dto::{DiagnosticEntryDto, RuntimeStatusDto, SettingsDto, VersionEntryDto};
 use crate::state::AppState;
+
+impl Migratable for SettingsDto {
+    const CURRENT_VERSION: u32 = 1;
+
+    fn upgrade(from_version: u32, value: serde_json::Value) -> Option<Self> {
+        (from_version == 0).then(|| serde_json::from_value(value).ok())?
+    }
+}
+
+fn settings_store(state: &AppState) -> AtomicStore<SettingsDto> {
+    AtomicStore::new(state.paths.settings())
+}
+
+fn settings_error(error: AtomicError) -> String {
+    match error {
+        AtomicError::FutureSchema { .. } => {
+            "Settings were saved by a newer Chimera++ version. Update Chimera++ before editing them."
+                .to_string()
+        }
+        AtomicError::Corrupt => {
+            "The settings file is damaged and its backup could not be recovered. Reset settings to continue."
+                .to_string()
+        }
+        AtomicError::Io(_) => "Could not access the settings file.".to_string(),
+        AtomicError::Encode => "Could not encode the settings.".to_string(),
+    }
+}
 
 /// Full state for the Codex screen.
 ///
@@ -193,31 +221,33 @@ pub fn apply_codex_update(_version: Option<String>) -> Result<(), String> {
 /// would be the worse outcome.
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> Result<SettingsDto, String> {
-    let path = state.paths.settings();
-    if !path.exists() {
-        return Ok(SettingsDto::default());
+    let store = settings_store(&state);
+    match store.read() {
+        Ok(Some(settings)) => Ok(settings),
+        Ok(None) => Ok(SettingsDto::default()),
+        Err(AtomicError::Corrupt) => {
+            // One-time migration for the 1.x plain JSON shape. Once read, it
+            // is immediately rewritten into the versioned, backed-up store.
+            let legacy = std::fs::read_to_string(state.paths.settings())
+                .ok()
+                .and_then(|text| serde_json::from_str::<SettingsDto>(&text).ok());
+            if let Some(settings) = legacy {
+                store.write(&settings).map_err(settings_error)?;
+                return Ok(settings);
+            }
+            Err(settings_error(AtomicError::Corrupt))
+        }
+        Err(error) => Err(settings_error(error)),
     }
-    let text = std::fs::read_to_string(&path)
-        .map_err(|_| "Could not read the settings file.".to_string())?;
-    Ok(serde_json::from_str(&text).unwrap_or_default())
 }
 
 /// Persist settings with an atomic replace, so a crash mid-write cannot leave a
 /// truncated file behind.
 #[tauri::command]
 pub fn save_settings(settings: SettingsDto, state: State<'_, AppState>) -> Result<(), String> {
-    let path = state.paths.settings();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|_| "Could not create the settings directory.".to_string())?;
-    }
-    let json = serde_json::to_string_pretty(&settings)
-        .map_err(|_| "Could not serialise settings.".to_string())?;
-
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json).map_err(|_| "Could not write settings.".to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|_| "Could not replace the settings file.".to_string())?;
-    Ok(())
+    settings_store(&state)
+        .write(&settings)
+        .map_err(settings_error)
 }
 
 /// Restore defaults by removing the settings file. Always succeeds when the
@@ -225,8 +255,14 @@ pub fn save_settings(settings: SettingsDto, state: State<'_, AppState>) -> Resul
 #[tauri::command]
 pub fn reset_settings(state: State<'_, AppState>) -> Result<(), String> {
     let path = state.paths.settings();
-    if path.exists() {
-        std::fs::remove_file(&path).map_err(|_| "Could not reset settings.".to_string())?;
+    for sibling in [
+        path.clone(),
+        path.with_extension("json.bak"),
+        path.with_extension("json.tmp"),
+    ] {
+        if sibling.exists() {
+            std::fs::remove_file(&sibling).map_err(|_| "Could not reset settings.".to_string())?;
+        }
     }
     Ok(())
 }

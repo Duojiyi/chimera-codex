@@ -1,17 +1,12 @@
 //! Step 7.2 — Read-only import of CC Switch's Codex providers.
 //!
 //! CC Switch (farion1231/cc-switch, registered in THIRD_PARTY_SOURCES.md) is
-//! a third-party tool. This reader models its on-disk config as a JSON file
-//! under the user profile, per this task's design notes, with a container
-//! shape (`apps.<app_type>.{providers, current}`) and a per-provider payload
-//! shape (`baseUrl`/`apiKey`/`apiFormat`/`config`/`auth`) carried over from
-//! the ALREADY-SHIPPED 1.x importer at
-//! `crates/codex-plus-core/src/ccs_import.rs`, which parses that identical
-//! payload out of a SQLite column instead of a JSON file. That inner shape is
-//! real and confirmed; the outer JSON-file container is a best-effort
-//! reconstruction and should be checked against a real CC Switch install
-//! before this reader is wired into the desktop shell (see this crate's
-//! final report, "Integration needed").
+//! a third-party tool. Current releases keep providers in a SQLite database
+//! at `~/.cc-switch/cc-switch.db`; older builds and fixtures used a JSON
+//! container (`apps.<app_type>.{providers, current}`). Both are read-only here
+//! and share the same per-provider extraction rules. The database is opened
+//! with `SQLITE_OPEN_READ_ONLY`, so importing can never modify CC Switch's
+//! state or contend for a write lock.
 //!
 //! Unknown container shapes fail closed (`CcSwitchReadError::UnknownSchema`)
 //! rather than being silently treated as empty, and nothing here ever opens
@@ -19,12 +14,14 @@
 
 use crate::legacy_source::LegacyProtocol;
 use crate::secret::RedactedSecret;
+use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 use std::path::PathBuf;
 use thiserror::Error;
 
-/// Where CC Switch's config file lives. Supplied by the caller — this crate
-/// never resolves a real user profile itself.
+/// Where CC Switch's source file lives. Supplied by the caller — this crate
+/// never resolves a real user profile itself. Current CC Switch releases use
+/// SQLite; the JSON reader remains for older installations and fixtures.
 #[derive(Debug, Clone)]
 pub struct CcSwitchSourcePaths {
     pub config_path: PathBuf,
@@ -99,6 +96,14 @@ pub enum CcSwitchReadError {
 pub fn read_ccswitch_inventory(
     paths: &CcSwitchSourcePaths,
 ) -> Result<Option<CcSwitchInventory>, CcSwitchReadError> {
+    if paths
+        .config_path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("db"))
+    {
+        return read_sqlite_inventory(paths);
+    }
+
     let text = match std::fs::read_to_string(&paths.config_path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -179,6 +184,106 @@ pub fn read_ccswitch_inventory(
     Ok(Some(inventory))
 }
 
+/// Read the schema used by current CC Switch builds without taking a write
+/// lock. The query is intentionally narrow: only Codex rows are imported and
+/// settings_config is parsed using the same field extraction as the legacy
+/// JSON reader.
+fn read_sqlite_inventory(
+    paths: &CcSwitchSourcePaths,
+) -> Result<Option<CcSwitchInventory>, CcSwitchReadError> {
+    let conn =
+        match Connection::open_with_flags(&paths.config_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+            Ok(conn) => conn,
+            Err(e) if matches!(e, rusqlite::Error::SqliteFailure(_, _)) => {
+                return Err(CcSwitchReadError::SourceUnavailable(
+                    "the database is unavailable or uses an unsupported schema".to_string(),
+                ));
+            }
+            Err(_) => {
+                return Err(CcSwitchReadError::SourceUnavailable(
+                    "the database could not be opened".to_string(),
+                ));
+            }
+        };
+
+    let mut statement = conn
+        .prepare(
+            "SELECT id, name, settings_config
+             FROM providers
+             WHERE app_type = 'codex'
+             ORDER BY COALESCE(sort_index, 999999), created_at ASC, id ASC",
+        )
+        .map_err(|_| {
+            CcSwitchReadError::UnknownSchema(
+                "the database has no compatible providers table".to_string(),
+            )
+        })?;
+
+    let rows = statement
+        .query_map([], |row| {
+            let id: String = row.get(0)?;
+            let name: String = row.get(1)?;
+            let settings: String = row.get(2)?;
+            Ok((id, name, settings))
+        })
+        .map_err(|_| {
+            CcSwitchReadError::UnknownSchema(
+                "the database providers table has an incompatible shape".to_string(),
+            )
+        })?;
+
+    let mut inventory = CcSwitchInventory::default();
+    for row in rows {
+        let (id, name, settings) = row.map_err(|_| {
+            CcSwitchReadError::SourceUnavailable(
+                "a provider row could not be read while CC Switch was open".to_string(),
+            )
+        })?;
+        let value: Value = match serde_json::from_str(&settings) {
+            Ok(value) => value,
+            Err(_) => {
+                inventory.warnings.push(format!(
+                    "CC Switch provider '{id}' had invalid settings; skipped"
+                ));
+                continue;
+            }
+        };
+        match parse_sqlite_provider(&id, &name, &value) {
+            Ok(candidate) => inventory.providers.push(candidate),
+            Err(warning) => inventory.warnings.push(warning),
+        }
+    }
+
+    Ok(Some(inventory))
+}
+
+fn parse_sqlite_provider(
+    id: &str,
+    name: &str,
+    settings: &Value,
+) -> Result<CcSwitchProviderCandidate, String> {
+    if id.trim().is_empty() {
+        return Err("a CC Switch provider entry had no id; skipped".to_string());
+    }
+    let display_name = if name.trim().is_empty() {
+        id.to_string()
+    } else {
+        name.trim().to_string()
+    };
+    let base_url = extract_base_url(settings)
+        .ok_or_else(|| format!("CC Switch provider '{id}' had no usable base URL; skipped"))?;
+    let protocol = extract_protocol(settings);
+    let key = extract_api_key(settings).map(RedactedSecret::new);
+    Ok(CcSwitchProviderCandidate {
+        source_id: id.to_string(),
+        display_name,
+        base_url,
+        protocol,
+        is_current: false,
+        key,
+    })
+}
+
 fn parse_ccswitch_provider(
     id: &str,
     record: &Value,
@@ -223,7 +328,11 @@ fn parse_ccswitch_provider(
 // same field names, same fallbacks, same TOML-embedded-config last resort.
 
 fn extract_base_url(cfg: &Value) -> Option<String> {
-    string_at(cfg, &["baseUrl", "base_url"])
+    string_at(cfg, &["baseUrl", "baseURL", "base_url"])
+        .or_else(|| {
+            cfg.get("config")
+                .and_then(|value| string_at(value, &["baseUrl", "baseURL", "base_url"]))
+        })
         .or_else(|| {
             cfg.get("config")
                 .and_then(Value::as_str)
@@ -234,6 +343,9 @@ fn extract_base_url(cfg: &Value) -> Option<String> {
 }
 
 fn extract_api_key(cfg: &Value) -> Option<String> {
+    if let Some(key) = cfg.pointer("/env/OPENAI_API_KEY").and_then(Value::as_str) {
+        return non_empty(key);
+    }
     if let Some(key) = cfg.pointer("/auth/OPENAI_API_KEY").and_then(Value::as_str) {
         return non_empty(key);
     }
@@ -333,5 +445,48 @@ mod tests {
     fn extract_protocol_defaults_to_responses() {
         let cfg = serde_json::json!({});
         assert_eq!(extract_protocol(&cfg), LegacyProtocol::Responses);
+    }
+
+    #[test]
+    fn reads_the_current_cc_switch_sqlite_schema_without_writing_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cc-switch.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE providers (
+                id TEXT NOT NULL,
+                app_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                settings_config TEXT NOT NULL,
+                created_at INTEGER,
+                sort_index INTEGER
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO providers
+             (id, app_type, name, settings_config, created_at, sort_index)
+             VALUES (?1, 'codex', ?2, ?3, 1, 1)",
+            rusqlite::params![
+                "sqlite-one",
+                "SQLite provider",
+                serde_json::json!({
+                    "base_url": "https://relay.example/v1/",
+                    "apiKey": "opaque-provider-key",
+                    "api_format": "responses"
+                })
+                .to_string()
+            ],
+        )
+        .unwrap();
+        drop(conn);
+
+        let inventory = read_ccswitch_inventory(&CcSwitchSourcePaths::new(&path))
+            .unwrap()
+            .unwrap();
+        assert_eq!(inventory.providers.len(), 1);
+        assert_eq!(inventory.providers[0].source_id, "sqlite-one");
+        assert_eq!(inventory.providers[0].base_url, "https://relay.example/v1");
+        assert!(inventory.providers[0].has_key());
     }
 }

@@ -11,6 +11,7 @@ use chimera_desktop_lib::dto::{ProviderDto, ProviderTestDto, SkinDto, SystemStat
 fn system_status_serialises_camel_case_for_frontend() {
     let dto = SystemStatusDto {
         provider_name: Some("ChimeraHub".into()),
+        active_provider_id: Some("provider-1".into()),
         provider_health: "healthy".into(),
         codex_version: Some("26.721".into()),
         codex_running: true,
@@ -32,6 +33,7 @@ fn system_status_serialises_camel_case_for_frontend() {
 fn system_status_official_mode_has_null_provider_name() {
     let dto = SystemStatusDto {
         provider_name: None,
+        active_provider_id: None,
         provider_health: "unknown".into(),
         codex_version: None,
         codex_running: false,

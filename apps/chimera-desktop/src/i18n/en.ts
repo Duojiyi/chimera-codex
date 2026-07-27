@@ -96,6 +96,7 @@ export const en: Record<TranslationKey, string> = {
   "providers.fieldHealth": "Health",
   "providers.testAria": "Test connection to {0}",
   "providers.deleteAria": "Delete provider {0}",
+  "providers.deleteFailed": "Could not delete this provider. Try again.",
   "providers.confirmDelete": "Delete {0}?",
   "providers.verifying": "Verifying connection…",
   "providers.verifyFailed": "Verification failed, so the provider was not added.",

@@ -183,6 +183,39 @@ pub fn fetch_payload(
     }
 }
 
+/// Re-check a staged payload immediately before installation. The download
+/// path verifies bytes before renaming them, but the file remains user-writable
+/// while it sits in staging; a second digest check prevents a local edit from
+/// becoming an executable install.
+pub fn verify_payload_file(
+    path: &std::path::Path,
+    expected_sha256: &str,
+) -> Result<(), DownloadError> {
+    if expected_sha256.len() != 64 || !expected_sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(DownloadError::MalformedSpec);
+    }
+    let mut file = fs::File::open(path).map_err(DownloadError::storage)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; CHUNK];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|e| DownloadError::Transport(e.kind()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let actual = format!("{:x}", hasher.finalize());
+    if !actual.eq_ignore_ascii_case(expected_sha256) {
+        return Err(DownloadError::DigestMismatch {
+            expected: expected_sha256.to_string(),
+            actual,
+        });
+    }
+    Ok(())
+}
+
 /// Stream the body to `part_path`, checking size as it goes and the digest at
 /// the end. Split out so `fetch_payload` has exactly one cleanup path.
 fn stream_to_file(

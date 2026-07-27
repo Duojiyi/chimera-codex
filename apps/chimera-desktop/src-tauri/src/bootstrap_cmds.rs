@@ -18,8 +18,9 @@ use tauri::State;
 
 use chimera_platform::webview2;
 use chimera_runtime::download::{
-    HttpPayloadSource, PayloadSpec, Preflight, fetch_payload, preflight,
+    HttpPayloadSource, PayloadSpec, Preflight, fetch_payload, preflight, verify_payload_file,
 };
+use chimera_runtime::install::install_payload;
 use chimera_runtime::update::RuntimeLayout;
 
 use crate::state::AppState;
@@ -146,6 +147,50 @@ pub async fn fetch_codex_payload(
     .map_err(|_| "The download was interrupted. Nothing was installed; try again.".to_string())?
 }
 
+/// Commit a payload that was downloaded and digest-checked by
+/// [`fetch_codex_payload`]. The filename is deliberately treated as an opaque
+/// basename: a frontend cannot turn it into an arbitrary path under the
+/// runtime root, and the install crate performs the second containment check
+/// while extracting the archive.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallDto {
+    pub active_version: String,
+    pub previous_version: Option<String>,
+}
+
+#[tauri::command]
+pub async fn install_codex_payload(
+    state: State<'_, AppState>,
+    version: String,
+    payload_file_name: String,
+    payload_sha256: String,
+    source_manifest_digest: String,
+) -> Result<InstallDto, String> {
+    if source_manifest_digest.trim().is_empty() {
+        return Err("The payload is not bound to a verified manifest.".to_string());
+    }
+    let root = state.paths.runtime_root();
+    tauri::async_runtime::spawn_blocking(move || {
+        let name = std::path::Path::new(&payload_file_name)
+            .file_name()
+            .and_then(|candidate| candidate.to_str())
+            .filter(|candidate| *candidate == payload_file_name)
+            .ok_or_else(|| "The downloaded payload name is invalid.".to_string())?;
+        let payload = root.join("staging").join(name);
+        let layout = RuntimeLayout::new(root);
+        verify_payload_file(&payload, &payload_sha256).map_err(|e| e.to_string())?;
+        let pointer = install_payload(&layout, &version, &payload, &source_manifest_digest)
+            .map_err(|e| e.to_string())?;
+        Ok(InstallDto {
+            active_version: pointer.active_version,
+            previous_version: pointer.previous_version,
+        })
+    })
+    .await
+    .map_err(|_| "The install was interrupted. Nothing was activated; try again.".to_string())?
+}
+
 /// Compile-time proof that the DTO the frontend destructures is camelCase.
 ///
 /// A snake_case field reads as `undefined` in the webview and the first-run
@@ -179,5 +224,16 @@ mod tests {
             size_bytes: 1,
             sha256: "0".repeat(64),
         };
+    }
+
+    #[test]
+    fn install_dto_is_camel_case() {
+        let json = serde_json::to_string(&InstallDto {
+            active_version: "26.721".into(),
+            previous_version: Some("26.720".into()),
+        })
+        .unwrap();
+        assert!(json.contains("activeVersion"), "{json}");
+        assert!(json.contains("previousVersion"), "{json}");
     }
 }
