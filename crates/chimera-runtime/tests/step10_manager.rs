@@ -1,5 +1,6 @@
 use chimera_runtime::manager::{
-    InstallMode, UpdateSource, WindowsReleasePlan, mirror_endpoints, parse_windows_release_plan,
+    InstallMode, InstalledCodex, MaintenanceRoute, UpdateSource, WindowsReleasePlan,
+    latest_portable_rollback, maintenance_route, mirror_endpoints, parse_windows_release_plan,
 };
 
 const MANIFEST: &str = r#"{
@@ -116,4 +117,46 @@ fn remote_package_moniker_cannot_become_a_local_path() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn maintenance_routes_follow_the_detected_install_type() {
+    let standard = InstalledCodex {
+        version: "26.721.41059".into(),
+        path: r"C:\Program Files\WindowsApps\OpenAI.Codex".into(),
+        install_mode: "standard".into(),
+    };
+    let portable = InstalledCodex {
+        version: "26.721.41059".into(),
+        path: r"C:\Users\me\AppData\Local\Chimera\codex-portable".into(),
+        install_mode: "portable".into(),
+    };
+
+    assert_eq!(
+        maintenance_route(Some(&standard)),
+        MaintenanceRoute::Standard
+    );
+    assert_eq!(
+        maintenance_route(Some(&portable)),
+        MaintenanceRoute::Portable
+    );
+    assert_eq!(maintenance_route(None), MaintenanceRoute::NotInstalled);
+}
+
+#[test]
+fn rollback_discovery_ignores_files_and_chooses_the_newest_backup() {
+    let root =
+        std::env::temp_dir().join(format!("chimera-manager-rollback-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("Codex.rollback-old")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::create_dir_all(root.join("Codex.rollback-new")).unwrap();
+    std::fs::write(root.join("Codex.rollback-hostile"), b"not a directory").unwrap();
+
+    assert_eq!(
+        latest_portable_rollback(&root.join("codex-portable")).unwrap(),
+        Some(root.join("Codex.rollback-new"))
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
 }
