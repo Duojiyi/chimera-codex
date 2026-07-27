@@ -50,7 +50,9 @@ fn settings_error(error: AtomicError) -> String {
 #[tauri::command]
 pub fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusDto, String> {
     let root = state.paths.runtime_root();
-    let detected = detect_runtime(&root).ok().filter(|runtime| !matches!(runtime, DetectedRuntime::Unknown));
+    let detected = detect_runtime(&root)
+        .ok()
+        .filter(|runtime| !matches!(runtime, DetectedRuntime::Unknown));
     let detected = detected.or_else(detect_external_runtime);
     let health = check_runtime_health(&state.runtime).ok();
     let pointer = state.runtime.read_current_pointer().ok().flatten();
@@ -105,7 +107,10 @@ pub fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusDto
         mode: mode_label.clone(),
         ownership: ownership_label.clone(),
         install_path: match detected.as_ref() {
-            Some(DetectedRuntime::ExternalMsix { path, .. }) | Some(DetectedRuntime::ExternalPortable { path }) => Some(path.to_string_lossy().to_string()),
+            Some(DetectedRuntime::ExternalMsix { path, .. })
+            | Some(DetectedRuntime::ExternalPortable { path }) => {
+                Some(path.to_string_lossy().to_string())
+            }
             _ => Some(root.to_string_lossy().to_string()),
         },
         last_update: None,
@@ -116,7 +121,10 @@ pub fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusDto
         update_channel: None,
         update_meta: None,
         history,
-        diagnostics: diagnostics_for(installed, matches!(detected, Some(DetectedRuntime::ManagedPortable(_)))),
+        diagnostics: diagnostics_for(
+            installed,
+            matches!(detected, Some(DetectedRuntime::ManagedPortable(_))),
+        ),
     })
 }
 

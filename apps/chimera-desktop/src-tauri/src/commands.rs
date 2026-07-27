@@ -18,8 +18,8 @@ use chimera_provider::keychain::{KeychainPort, SecretRef};
 use chimera_provider::probe::{UrlValidationError, validate_provider_url};
 use chimera_provider::projection::{ProviderProjection, revert_provider_projection};
 use chimera_provider::transaction::{SwitchTransaction, TransactionOutcome, TxError};
-use chimera_runtime::health::check_runtime_health;
 use chimera_runtime::detection::detect_external_runtime;
+use chimera_runtime::health::check_runtime_health;
 use chimera_runtime::process::{LaunchError, codex_process_running, launch_managed_codex};
 
 use crate::dto::{ProviderDto, ProviderTestDto, RuntimeInfoDto, SystemStatusDto};
@@ -79,7 +79,9 @@ pub fn get_system_status(state: State<'_, AppState>) -> Result<SystemStatusDto, 
         .ok()
         .and_then(|h| h.version.clone())
         .or_else(|| match external.as_ref() {
-            Some(chimera_runtime::detection::DetectedRuntime::ExternalMsix { version, .. }) => Some(version.clone()),
+            Some(chimera_runtime::detection::DetectedRuntime::ExternalMsix { version, .. }) => {
+                Some(version.clone())
+            }
             _ => None,
         });
 

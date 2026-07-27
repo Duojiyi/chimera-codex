@@ -91,9 +91,13 @@ pub fn codex_process_running() -> bool {
         let output = Command::new("tasklist")
             .args(["/FO", "CSV", "/NH"])
             .output();
-        let Ok(output) = output else { return false; };
+        let Ok(output) = output else {
+            return false;
+        };
         let text = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
-        return text.lines().any(|line| line.contains("\"codex.exe\"") || line.contains("\"chatgpt.exe\""));
+        return text
+            .lines()
+            .any(|line| line.contains("\"codex.exe\"") || line.contains("\"chatgpt.exe\""));
     }
 
     #[cfg(not(windows))]

@@ -56,7 +56,11 @@ pub fn detect_external_runtime() -> Option<DetectedRuntime> {
             ]);
         }
         if let Some(program_files) = std::env::var_os("ProgramFiles") {
-            user_roots.push(std::path::PathBuf::from(program_files).join("OpenAI").join("ChatGPT"));
+            user_roots.push(
+                std::path::PathBuf::from(program_files)
+                    .join("OpenAI")
+                    .join("ChatGPT"),
+            );
         }
         for root in user_roots {
             if let Some(found) = scan_external_root(&root, false) {
@@ -87,8 +91,13 @@ fn scan_external_root(root: &Path, msix: bool) -> Option<DetectedRuntime> {
         let entries = std::fs::read_dir(root).ok()?;
         for entry in entries.flatten() {
             let package = entry.path();
-            if !package.is_dir() { continue; }
-            let name = package.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+            if !package.is_dir() {
+                continue;
+            }
+            let name = package
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
             if name.starts_with("OpenAI.Codex_") || name.starts_with("OpenAI.ChatGPT-") {
                 candidates.push(package.join("app"));
                 candidates.push(package);
@@ -100,7 +109,9 @@ fn scan_external_root(root: &Path, msix: bool) -> Option<DetectedRuntime> {
         if !candidate.is_dir() {
             continue;
         }
-        if exe_names.iter().any(|name| candidate.join(name).exists()) || msix && candidate.file_name().is_some_and(|name| name == "app") {
+        if exe_names.iter().any(|name| candidate.join(name).exists())
+            || msix && candidate.file_name().is_some_and(|name| name == "app")
+        {
             let version = candidate
                 .parent()
                 .and_then(|path| path.file_name())
@@ -108,7 +119,10 @@ fn scan_external_root(root: &Path, msix: bool) -> Option<DetectedRuntime> {
                 .map(|name| name.to_string())
                 .unwrap_or_else(|| "unknown".to_string());
             return if msix {
-                Some(DetectedRuntime::ExternalMsix { version, path: candidate })
+                Some(DetectedRuntime::ExternalMsix {
+                    version,
+                    path: candidate,
+                })
             } else {
                 Some(DetectedRuntime::ExternalPortable { path: candidate })
             };
