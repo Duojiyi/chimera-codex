@@ -4,6 +4,7 @@
 // All data access goes through Tauri invoke() commands in each feature's hooks/.
 
 import { useCallback, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { HomeFeature }       from "@/features/home";
 import { ProvidersFeature }  from "@/features/providers";
 import { CodexFeature }      from "@/features/codex";
@@ -42,10 +43,10 @@ export default function App() {
 
   return (
     <I18nProvider>
-      {ready ? (
-        <div className="app-canvas">
-          <div className="app-window">
-            <WindowBar active={active} />
+      <div className="app-canvas">
+        <div className="app-window">
+          <WindowBar active={active} />
+          {ready ? (
             <div className="app-body">
               <TopRail active={active} onNavigate={setActive} />
               <main className="app-content">
@@ -56,24 +57,37 @@ export default function App() {
                 {active === "settings"   && <SettingsFeature />}
               </main>
             </div>
-          </div>
+          ) : (
+            <div style={{ minHeight: 0, flex: 1, overflow: "hidden" }}>
+              <FirstRun onReady={markReady} />
+            </div>
+          )}
         </div>
-      ) : (
-        <div style={{ height: "100vh", overflow: "hidden" }}>
-          <FirstRun onReady={markReady} />
-        </div>
-      )}
+      </div>
     </I18nProvider>
   );
 }
 
 function WindowBar({ active }: { active: ActiveFeature }) {
   const { t } = useI18n();
+
+  function runWindowAction(action: "close" | "minimize" | "toggleMaximize") {
+    try {
+      void getCurrentWindow()[action]();
+    } catch {
+      // Browser-only design verification has no Tauri window handle.
+    }
+  }
+
   return (
-    <header className="window-bar">
-      <div className="window-bar-left">
-        <span className="window-lights" aria-hidden="true"><i /><i /><i /></span>
-        <span className="window-title">Chimera++ / {t("shell.workspaceShort")}</span>
+    <header className="window-bar" data-tauri-drag-region>
+      <div className="window-bar-left" data-tauri-drag-region>
+        <div className="window-controls" role="group" aria-label={t("shell.windowControls")}>
+          <button type="button" className="window-control window-control-close" aria-label={t("shell.closeWindow")} title={t("shell.closeWindow")} onClick={() => runWindowAction("close")} />
+          <button type="button" className="window-control window-control-minimize" aria-label={t("shell.minimizeWindow")} title={t("shell.minimizeWindow")} onClick={() => runWindowAction("minimize")} />
+          <button type="button" className="window-control window-control-maximize" aria-label={t("shell.maximizeWindow")} title={t("shell.maximizeWindow")} onClick={() => runWindowAction("toggleMaximize")} />
+        </div>
+        <span className="window-title" data-tauri-drag-region>Chimera++ / {t("shell.workspaceShort")}</span>
       </div>
       <div className="window-bar-actions">
         <span className="window-status"><i aria-hidden="true" />{t("shell.statusReady")}</span>

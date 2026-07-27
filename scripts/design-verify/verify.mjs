@@ -41,8 +41,8 @@ const SCREENS = ["home", "providers", "codex", "appearance", "settings"];
 // statically by verify-design-tokens.mjs; here we check the browser actually
 // renders them.
 const PEN = {
-  canvasPadding: 24,
-  windowRadius: 26,
+  canvasPadding: 0,
+  windowRadius: 0,
   windowBarHeight: 58,
   sidebarWidth: 232,
   tabCount: 5,

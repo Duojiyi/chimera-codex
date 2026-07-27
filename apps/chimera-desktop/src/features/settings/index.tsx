@@ -392,6 +392,7 @@ function Toggle({
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <button
+        className="settings-toggle"
         type="button"
         role="switch"
         aria-checked={checked}
@@ -399,29 +400,42 @@ function Toggle({
         onClick={onChange}
         disabled={disabled}
         style={{
-          width: size.toggleW,
-          height: size.toggleH,
-          borderRadius: 10,
-          border: `${hairline}px solid ${color.rule}`,
+          width: 44,
+          height: 36,
+          border: "none",
           position: "relative",
-          background: checked ? color.accent : color.ink3,
+          background: "transparent",
           padding: 0,
           cursor: disabled ? "default" : "pointer",
+          display: "grid",
+          placeItems: "center",
         }}
       >
         <span
           aria-hidden="true"
           style={{
-            position: "absolute",
-            width: size.toggleKnob,
-            height: size.toggleKnob,
-            borderRadius: "50%",
-            top: 2,
-            left: checked ? 19 : 2,
-            background: checked ? color.ink0 : color.muted,
-            transition: "left 120ms",
+            width: size.toggleW,
+            height: size.toggleH,
+            borderRadius: 10,
+            border: `${hairline}px solid ${color.rule}`,
+            position: "relative",
+            background: checked ? color.accent : color.ink3,
+            boxSizing: "border-box",
           }}
-        />
+        >
+          <span
+            style={{
+              position: "absolute",
+              width: size.toggleKnob,
+              height: size.toggleKnob,
+              borderRadius: "50%",
+              top: 2,
+              left: checked ? 19 : 2,
+              background: checked ? color.ink0 : color.muted,
+              transition: "left 120ms",
+            }}
+          />
+        </span>
       </button>
       <span style={{ fontSize: 12, color: checked ? color.accent : color.muted }}>
         {checked ? onLabel : offLabel}
@@ -636,7 +650,7 @@ export function SettingsFeature() {
   const subtitle = SUBTITLES[active];
 
   return (
-    <div style={{ display: "flex", height: "100%" }}>
+    <div className="settings-feature" style={{ display: "flex", height: "100%" }}>
       {/* ── Category nav (spec: 220px fixed) ── */}
       <nav
         role="tablist"
@@ -699,9 +713,10 @@ export function SettingsFeature() {
 
       {/* ── Content ── */}
       <div
+        className="settings-content"
         role="main"
         aria-label={tf("settings.categoryAriaLabel", [t(activeCategory.labelKey)])}
-        style={{ flex: 1, padding: "32px 48px", display: "flex", flexDirection: "column", overflow: "auto" }}
+        style={{ flex: 1, padding: "32px 40px", display: "flex", flexDirection: "column", overflow: "auto" }}
       >
         <h1 style={{ ...font.pageTitle, color: color.primary, margin: 0 }}>{t(activeCategory.labelKey)}</h1>
         {subtitle && <p style={{ fontSize: 14, color: color.muted, margin: "6px 0 0" }}>{t(subtitle)}</p>}
