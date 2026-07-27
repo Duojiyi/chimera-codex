@@ -487,7 +487,7 @@ function ProviderDetail({ provider, busy, onDelete, onTest }: {
             aria-label={tf("providers.deleteAria", [provider.displayName])}
             onClick={() => { if (window.confirm(tf("providers.confirmDelete", [provider.displayName]))) onDelete(provider.id); }}
             style={{
-              background: color.dangerBg, color: color.danger, border: `${hairline}px solid ${color.dangerBorder}`,
+              background: color.dangerBg, color: color.dangerText, border: `${hairline}px solid ${color.dangerBorder}`,
               borderRadius: radius.sm, padding: "8px 16px", fontSize: 13, fontFamily: type.family, cursor: "pointer",
             }}
           >

@@ -287,7 +287,7 @@ export function CodexFeature() {
       >
         <SectionLabel textColor={color.dim}>{t("codex.managedRuntime")}</SectionLabel>
         <div style={{ height: 10, flexShrink: 0 }} />
-        <span className="wrap-safe codex-version" style={{ ...font.version, color: color.primary }}>{versionLabel}</span>
+        <span className="truncate-safe codex-version" title={versionLabel} style={{ ...font.version, color: color.primary }}>{versionLabel}</span>
         <span style={{ ...font.runtimeName, color: color.secondary, marginTop: 6 }}>
           {status.installed ? tf("codex.runtimeLine", [platformLabel]) : t("codex.notInstalledFull")}
         </span>
@@ -438,12 +438,13 @@ export function CodexFeature() {
           >
             <SectionLabel textColor={color.amber}>{t("codex.updateAvailable")}</SectionLabel>
             <div style={{ height: 8, flexShrink: 0 }} />
-            <div style={{ display: "flex", alignItems: "flex-end", gap: 16 }}>
-              <span className="wrap-safe" style={{ ...font.versionCompare, color: color.dim }}>{status.version ?? dash}</span>
-              <span style={{ fontSize: 28, color: color.muted }} aria-hidden="true">→</span>
-              <span className="wrap-safe" style={{ ...font.versionCompare, color: color.primary }}>{status.updateVersion}</span>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 16, minWidth: 0 }}>
+              <span className="truncate-safe" title={status.version ?? dash} style={{ ...font.versionCompare, color: color.dim, flex: "1 1 0" }}>{status.version ?? dash}</span>
+              <span style={{ fontSize: 28, color: color.muted, flexShrink: 0 }} aria-hidden="true">→</span>
+              <span className="truncate-safe" title={status.updateVersion} style={{ ...font.versionCompare, color: color.primary, flex: "1 1 0" }}>{status.updateVersion}</span>
               <span
                 style={{
+                  flexShrink: 0,
                   borderRadius: radius.xs,
                   background: color.accentDim,
                   border: `${hairline}px solid ${color.rule}`,
@@ -513,7 +514,7 @@ export function CodexFeature() {
           {status.history.map((entry, i) => (
             <div key={entry.version}>
               <div style={{ minHeight: size.codexHistoryRow, padding: "6px 0", display: "flex", alignItems: "center", gap: 16 }}>
-                <span className="wrap-safe" style={{ fontSize: 13, fontWeight: 600, color: color.primary }}>{entry.version}</span>
+                <span className="truncate-safe" title={entry.version} style={{ minWidth: 0, maxWidth: "50%", fontSize: 13, fontWeight: 600, color: color.primary }}>{entry.version}</span>
                 <span style={{ fontSize: 11, color: color.muted }}>{entry.state}</span>
                 <div style={{ flex: 1 }} />
                 {entry.state === "previous" && (

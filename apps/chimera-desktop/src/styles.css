@@ -71,12 +71,14 @@ button:disabled { cursor: not-allowed; }
 .window-bar { height: 58px; flex: 0 0 58px; display: flex; align-items: center; justify-content: space-between; padding: 0 18px; background: #FBFEFC; border-bottom: 1px solid #D6E4E2; box-sizing: border-box; }
 .window-bar-left, .window-bar-actions { display: flex; align-items: center; }
 .window-bar-left { gap: 12px; }
-.window-controls { display: flex; gap: 6px; }
-.window-control { width: 12px; height: 12px; border-radius: 50%; min-height: 0; padding: 0; border: 0; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.08); cursor: default; }
-.window-control-close { background: #FF6F61; }
-.window-control-minimize { background: #F5C84B; }
-.window-control-maximize { background: #4DCB79; }
-.window-control:not(:disabled):hover { transform: none; filter: brightness(0.94); }
+.window-controls { display: flex; gap: 0; }
+.window-control { width: 28px; height: 28px; min-height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
+.window-control::before { content: ""; width: 12px; height: 12px; border-radius: 50%; background: var(--window-control-color); box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.08); }
+.window-control-close { --window-control-color: #FF6F61; }
+.window-control-minimize { --window-control-color: #F5C84B; }
+.window-control-maximize { --window-control-color: #4DCB79; }
+.window-control:not(:disabled):hover { transform: none; background: rgb(25 51 58 / 0.06); }
+.window-control:not(:disabled):hover::before { filter: brightness(0.92); }
 .window-title { color: #263638; font-size: 12px; font-weight: 600; }
 .window-bar-actions { gap: 10px; }
 .window-status { display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border-radius: 999px; background: #E6F3EE; color: #145F39; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; font-weight: 600; }
@@ -148,6 +150,7 @@ button:disabled { cursor: not-allowed; }
 }
 
 .codex-version {
+  display: block;
   line-height: 1.05;
 }
 

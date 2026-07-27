@@ -182,7 +182,7 @@ export function HomeFeature() {
           <Panel style={{ padding: 18, minHeight: 174, background: color.ink3 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><div><h2 style={{ margin: 0, color: color.primary, fontSize: 18 }}>{t("home.codexCardTitle")}</h2><p style={{ margin: "4px 0 0", ...font.caption, color: color.muted }}>{t("home.codexCardSubtitle")}</p></div><span style={{ color: status.codexRunning ? color.greenText : color.muted, ...font.captionStrong }}>{status.codexRunning ? t("home.running") : t("home.stopped")}</span></div>
             <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", rowGap: 10, columnGap: 14, marginTop: 16 }}>
-              <span style={{ ...font.caption, color: color.muted }}>{t("home.rowVersion")}</span><strong className="wrap-safe home-runtime-version" style={{ ...font.captionStrong, color: color.secondary }}>{version}</strong>
+              <span style={{ ...font.caption, color: color.muted }}>{t("home.rowVersion")}</span><strong className="truncate-safe home-runtime-version" title={version} style={{ ...font.captionStrong, color: color.secondary }}>{version}</strong>
               <span style={{ ...font.caption, color: color.muted }}>{t("home.rowMode")}</span><strong style={{ ...font.captionStrong, color: color.secondary }}>{t("home.valManagedPortable")}</strong>
               <span style={{ ...font.caption, color: color.muted }}>{t("home.rowLastCheck")}</span><strong style={{ ...font.captionStrong, color: color.secondary }}>{t("home.statUpdatesDetail")}</strong>
             </div>
