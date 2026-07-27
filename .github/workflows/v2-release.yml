@@ -174,13 +174,20 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Ensure Rust target is installed
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup target add --toolchain stable "${{ matrix.target }}"
+          rustup target list --installed | grep -Fx "${{ matrix.target }}"
+
       - name: Install frontend dependencies
         working-directory: ${{ env.FRONTEND_DIR }}
         run: npm ci
 
       - name: Build app bundle
         working-directory: ${{ env.FRONTEND_DIR }}
-        run: npm run build -- --target ${{ matrix.target }}
+        run: npm run build -- --target ${{ matrix.target }} --bundles app
 
       # Ad-hoc only, per ADR-008. Tauri can omit Contents/Resources when the
       # app has no bundled resource files; create the standard directory and
@@ -197,15 +204,25 @@ jobs:
           echo "verified (ad-hoc only, NOT notarized — users must right-click → Open): $app"
           lipo -archs "$app/Contents/MacOS/"*
 
-      - name: Collect artifacts
+      - name: Create DMG with hdiutil
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist/macos
-          dmg="$(find target/${{ matrix.target }}/release/bundle/dmg -name '*.dmg' -print -quit)"
+          app="$(find target/${{ matrix.target }}/release/bundle/macos -name '*.app' -maxdepth 1 | head -1)"
+          test -n "$app"
+          version="${GITHUB_REF_NAME#v}"
+          hdiutil create -volname "Chimera++" -srcfolder "$app" -ov -format UDZO \
+            "dist/macos/ChimeraPlusPlus-${version}-macos-${{ matrix.arch }}.dmg"
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg="$(find dist/macos -name '*.dmg' -print -quit)"
           test -n "$dmg"
           version="${GITHUB_REF_NAME#v}"
-          cp "$dmg" "dist/macos/ChimeraPlusPlus-${version}-macos-${{ matrix.arch }}.dmg"
+          test "$(basename "$dmg")" = "ChimeraPlusPlus-${version}-macos-${{ matrix.arch }}.dmg"
           cp NOTICE LICENSE dist/macos/
           cd dist/macos && shasum -a 256 * > checksums.txt
           ls -la
