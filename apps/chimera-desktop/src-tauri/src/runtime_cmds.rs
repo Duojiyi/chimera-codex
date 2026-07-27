@@ -5,18 +5,21 @@
 //! and any operation whose machinery is not implemented yet returns an explicit
 //! error rather than a fabricated success.
 
-use tauri::State;
+use tauri::{Emitter, State};
 
+use chimera_platform::lock::OperationLock;
 use chimera_runtime::detection::{DetectedRuntime, detect_external_runtime, detect_runtime};
 use chimera_runtime::health::check_runtime_health;
 use chimera_runtime::manager::{
     InstallMode, UpdateSource, detect_windows_codex, fetch_windows_release_plan,
+    install_windows_release,
 };
 use chimera_runtime::update::{UpdateError, rollback_to_last_known};
 use chimera_update::atomic::{AtomicError, AtomicStore, Migratable};
 
 use crate::dto::{
-    CodexUpdateDto, DiagnosticEntryDto, RuntimeStatusDto, SettingsDto, VersionEntryDto,
+    CodexOperationDto, CodexUpdateDto, DiagnosticEntryDto, RuntimeStatusDto, SettingsDto,
+    VersionEntryDto,
 };
 use crate::state::AppState;
 
@@ -291,17 +294,73 @@ pub fn rollback_runtime(version: Option<String>, state: State<'_, AppState>) -> 
     }
 }
 
-/// Apply a pending Codex update.
-///
-/// Refuses rather than pretending: the verified download and staged commit are
-/// not implemented, and applying an unverified payload would violate ADR-003.
+/// Download, verify and install the selected Codex release.
 #[tauri::command]
-pub fn apply_codex_update(_version: Option<String>) -> Result<(), String> {
-    Err(
-        "Updating is not enabled in this build. The verified download and staged commit \
-         are not wired yet."
-            .to_string(),
-    )
+pub async fn apply_codex_update(
+    app: tauri::AppHandle,
+    version: Option<String>,
+    source: Option<String>,
+    install_mode: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<CodexOperationDto, String> {
+    let settings = state.settings();
+    let source = source
+        .unwrap_or(settings.codex_update_source)
+        .parse::<UpdateSource>()
+        .map_err(|_| "Choose Automatic or Mirror as the Codex update source.".to_string())?;
+    let install_mode = install_mode
+        .unwrap_or(settings.codex_install_mode)
+        .parse::<InstallMode>()
+        .map_err(|_| "Choose Standard or Portable as the Codex install mode.".to_string())?;
+    let data_root = state.paths.data_root.clone();
+    let lock_path = state.paths.operation_lock();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let lock = OperationLock::new(lock_path);
+        let _guard = lock
+            .try_acquire("apply_codex_update")
+            .map_err(|_| "Another Chimera++ operation is already running.".to_string())?;
+        let plan = fetch_windows_release_plan(source, Some(std::env::consts::ARCH))
+            .map_err(|error| error.to_string())?;
+        if version
+            .as_deref()
+            .is_some_and(|expected| expected != plan.version)
+        {
+            return Err(
+                "The available Codex version changed after confirmation. Review it and try again."
+                    .to_string(),
+            );
+        }
+        let total = plan.size_bytes;
+        let progress_app = app.clone();
+        let progress = move |downloaded: u64| {
+            let _ = progress_app.emit(
+                "codex://download-progress",
+                serde_json::json!({ "downloaded": downloaded, "total": total }),
+            );
+        };
+        let result = install_windows_release(
+            &plan,
+            install_mode,
+            &data_root.join("downloads"),
+            &data_root.join("codex-portable"),
+            &progress,
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(CodexOperationDto {
+            version: result.version,
+            requested_mode: result.requested_mode,
+            actual_mode: result.actual_mode,
+            affected_path: result.affected_path,
+            backup_path: result.backup_path,
+            message: result.message,
+            notes: result.notes,
+        })
+    })
+    .await
+    .map_err(|_| {
+        "The Codex installation was interrupted. Run Diagnose before retrying.".to_string()
+    })?
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────────

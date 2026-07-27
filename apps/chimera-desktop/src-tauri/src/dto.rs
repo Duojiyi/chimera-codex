@@ -167,6 +167,19 @@ pub struct CodexUpdateDto {
     pub released_at: Option<String>,
 }
 
+/// Evidence for a completed Codex mutation shown in the operation result UI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexOperationDto {
+    pub version: String,
+    pub requested_mode: String,
+    pub actual_mode: String,
+    pub affected_path: Option<String>,
+    pub backup_path: Option<String>,
+    pub message: String,
+    pub notes: Vec<String>,
+}
+
 // ── Settings screen ──────────────────────────────────────────────────────────
 
 /// Persisted user preferences. Mirrors the frontend `SettingsState`.
