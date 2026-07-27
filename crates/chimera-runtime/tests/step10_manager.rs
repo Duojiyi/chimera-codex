@@ -98,3 +98,22 @@ fn update_comparison_accepts_both_app_and_package_versions() {
     assert!(!plan.is_update_available(Some("26.721.4979.0")));
     assert!(plan.is_update_available(None));
 }
+
+#[test]
+fn remote_package_moniker_cannot_become_a_local_path() {
+    let hostile = MANIFEST.replace(
+        "OpenAI.Codex_26.721.4979.0_x64__2p2nqsd0c76g0",
+        "../../outside",
+    );
+    let hostile_checksums = format!("{}  ../../outside.Msix\n", "f".repeat(64));
+
+    assert!(
+        parse_windows_release_plan(
+            &hostile,
+            &hostile_checksums,
+            UpdateSource::Mirror,
+            Some("x64")
+        )
+        .is_err()
+    );
+}
