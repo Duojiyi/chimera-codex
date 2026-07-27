@@ -1,6 +1,6 @@
 {
   "productName": "Chimera++",
-  "version": "2.0.0-chimera.2",
+  "version": "2.0.0-chimera.3",
   "identifier": "com.bigpizzav3.codexplusplus.manager",
   "build": {
     "frontendDist": "../dist",
