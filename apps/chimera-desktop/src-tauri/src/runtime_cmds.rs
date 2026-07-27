@@ -9,18 +9,69 @@ use tauri::State;
 
 use chimera_runtime::detection::{DetectedRuntime, detect_external_runtime, detect_runtime};
 use chimera_runtime::health::check_runtime_health;
+use chimera_runtime::manager::{
+    InstallMode, UpdateSource, detect_windows_codex, fetch_windows_release_plan,
+};
 use chimera_runtime::update::{UpdateError, rollback_to_last_known};
 use chimera_update::atomic::{AtomicError, AtomicStore, Migratable};
 
-use crate::dto::{DiagnosticEntryDto, RuntimeStatusDto, SettingsDto, VersionEntryDto};
+use crate::dto::{
+    CodexUpdateDto, DiagnosticEntryDto, RuntimeStatusDto, SettingsDto, VersionEntryDto,
+};
 use crate::state::AppState;
 
 impl Migratable for SettingsDto {
-    const CURRENT_VERSION: u32 = 1;
+    const CURRENT_VERSION: u32 = 2;
 
     fn upgrade(from_version: u32, value: serde_json::Value) -> Option<Self> {
-        (from_version == 0).then(|| serde_json::from_value(value).ok())?
+        (from_version <= 1).then(|| serde_json::from_value(value).ok())?
     }
+}
+
+/// Query the selected source and return the real public Codex version.
+/// Network and Windows package detection run in the blocking pool so opening
+/// the screen cannot freeze the webview.
+#[tauri::command]
+pub async fn check_codex_update(
+    source: Option<String>,
+    install_mode: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<CodexUpdateDto, String> {
+    let settings = state.settings();
+    let source_raw = source.unwrap_or(settings.codex_update_source);
+    let mode_raw = install_mode.unwrap_or(settings.codex_install_mode);
+    let source = source_raw
+        .parse::<UpdateSource>()
+        .map_err(|_| "Choose Automatic or Mirror as the Codex update source.".to_string())?;
+    let install_mode = mode_raw
+        .parse::<InstallMode>()
+        .map_err(|_| "Choose Standard or Portable as the Codex install mode.".to_string())?;
+    let portable_root = state.paths.data_root.join("codex-portable");
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let installed = detect_windows_codex(&portable_root);
+        let current_version = installed.as_ref().map(|value| value.version.clone());
+        let plan = fetch_windows_release_plan(source, Some(std::env::consts::ARCH))
+            .map_err(|error| error.to_string())?;
+        Ok(CodexUpdateDto {
+            update_available: plan.is_update_available(current_version.as_deref()),
+            current_version,
+            latest_version: plan.version,
+            package_version: plan.package_version,
+            source: match source {
+                UpdateSource::Auto => "auto".to_string(),
+                UpdateSource::Mirror => "mirror".to_string(),
+            },
+            install_mode: match install_mode {
+                InstallMode::Standard => "standard".to_string(),
+                InstallMode::Portable => "portable".to_string(),
+            },
+            size_bytes: plan.size_bytes,
+            released_at: plan.released_at,
+        })
+    })
+    .await
+    .map_err(|_| "The Codex update check was interrupted. Try again.".to_string())?
 }
 
 fn settings_store(state: &AppState) -> AtomicStore<SettingsDto> {
@@ -56,9 +107,15 @@ pub fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusDto
     let detected = detected.or_else(detect_external_runtime);
     let health = check_runtime_health(&state.runtime).ok();
     let pointer = state.runtime.read_current_pointer().ok().flatten();
+    let manager_install = detect_windows_codex(&state.paths.data_root.join("codex-portable"));
 
-    let installed = health.as_ref().is_some_and(|h| h.exe_present) || detected.is_some();
-    let version = health.as_ref().and_then(|h| h.version.clone());
+    let installed = manager_install.is_some()
+        || health.as_ref().is_some_and(|h| h.exe_present)
+        || detected.is_some();
+    let version = manager_install
+        .as_ref()
+        .map(|install| install.version.clone())
+        .or_else(|| health.as_ref().and_then(|h| h.version.clone()));
 
     // History comes from the pointer chain, the only record that exists today.
     // Anything richer would be invented.
@@ -79,20 +136,34 @@ pub fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusDto
     // DetectedRuntime is an enum, and only ManagedPortable is ours. An external
     // MSIX or portable install must never be reported as Chimera-verified: the
     // UI gates destructive actions on that label (G5).
-    let (mode_label, ownership_label) = match detected.as_ref() {
-        Some(DetectedRuntime::ManagedPortable(_)) => (
-            Some("managed_portable".to_string()),
-            Some("chimera_verified".to_string()),
-        ),
-        Some(DetectedRuntime::ExternalMsix { .. }) => (
-            Some("external_msix".to_string()),
-            Some("not_owned".to_string()),
-        ),
-        Some(DetectedRuntime::ExternalPortable { .. }) => (
-            Some("external_portable".to_string()),
-            Some("not_owned".to_string()),
-        ),
-        Some(DetectedRuntime::Unknown) | None => (None, None),
+    let (mode_label, ownership_label) = if let Some(install) = manager_install.as_ref() {
+        if install.install_mode == "portable" {
+            (
+                Some("managed_portable".to_string()),
+                Some("chimera_verified".to_string()),
+            )
+        } else {
+            (
+                Some("external_msix".to_string()),
+                Some("not_owned".to_string()),
+            )
+        }
+    } else {
+        match detected.as_ref() {
+            Some(DetectedRuntime::ManagedPortable(_)) => (
+                Some("managed_portable".to_string()),
+                Some("chimera_verified".to_string()),
+            ),
+            Some(DetectedRuntime::ExternalMsix { .. }) => (
+                Some("external_msix".to_string()),
+                Some("not_owned".to_string()),
+            ),
+            Some(DetectedRuntime::ExternalPortable { .. }) => (
+                Some("external_portable".to_string()),
+                Some("not_owned".to_string()),
+            ),
+            Some(DetectedRuntime::Unknown) | None => (None, None),
+        }
     };
 
     Ok(RuntimeStatusDto {
@@ -106,13 +177,16 @@ pub fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusDto
         health_label: None,
         mode: mode_label.clone(),
         ownership: ownership_label.clone(),
-        install_path: match detected.as_ref() {
-            Some(DetectedRuntime::ExternalMsix { path, .. })
-            | Some(DetectedRuntime::ExternalPortable { path }) => {
-                Some(path.to_string_lossy().to_string())
-            }
-            _ => Some(root.to_string_lossy().to_string()),
-        },
+        install_path: manager_install
+            .as_ref()
+            .map(|install| install.path.clone())
+            .or_else(|| match detected.as_ref() {
+                Some(DetectedRuntime::ExternalMsix { path, .. })
+                | Some(DetectedRuntime::ExternalPortable { path }) => {
+                    Some(path.to_string_lossy().to_string())
+                }
+                _ => Some(root.to_string_lossy().to_string()),
+            }),
         last_update: None,
         uptime: None,
         // No mirror is reachable yet, so never claim an update is available.
@@ -123,7 +197,10 @@ pub fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusDto
         history,
         diagnostics: diagnostics_for(
             installed,
-            matches!(detected, Some(DetectedRuntime::ManagedPortable(_))),
+            manager_install
+                .as_ref()
+                .is_some_and(|install| install.install_mode == "portable")
+                || matches!(detected, Some(DetectedRuntime::ManagedPortable(_))),
         ),
     })
 }

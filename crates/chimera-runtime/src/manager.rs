@@ -96,6 +96,16 @@ pub struct WindowsReleasePlan {
     pub released_at: Option<String>,
 }
 
+/// Installed Windows Codex information needed by Chimera's UI and planner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledCodex {
+    pub version: String,
+    pub path: String,
+    /// `standard` for MSIX, `portable` for the managed extracted package.
+    pub install_mode: String,
+}
+
 impl WindowsReleasePlan {
     /// Whether installing this plan would advance the detected application.
     pub fn is_update_available(&self, current: Option<&str>) -> bool {
@@ -166,4 +176,19 @@ pub fn fetch_windows_release_plan(
     let checksums =
         codex_win_engine::fetch_text(&endpoints.checksums_url).map_err(|_| ManagerError::Fetch)?;
     parse_windows_release_plan(&manifest, &checksums, source, architecture)
+}
+
+/// Detect an official MSIX first, then the supplied managed portable root.
+/// The reference engine reads the app's internal version from `app.asar` when
+/// available, avoiding the common package-version/display-version mix-up.
+pub fn detect_windows_codex(portable_root: &std::path::Path) -> Option<InstalledCodex> {
+    codex_win_engine::detect_installed_codex(portable_root).map(|installed| InstalledCodex {
+        version: installed.version,
+        path: installed.path,
+        install_mode: if installed.source == "msix" {
+            "standard".to_string()
+        } else {
+            "portable".to_string()
+        },
+    })
 }

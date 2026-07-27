@@ -85,6 +85,7 @@ pub fn run() {
             // Codex screen — every command the tab calls must be here, or it
             // fails at runtime with "command not found" the moment it opens.
             runtime_cmds::get_runtime_status,
+            runtime_cmds::check_codex_update,
             runtime_cmds::repair_runtime,
             runtime_cmds::run_diagnostics,
             runtime_cmds::rollback_runtime,

@@ -151,6 +151,22 @@ pub struct RuntimeStatusDto {
     pub diagnostics: Vec<DiagnosticEntryDto>,
 }
 
+/// Result of checking the selected Codex update source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexUpdateDto {
+    pub current_version: Option<String>,
+    pub latest_version: String,
+    /// Windows package deployment version, intentionally separate from the
+    /// human-facing app version.
+    pub package_version: String,
+    pub update_available: bool,
+    pub source: String,
+    pub install_mode: String,
+    pub size_bytes: u64,
+    pub released_at: Option<String>,
+}
+
 // ── Settings screen ──────────────────────────────────────────────────────────
 
 /// Persisted user preferences. Mirrors the frontend `SettingsState`.
@@ -159,6 +175,7 @@ pub struct RuntimeStatusDto {
 /// degrades to known-good values rather than failing the screen.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub struct SettingsDto {
     pub launch_at_login: bool,
     pub launch_codex_on_start: bool,
@@ -168,6 +185,9 @@ pub struct SettingsDto {
     pub structured_logs: bool,
     pub anonymous_usage: bool,
     pub crash_reporting: bool,
+    pub check_codex_updates_on_start: bool,
+    pub codex_update_source: String,
+    pub codex_install_mode: String,
 }
 
 impl Default for SettingsDto {
@@ -183,6 +203,9 @@ impl Default for SettingsDto {
             structured_logs: true,
             anonymous_usage: false,
             crash_reporting: false,
+            check_codex_updates_on_start: true,
+            codex_update_source: "auto".to_string(),
+            codex_install_mode: "standard".to_string(),
         }
     }
 }
