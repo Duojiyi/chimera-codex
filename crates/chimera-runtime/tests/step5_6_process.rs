@@ -2,6 +2,13 @@
 // G5: launching must refuse anything not owned by the runtime root, and must
 // never spawn a long-running process from a test (that would leak into CI).
 use chimera_runtime::process::{LaunchError, launch_managed_codex};
+
+#[test]
+fn windows_status_probe_never_opens_a_console_window() {
+    let source = include_str!("../src/process.rs");
+    assert!(source.contains("CREATE_NO_WINDOW"));
+    assert!(source.contains("creation_flags(CREATE_NO_WINDOW)"));
+}
 use chimera_runtime::update::RuntimeLayout;
 use std::fs;
 use std::path::Path;
