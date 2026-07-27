@@ -81,7 +81,10 @@ fn projection_updates_endpoint_without_changing_the_users_model() {
         result.contains("https://api.new.io/v1"),
         "new base_url must be in config: {result}"
     );
-    assert!(result.contains("gpt-4o"), "user model must survive: {result}");
+    assert!(
+        result.contains("gpt-4o"),
+        "user model must survive: {result}"
+    );
     assert!(
         !result.contains("claude-opus-5"),
         "switching URL and key must not change model: {result}"
