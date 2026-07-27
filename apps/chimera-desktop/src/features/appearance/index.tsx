@@ -213,7 +213,7 @@ export function AppearanceFeature() {
           </span>
           <div style={{ flex: 1 }} />
           {selectedSkin.applied && (
-            <span style={{ fontSize: 12, color: color.green }}>
+            <span style={{ fontSize: 12, color: color.greenText }}>
               {t("appearance.systemDefaultActive")}
             </span>
           )}

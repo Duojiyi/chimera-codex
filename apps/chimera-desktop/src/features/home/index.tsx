@@ -37,6 +37,13 @@ const HEALTH_COLOR: Record<SystemStatus["providerHealth"], string> = {
   unreachable: color.danger,
 };
 
+const HEALTH_TEXT_COLOR: Record<SystemStatus["providerHealth"], string> = {
+  unknown: color.amberText,
+  healthy: color.greenText,
+  auth_failed: color.dangerText,
+  unreachable: color.dangerText,
+};
+
 const panel: CSSProperties = {
   background: color.ink3,
   border: `${hairline}px solid ${color.rule}`,
@@ -53,7 +60,7 @@ function StatCard({ label, value, detail, tone = "default" }: { label: string; v
     <Panel className="home-stat-card" style={{ padding: "14px 16px", minHeight: 96, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
       <span style={{ ...font.captionStrong, color: color.muted }}>{label}</span>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-        <strong style={{ fontSize: 24, lineHeight: 1, color: tone === "green" ? color.green : color.primary }}>{value}</strong>
+        <strong style={{ fontSize: 24, lineHeight: 1, color: tone === "green" ? color.greenText : color.primary }}>{value}</strong>
         <span style={{ ...font.caption, color: color.muted }}>{detail}</span>
       </div>
     </Panel>
@@ -121,6 +128,7 @@ export function HomeFeature() {
   const provider = status.officialMode ? t("home.officialCodex") : status.providerName ?? t("home.noProvider");
   const health = t(HEALTH_LABEL_KEY[status.providerHealth]);
   const healthColor = HEALTH_COLOR[status.providerHealth];
+  const healthTextColor = HEALTH_TEXT_COLOR[status.providerHealth];
   const version = status.codexVersion ?? t("common.dash");
   const weekdays = [t("home.dayMon"), t("home.dayTue"), t("home.dayWed"), t("home.dayThu"), t("home.dayFri"), t("home.daySat"), t("home.daySun")];
   const weekdaysShort = [t("home.dayMonShort"), t("home.dayTueShort"), t("home.dayWedShort"), t("home.dayThuShort"), t("home.dayFriShort"), t("home.daySatShort"), t("home.daySunShort")];
@@ -148,7 +156,7 @@ export function HomeFeature() {
           <Panel style={{ padding: 18, minHeight: 238 }}>
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
               <div><h2 style={{ margin: 0, color: color.primary, fontSize: 18, lineHeight: 1.2 }}>{t("home.statusTitle")}</h2><p style={{ margin: "4px 0 0", ...font.caption, color: color.muted }}>{t("home.statusSubtitle")}</p></div>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: healthColor, ...font.captionStrong }}><i style={{ width: 7, height: 7, borderRadius: "50%", background: healthColor }} />{health}</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: healthTextColor, ...font.captionStrong }}><i style={{ width: 7, height: 7, borderRadius: "50%", background: healthColor }} />{health}</span>
             </div>
             <TrendChart running={status.codexRunning} health={status.providerHealth} trendLabel={t("home.statusChartAriaLabel")} weekdays={weekdays} />
           </Panel>
@@ -164,7 +172,7 @@ export function HomeFeature() {
 
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.1fr) minmax(0, 1fr)", gap: 14 }}>
           <Panel style={{ padding: 18, minHeight: 174 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><div><h2 style={{ margin: 0, color: color.primary, fontSize: 18 }}>{t("home.providerCardTitle")}</h2><p style={{ margin: "4px 0 0", ...font.caption, color: color.muted }}>{t("home.providerCardSubtitle")}</p></div><span style={{ padding: "5px 8px", borderRadius: radius.pill, background: color.accentDim, color: color.green, ...font.captionStrong }}>{health}</span></div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><div><h2 style={{ margin: 0, color: color.primary, fontSize: 18 }}>{t("home.providerCardTitle")}</h2><p style={{ margin: "4px 0 0", ...font.caption, color: color.muted }}>{t("home.providerCardSubtitle")}</p></div><span style={{ padding: "5px 8px", borderRadius: radius.pill, background: color.accentDim, color: healthTextColor, ...font.captionStrong }}>{health}</span></div>
             <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "110px 1fr", rowGap: 10, columnGap: 14 }}>
               <span style={{ ...font.caption, color: color.muted }}>{t("home.rowEndpoint")}</span><strong style={{ ...font.captionStrong, color: color.secondary, overflow: "hidden", textOverflow: "ellipsis" }}>{status.officialMode ? t("home.valOfficial") : status.providerName ?? t("common.dash")}</strong>
               <span style={{ ...font.caption, color: color.muted }}>{t("home.rowProtocol")}</span><strong style={{ ...font.captionStrong, color: color.secondary }}>{t("home.valResponses")}</strong>
@@ -172,7 +180,7 @@ export function HomeFeature() {
             </div>
           </Panel>
           <Panel style={{ padding: 18, minHeight: 174, background: color.ink3 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><div><h2 style={{ margin: 0, color: color.primary, fontSize: 18 }}>{t("home.codexCardTitle")}</h2><p style={{ margin: "4px 0 0", ...font.caption, color: color.muted }}>{t("home.codexCardSubtitle")}</p></div><span style={{ color: status.codexRunning ? color.green : color.muted, ...font.captionStrong }}>{status.codexRunning ? t("home.running") : t("home.stopped")}</span></div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><div><h2 style={{ margin: 0, color: color.primary, fontSize: 18 }}>{t("home.codexCardTitle")}</h2><p style={{ margin: "4px 0 0", ...font.caption, color: color.muted }}>{t("home.codexCardSubtitle")}</p></div><span style={{ color: status.codexRunning ? color.greenText : color.muted, ...font.captionStrong }}>{status.codexRunning ? t("home.running") : t("home.stopped")}</span></div>
             <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", rowGap: 10, columnGap: 14, marginTop: 16 }}>
               <span style={{ ...font.caption, color: color.muted }}>{t("home.rowVersion")}</span><strong style={{ ...font.captionStrong, color: color.secondary }}>{version}</strong>
               <span style={{ ...font.caption, color: color.muted }}>{t("home.rowMode")}</span><strong style={{ ...font.captionStrong, color: color.secondary }}>{t("home.valManagedPortable")}</strong>

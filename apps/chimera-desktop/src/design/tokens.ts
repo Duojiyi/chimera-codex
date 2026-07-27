@@ -31,6 +31,10 @@ export const color = {
   green: "#35A96B",
   amber: "#E8B657",
   danger: "#C85252",
+  /** AA text counterparts for the status swatches above. */
+  greenText: "#207A4A",
+  amberText: "#8C5A03",
+  dangerText: "#A23434",
   dangerBg: "#FCEBE8",
   dangerBorder: "#EBC5C0",
 

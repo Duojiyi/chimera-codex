@@ -35,10 +35,10 @@ function dotColor(health: ProviderHealth): string {
 /** Health label colour used in the detail spec-sheet row. */
 const HEALTH_TEXT_COLOR: Record<ProviderHealth, string> = {
   unknown: color.muted,
-  healthy: color.green,
-  auth_failed: color.danger,
-  incompatible: color.amber,
-  unreachable: color.danger,
+  healthy: color.greenText,
+  auth_failed: color.dangerText,
+  incompatible: color.amberText,
+  unreachable: color.dangerText,
 };
 
 export function ProvidersFeature() {
