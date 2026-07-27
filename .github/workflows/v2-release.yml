@@ -299,6 +299,7 @@ jobs:
           mkdir -p release-assets
           find dist -type f -name 'ChimeraPlusPlus-*.exe' -exec cp {} release-assets/ \;
           find dist -type f -name 'ChimeraPlusPlus-*.dmg' -exec cp {} release-assets/ \;
+          git archive --format=tar.gz --output "release-assets/ChimeraPlusPlus-${version}-source.tar.gz" "$TAG"
           MINIMUM_SUPPORTED_VERSION="$version" node scripts/release-manifest.mjs --generate release-assets
 
       # Stable releases fail closed without the production app trust key. A
@@ -329,6 +330,7 @@ jobs:
           path: |
             dist/chimera-app-latest.json*
             latest.json
+            release-assets/ChimeraPlusPlus-*-source.tar.gz
           if-no-files-found: error
 
   publish:
@@ -353,6 +355,15 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          mkdir -p release-upload
+          # Each platform artifact contains duplicate legal/checksum files.
+          # Publish one deterministic copy and retain every installable asset.
+          find dist -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.json' -o -name '*.sig' -o -name '*.tar.gz' \) -exec cp {} release-upload/ \;
+          license_file="$(find dist -type f -name LICENSE -print -quit)"
+          notice_file="$(find dist -type f -name NOTICE -print -quit)"
+          test -n "$license_file" && cp "$license_file" release-upload/LICENSE
+          test -n "$notice_file" && cp "$notice_file" release-upload/NOTICE
+          (cd release-upload && sha256sum $(find . -maxdepth 1 -type f ! -name checksums.txt -printf '%f\n' | sort) > checksums.txt)
           prerelease_flag=""
           if [[ "$TAG" == *-beta.* || "$TAG" == *-alpha.* || "$TAG" == *-rc.* ]]; then
             prerelease_flag="--prerelease"
@@ -363,4 +374,4 @@ jobs:
             --title "Chimera++ $TAG" \
             $prerelease_flag \
             --notes "Cloud-built Chimera++ $TAG. Prereleases are for manual QA; automatic updates require a signed app manifest. Windows: SmartScreen may warn on first run. macOS: right-click → Open for the ad-hoc build." \
-            $(find dist -type f | tr '\n' ' ')
+            $(find release-upload -type f | sort)
