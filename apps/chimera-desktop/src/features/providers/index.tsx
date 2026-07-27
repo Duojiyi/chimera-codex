@@ -17,7 +17,7 @@ import { useI18n, type TranslationKey } from "../../i18n/index.tsx";
 const invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> =
   typeof window !== "undefined" &&
   (window as { __TAURI_INTERNALS__?: { invoke?: unknown } }).__TAURI_INTERNALS__?.invoke
-    ? (window as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } })
+    ? (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } })
         .__TAURI_INTERNALS__.invoke
     : async () => undefined;
 
