@@ -51,6 +51,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Install frontend dependencies
         working-directory: ${{ env.FRONTEND_DIR }}
@@ -180,14 +182,17 @@ jobs:
         working-directory: ${{ env.FRONTEND_DIR }}
         run: npm run build -- --target ${{ matrix.target }}
 
-      # Ad-hoc only, per ADR-008. Stated plainly in the log so nobody reads a
-      # green check as "this release is signed".
-      - name: Verify signature state
+      # Ad-hoc only, per ADR-008. Tauri can omit Contents/Resources when the
+      # app has no bundled resource files; create the standard directory and
+      # sign the final bundle explicitly before verifying it.
+      - name: Ad-hoc sign and verify
         shell: bash
         run: |
           set -euo pipefail
           app="$(find target/${{ matrix.target }}/release/bundle/macos -name '*.app' -maxdepth 1 | head -1)"
           test -n "$app"
+          mkdir -p "$app/Contents/Resources"
+          codesign --force --deep --sign - --timestamp=none "$app"
           codesign --verify --deep --strict "$app"
           echo "verified (ad-hoc only, NOT notarized — users must right-click → Open): $app"
           lipo -archs "$app/Contents/MacOS/"*
