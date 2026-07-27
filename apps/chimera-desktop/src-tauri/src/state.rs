@@ -10,6 +10,8 @@ use std::sync::Mutex;
 use chimera_provider::db::ProviderDb;
 use chimera_provider::keychain::OsKeychain;
 use chimera_runtime::update::RuntimeLayout;
+use chimera_update::bundled_root::{bundled_root, is_development_root};
+use chimera_update::metadata::{Role, parse_root, verify_threshold};
 
 /// Resolved on-disk locations for this installation.
 #[derive(Debug, Clone)]
@@ -108,6 +110,26 @@ impl AppState {
     /// UI rather than panicking, so a corrupt DB does not brick startup.
     pub fn initialise() -> Result<Self, String> {
         let paths = Paths::resolve();
+
+        // A fresh install has no cached update trust state yet. Validate the
+        // compiled root before opening any user data so a development or
+        // malformed trust anchor can never reach the release update path.
+        let root_doc = bundled_root()
+            .map_err(|_| "The Chimera update trust root is unavailable.".to_string())?;
+        let root = parse_root(&root_doc.payload)
+            .map_err(|_| "The Chimera update trust root is malformed.".to_string())?;
+        if is_development_root(&root) {
+            return Err("This build contains a development update trust root.".to_string());
+        }
+        let root_candidates = root.resolve_keys(Role::Root);
+        verify_threshold(
+            &root_doc.payload,
+            &root_doc.signatures,
+            &root_candidates,
+            root.role(Role::Root).threshold,
+            Role::Root.name(),
+        )
+        .map_err(|_| "The Chimera update trust root signature is invalid.".to_string())?;
 
         std::fs::create_dir_all(&paths.data_root)
             .map_err(|e| format!("Could not create data directory: {e}"))?;
