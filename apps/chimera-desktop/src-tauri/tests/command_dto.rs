@@ -5,7 +5,9 @@
 // shows empty state — the exact failure mode that made the app look "wired up"
 // while doing nothing. These tests pin the wire contract.
 
-use chimera_desktop_lib::dto::{ProviderDto, ProviderTestDto, SkinDto, SystemStatusDto};
+use chimera_desktop_lib::dto::{
+    CodexUpdateDto, ProviderDto, ProviderTestDto, SettingsDto, SkinDto, SystemStatusDto,
+};
 
 #[test]
 fn system_status_serialises_camel_case_for_frontend() {
@@ -101,4 +103,47 @@ fn skin_dto_serialises_camel_case() {
     let json = serde_json::to_string(&dto).unwrap();
     assert!(json.contains("\"isDefault\""), "got {json}");
     assert!(!json.contains("is_default"), "snake_case leaked: {json}");
+}
+
+#[test]
+fn codex_update_dto_keeps_app_and_package_versions_distinct() {
+    let dto = CodexUpdateDto {
+        current_version: Some("26.721.31836".into()),
+        latest_version: "26.721.41059".into(),
+        package_version: "26.721.4979.0".into(),
+        update_available: true,
+        source: "mirror".into(),
+        install_mode: "standard".into(),
+        size_bytes: 744080244,
+        released_at: Some("2026-07-24T21:33:02Z".into()),
+    };
+    let json = serde_json::to_string(&dto).unwrap();
+
+    assert!(json.contains("\"latestVersion\":\"26.721.41059\""));
+    assert!(json.contains("\"packageVersion\":\"26.721.4979.0\""));
+    assert!(json.contains("\"updateAvailable\":true"));
+    assert!(!json.contains("latest_version"));
+}
+
+#[test]
+fn new_codex_manager_settings_have_upgrade_safe_defaults() {
+    let settings = SettingsDto::default();
+    assert!(settings.check_codex_updates_on_start);
+    assert_eq!(settings.codex_update_source, "auto");
+    assert_eq!(settings.codex_install_mode, "standard");
+
+    let legacy = r#"{
+        "launchAtLogin": false,
+        "launchCodexOnStart": false,
+        "startMinimized": false,
+        "updateChannel": "stable",
+        "logRetention": "30",
+        "structuredLogs": true,
+        "anonymousUsage": false,
+        "crashReporting": false
+    }"#;
+    let migrated: SettingsDto = serde_json::from_str(legacy).unwrap();
+    assert!(migrated.check_codex_updates_on_start);
+    assert_eq!(migrated.codex_update_source, "auto");
+    assert_eq!(migrated.codex_install_mode, "standard");
 }
