@@ -1,7 +1,8 @@
 // Step 2.4 RED — Codex config.toml projection golden fixtures.
 // Spec 7.3-7.4: 结构化投影、保留未知字段、MCP、官方登录材料不被覆盖。
 use chimera_provider::projection::{
-    ProviderProjection, apply_provider_projection, revert_provider_projection,
+    ActiveProvider, ProviderProjection, apply_provider_projection, detect_active_provider,
+    revert_provider_projection,
 };
 
 // ── Golden fixture helpers ─────────────────────────────────────────────────
@@ -190,4 +191,95 @@ fn api_key_in_plain_text_must_be_injected_as_env_or_direct() {
         has_key_ref,
         "projected config must reference the key somehow: {result}"
     );
+}
+
+#[test]
+fn current_codex_provider_table_is_detected_without_chimera_marker() {
+    let config = r#"
+model_provider = "work-relay"
+
+[model_providers.work-relay]
+name = "Work Relay"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://relay.example/v1/"
+"#;
+
+    assert_eq!(
+        detect_active_provider(config).unwrap(),
+        ActiveProvider::Custom {
+            provider_id: "work-relay".into(),
+            display_name: "Work Relay".into(),
+            base_url: "https://relay.example/v1".into(),
+            managed_by_chimera: false,
+        }
+    );
+}
+
+#[test]
+fn openai_or_empty_configuration_is_official_mode() {
+    assert_eq!(
+        detect_active_provider("").unwrap(),
+        ActiveProvider::Official
+    );
+    assert_eq!(
+        detect_active_provider("model_provider = \"openai\"\n").unwrap(),
+        ActiveProvider::Official
+    );
+}
+
+#[test]
+fn projection_uses_current_codex_provider_shape() {
+    let result = apply_provider_projection(
+        "model_provider = \"openai\"\n",
+        &ProviderProjection {
+            base_url: "https://relay.example/v1".into(),
+            model: None,
+            api_key_env_or_plain: "secret-value".into(),
+        },
+    )
+    .unwrap();
+
+    let parsed = result.parse::<toml::Value>().unwrap();
+    assert_eq!(parsed["model_provider"].as_str(), Some("chimera"));
+    assert_eq!(
+        parsed["model_providers"]["chimera"]["base_url"].as_str(),
+        Some("https://relay.example/v1")
+    );
+    assert_eq!(
+        parsed["model_providers"]["chimera"]["experimental_bearer_token"].as_str(),
+        Some("secret-value")
+    );
+    assert!(parsed.get("model_base_url").is_none());
+    assert!(parsed.get("api_key").is_none());
+}
+
+#[test]
+fn revert_restores_provider_that_was_active_before_chimera() {
+    let original = r#"
+model_provider = "work"
+
+[model_providers.work]
+base_url = "https://work.example/v1"
+"#;
+    let projected = apply_provider_projection(
+        original,
+        &ProviderProjection {
+            base_url: "https://chimera.example/v1".into(),
+            model: None,
+            api_key_env_or_plain: "secret-value".into(),
+        },
+    )
+    .unwrap();
+    let reverted = revert_provider_projection(&projected).unwrap();
+    let parsed = reverted.parse::<toml::Value>().unwrap();
+
+    assert_eq!(parsed["model_provider"].as_str(), Some("work"));
+    assert!(parsed["model_providers"].get("chimera").is_none());
+    assert_eq!(
+        parsed["model_providers"]["work"]["base_url"].as_str(),
+        Some("https://work.example/v1")
+    );
+    assert!(parsed.get("chimera_managed").is_none());
+    assert!(parsed.get("chimera_previous_model_provider").is_none());
 }
