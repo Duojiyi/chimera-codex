@@ -28,6 +28,7 @@ interface Props {
  */
 export function TopRail({ active, onNavigate }: Props) {
   const { t } = useI18n();
+  const appVersion = import.meta.env.VITE_APP_VERSION;
   return (
     <nav
       role="navigation"
@@ -102,7 +103,7 @@ export function TopRail({ active, onNavigate }: Props) {
         </div>
         <div style={{ width: hairline, height: 16, background: color.rule }} />
         <span style={{ fontFamily: font.family, ...font.caption, color: color.dim }}>
-          v2.0.0-beta
+          v{appVersion}
         </span>
       </div>
     </nav>
