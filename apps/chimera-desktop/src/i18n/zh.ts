@@ -210,6 +210,15 @@ export const zh = {
   "codex.channelStable": "稳定版",
   "codex.skipVersionAriaLabel": "跳过此版本",
   "codex.versionHistoryAriaLabel": "版本历史",
+  "codex.updateSource": "更新源",
+  "codex.sourceAuto": "自动",
+  "codex.sourceMirror": "镜像",
+  "codex.installMode": "安装方式",
+  "codex.modeStandard": "标准安装",
+  "codex.modePortable": "免安装版",
+  "codex.checkUpdate": "检查更新",
+  "codex.checkingUpdate": "正在检查…",
+  "codex.errCheckUpdate": "无法检查 Codex 更新。",
 
   // ── Appearance ────────────────────────────────────────────────────────────
   "appearance.skins": "ChatGPT / Codex 外观",
@@ -263,6 +272,12 @@ export const zh = {
 
   "settings.generalTitle": "通用",
   "settings.generalSubtitle": "应用行为、启动方式与界面默认值。",
+  "settings.updatesSubtitle": "配置 Codex 的检查频率、下载源与安装方式。",
+  "settings.secCodexUpdates": "Codex 更新",
+  "settings.checkCodexUpdatesOnStart": "启动时检查 Codex 更新",
+  "settings.codexUpdateSource": "更新源",
+  "settings.codexInstallMode": "安装方式",
+  "settings.codexInstallModeHelp": "自动更新源会优先选择可用的官方或镜像下载；标准安装使用 Windows MSIX，免安装版由 Chimera++ 单独管理。",
   "settings.secStartup": "启动",
   "settings.secInterface": "界面",
   "settings.secDiagnostics": "诊断",

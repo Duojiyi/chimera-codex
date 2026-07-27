@@ -212,6 +212,15 @@ export const en: Record<TranslationKey, string> = {
   "codex.channelStable": "stable",
   "codex.skipVersionAriaLabel": "Skip this version",
   "codex.versionHistoryAriaLabel": "Version history",
+  "codex.updateSource": "Update source",
+  "codex.sourceAuto": "Automatic",
+  "codex.sourceMirror": "Mirror",
+  "codex.installMode": "Install method",
+  "codex.modeStandard": "Standard",
+  "codex.modePortable": "Portable",
+  "codex.checkUpdate": "Check for updates",
+  "codex.checkingUpdate": "Checking…",
+  "codex.errCheckUpdate": "Could not check for Codex updates.",
 
   // ── Appearance ────────────────────────────────────────────────────────────
   "appearance.skins": "ChatGPT / Codex appearance",
@@ -265,6 +274,12 @@ export const en: Record<TranslationKey, string> = {
 
   "settings.generalTitle": "General",
   "settings.generalSubtitle": "Application behavior, startup, and interface defaults.",
+  "settings.updatesSubtitle": "Configure Codex update checks, download source, and install method.",
+  "settings.secCodexUpdates": "CODEX UPDATES",
+  "settings.checkCodexUpdatesOnStart": "Check for Codex updates on startup",
+  "settings.codexUpdateSource": "Update source",
+  "settings.codexInstallMode": "Install method",
+  "settings.codexInstallModeHelp": "Automatic source selection uses an available official or mirror download. Standard installs the Windows MSIX; Portable is managed separately by Chimera++.",
   "settings.secStartup": "STARTUP",
   "settings.secInterface": "INTERFACE",
   "settings.secDiagnostics": "DIAGNOSTICS",

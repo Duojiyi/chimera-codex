@@ -17,11 +17,14 @@ interface SettingsState {
   structuredLogs: boolean;
   anonymousUsage: boolean;
   crashReporting: boolean;
+  checkCodexUpdatesOnStart: boolean;
+  codexUpdateSource: "auto" | "mirror";
+  codexInstallMode: "standard" | "portable";
 }
 
 type BooleanSettingKey = Extract<
   keyof SettingsState,
-  "launchAtLogin" | "launchCodexOnStart" | "startMinimized" | "structuredLogs" | "anonymousUsage" | "crashReporting"
+  "launchAtLogin" | "launchCodexOnStart" | "startMinimized" | "structuredLogs" | "anonymousUsage" | "crashReporting" | "checkCodexUpdatesOnStart"
 >;
 
 const DEFAULT_SETTINGS: SettingsState = {
@@ -33,6 +36,9 @@ const DEFAULT_SETTINGS: SettingsState = {
   structuredLogs: true,
   anonymousUsage: false,
   crashReporting: false,
+  checkCodexUpdatesOnStart: true,
+  codexUpdateSource: "auto",
+  codexInstallMode: "standard",
 };
 
 // Module-level constants hold i18n KEYS, never translated text — translation
@@ -48,6 +54,7 @@ const CATEGORIES: { id: CategoryId; labelKey: TranslationKey }[] = [
 
 const SUBTITLES: Partial<Record<CategoryId, TranslationKey>> = {
   general: "settings.generalSubtitle",
+  updates: "settings.updatesSubtitle",
 };
 
 // Internal setting values are plain codes (never shown directly); these maps
@@ -535,6 +542,49 @@ function Section({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+function SegmentedSetting<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div role="group" aria-label={label} style={{ display: "flex", gap: 2, padding: 3, background: color.ink2, borderRadius: radius.sm }}>
+      {options.map((option) => {
+        const selected = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            aria-pressed={selected}
+            onClick={() => onChange(option.value)}
+            style={{
+              minWidth: 92,
+              minHeight: 30,
+              padding: "0 12px",
+              border: "none",
+              borderRadius: radius.xs,
+              background: selected ? color.ink3 : "transparent",
+              color: selected ? color.primary : color.muted,
+              fontFamily: "inherit",
+              fontSize: 12,
+              fontWeight: selected ? 600 : 400,
+              cursor: "pointer",
+            }}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function SettingsFeature() {
   const { lang, t, tf, setLang } = useI18n();
   const [active, setActive] = useState<CategoryId>("general");
@@ -749,6 +799,45 @@ export function SettingsFeature() {
                 </Item>
               </Section>
             </>
+          ) : active === "updates" ? (
+            <Section label={t("settings.secCodexUpdates")}>
+              <Item label={t("settings.checkCodexUpdatesOnStart")}>
+                <Toggle
+                  checked={settings.checkCodexUpdatesOnStart}
+                  label={t("settings.checkCodexUpdatesOnStart")}
+                  onLabel={t("settings.on")}
+                  offLabel={t("settings.off")}
+                  onChange={() => toggleSetting("checkCodexUpdatesOnStart")}
+                />
+              </Item>
+              <Item label={t("settings.codexUpdateSource")}>
+                <SegmentedSetting
+                  label={t("settings.codexUpdateSource")}
+                  value={settings.codexUpdateSource}
+                  options={[
+                    { value: "auto", label: t("codex.sourceAuto") },
+                    { value: "mirror", label: t("codex.sourceMirror") },
+                  ]}
+                  onChange={(value) => setSettings((current) => ({ ...current, codexUpdateSource: value }))}
+                />
+              </Item>
+              <Item label={t("settings.codexInstallMode")}>
+                <SegmentedSetting
+                  label={t("settings.codexInstallMode")}
+                  value={settings.codexInstallMode}
+                  options={[
+                    { value: "standard", label: t("codex.modeStandard") },
+                    { value: "portable", label: t("codex.modePortable") },
+                  ]}
+                  onChange={(value) => setSettings((current) => ({ ...current, codexInstallMode: value }))}
+                />
+              </Item>
+              <div style={{ padding: "14px 0 2px", maxWidth: 620 }}>
+                <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: color.muted }}>
+                  {t("settings.codexInstallModeHelp")}
+                </p>
+              </div>
+            </Section>
           ) : active === "advanced" ? (
             <>
               <MigrationPanel />

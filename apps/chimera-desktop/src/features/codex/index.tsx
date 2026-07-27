@@ -2,8 +2,14 @@
 // Layout is a 1:1 implementation of the Pencil design frame `Codex` (Body).
 // Every dimension/colour comes from src/design/tokens.ts — no literals here.
 import { useState, useEffect, type CSSProperties } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { color, type as font, size, radius, hairline, ruleOpacity } from "../../design/tokens.ts";
 import { useI18n, type TranslationKey } from "../../i18n/index.tsx";
+import {
+  formatDownloadProgress,
+  mergeUpdateCheck,
+  type UpdateCheck,
+} from "./lib/updateState.ts";
 
 interface VersionEntry {
   version: string;
@@ -91,28 +97,113 @@ function HairlineRule({ opacity = 1 }: { opacity?: number }) {
   return <div style={{ height: hairline, background: color.rule, opacity, flexShrink: 0 }} />;
 }
 
+function SegmentedControl<T extends string>({
+  label,
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: { value: T; label: string }[];
+  disabled: boolean;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div role="group" aria-label={label} style={{ display: "flex", padding: 3, gap: 2, background: color.ink2, borderRadius: radius.sm }}>
+      {options.map((option) => {
+        const selected = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            aria-pressed={selected}
+            disabled={disabled}
+            onClick={() => onChange(option.value)}
+            style={{
+              minHeight: 30,
+              padding: "0 12px",
+              border: "none",
+              borderRadius: radius.xs,
+              background: selected ? color.ink3 : "transparent",
+              color: selected ? color.primary : color.muted,
+              fontFamily: "inherit",
+              fontSize: 12,
+              fontWeight: selected ? 600 : 400,
+              cursor: disabled ? "wait" : "pointer",
+            }}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function CodexFeature() {
   const { t, tf } = useI18n();
   const [status, setStatus] = useState<RuntimeStatus>(EMPTY_STATUS);
   const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [updateSource, setUpdateSource] = useState<"auto" | "mirror">("auto");
+  const [installMode, setInstallMode] = useState<"standard" | "portable">("standard");
+  const [downloadProgress, setDownloadProgress] = useState({ percent: 0, label: "0%" });
 
   useEffect(() => {
-    invoke("get_runtime_status")
-      .then(s => s && setStatus(s as RuntimeStatus))
-      .catch(() => {});
+    let cancelled = false;
+    let stopListening: (() => void) | undefined;
+    void listen<{ downloaded: number; total: number }>("codex://download-progress", (event) => {
+      if (!cancelled) setDownloadProgress(formatDownloadProgress(event.payload.downloaded, event.payload.total));
+    }).then((unlisten) => { stopListening = unlisten; });
+    void Promise.all([invoke("get_runtime_status"), invoke("get_settings")]).then(([runtime, rawSettings]) => {
+      if (cancelled) return;
+      if (runtime) setStatus(runtime as RuntimeStatus);
+      const settings = rawSettings as {
+        checkCodexUpdatesOnStart?: boolean;
+        codexUpdateSource?: "auto" | "mirror";
+        codexInstallMode?: "standard" | "portable";
+      } | undefined;
+      const source = settings?.codexUpdateSource ?? "auto";
+      const mode = settings?.codexInstallMode ?? "standard";
+      setUpdateSource(source);
+      setInstallMode(mode);
+      if (settings?.checkCodexUpdatesOnStart !== false) void checkForUpdates(source, mode);
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+      stopListening?.();
+    };
   }, []);
+
+  async function checkForUpdates(
+    source: "auto" | "mirror" = updateSource,
+    mode: "standard" | "portable" = installMode,
+  ) {
+    setChecking(true);
+    setError(null);
+    try {
+      const update = await invoke("check_codex_update", { source, installMode: mode }) as UpdateCheck | undefined;
+      if (update) setStatus((current) => mergeUpdateCheck(current, update));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : t("codex.errCheckUpdate"));
+    } finally {
+      setChecking(false);
+    }
+  }
 
   async function runAction(action: () => Promise<unknown>, failMessage: string) {
     setBusy(true);
     setError(null);
     setActionMessage(null);
     try {
-      await action();
+      const result = await action() as { message?: string; actualMode?: string } | undefined;
       const s = await invoke("get_runtime_status").catch(() => undefined);
       if (s) setStatus(s as RuntimeStatus);
-      setActionMessage(t("codex.actionCompleted"));
+      setActionMessage(result?.message ?? t("codex.actionCompleted"));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : failMessage);
     } finally {
@@ -125,7 +216,7 @@ export function CodexFeature() {
   const handleRollback = () => runAction(() => invoke("rollback_runtime"), t("codex.errRollback"));
   const handleUpdate = () =>
     runAction(
-      () => invoke("apply_codex_update", { version: status.updateVersion }),
+      () => invoke("apply_codex_update", { version: status.updateVersion, source: updateSource, installMode }),
       t("codex.errUpdate")
     );
 
@@ -235,6 +326,63 @@ export function CodexFeature() {
 
       {/* ── Right pane: updates + history + diagnostics ── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <div
+          style={{
+            padding: "22px 40px",
+            borderBottom: `${hairline}px solid ${color.rule}`,
+            display: "flex",
+            flexDirection: "column",
+            gap: 14,
+            background: color.ink1,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <span style={{ fontSize: 11, color: color.dim }}>{t("codex.updateSource")}</span>
+              <SegmentedControl
+                label={t("codex.updateSource")}
+                value={updateSource}
+                disabled={busy || checking}
+                options={[
+                  { value: "auto", label: t("codex.sourceAuto") },
+                  { value: "mirror", label: t("codex.sourceMirror") },
+                ]}
+                onChange={(value) => { setUpdateSource(value); void checkForUpdates(value, installMode); }}
+              />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <span style={{ fontSize: 11, color: color.dim }}>{t("codex.installMode")}</span>
+              <SegmentedControl
+                label={t("codex.installMode")}
+                value={installMode}
+                disabled={busy || checking}
+                options={[
+                  { value: "standard", label: t("codex.modeStandard") },
+                  { value: "portable", label: t("codex.modePortable") },
+                ]}
+                onChange={(value) => setInstallMode(value)}
+              />
+            </div>
+            <div style={{ flex: 1 }} />
+            <button
+              type="button"
+              onClick={() => void checkForUpdates()}
+              disabled={busy || checking}
+              style={{ ...actionButtonStyle, minHeight: 36 }}
+            >
+              {checking ? t("codex.checkingUpdate") : t("codex.checkUpdate")}
+            </button>
+          </div>
+          {busy && (
+            <div aria-live="polite" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ height: 4, flex: 1, background: color.ink3, overflow: "hidden", borderRadius: radius.xs }}>
+                <div style={{ width: `${downloadProgress.percent}%`, height: "100%", background: color.accent, transition: "width 180ms ease-out" }} />
+              </div>
+              <span style={{ width: 36, fontSize: 11, color: color.secondary, textAlign: "right" }}>{downloadProgress.label}</span>
+            </div>
+          )}
+        </div>
+
         {status.updateAvailable && status.updateVersion && (
           <div
             aria-label={t("codex.updateAvailableAriaLabel")}
