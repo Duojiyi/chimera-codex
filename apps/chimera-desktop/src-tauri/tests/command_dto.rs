@@ -13,6 +13,7 @@ use chimera_desktop_lib::dto::{
 fn system_status_serialises_camel_case_for_frontend() {
     let dto = SystemStatusDto {
         provider_name: Some("ChimeraHub".into()),
+        provider_url: Some("https://api.chimerahub.org/v1".into()),
         active_provider_id: Some("provider-1".into()),
         provider_health: "healthy".into(),
         codex_version: Some("26.721".into()),
@@ -23,6 +24,7 @@ fn system_status_serialises_camel_case_for_frontend() {
 
     // Frontend reads status.providerName / status.codexVersion / status.officialMode
     assert!(json.contains("\"providerName\""), "got {json}");
+    assert!(json.contains("\"providerUrl\""), "got {json}");
     assert!(json.contains("\"providerHealth\""), "got {json}");
     assert!(json.contains("\"codexVersion\""), "got {json}");
     assert!(json.contains("\"codexRunning\""), "got {json}");

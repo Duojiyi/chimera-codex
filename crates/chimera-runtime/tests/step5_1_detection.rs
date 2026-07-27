@@ -1,6 +1,9 @@
 // Step 5.1 RED — Runtime detection: ManagedPortable / ExternalMsix / ExternalPortable.
 // Spec 8.1: only operations on owned runtime; path/ownership boundary checks.
-use chimera_runtime::detection::{DetectedRuntime, InstallKind, OwnershipError, detect_runtime};
+use chimera_runtime::detection::{
+    DetectedRuntime, InstallKind, OwnershipError, detect_runtime, windows_external_roots,
+};
+use std::path::Path;
 use std::fs;
 use tempfile::tempdir;
 
@@ -107,6 +110,43 @@ fn install_kind_variants_are_exhaustive() {
         InstallKind::ExternalMsix,
         InstallKind::ExternalPortable,
     ];
+}
+
+#[test]
+fn user_portable_install_is_checked_before_stale_windowsapps_directories() {
+    let roots = windows_external_roots(
+        Some(Path::new(r"C:\Users\tester\AppData\Local")),
+        Some(Path::new(r"C:\Program Files")),
+    );
+
+    assert_eq!(
+        roots.first().map(|(path, _)| path.as_path()),
+        Some(Path::new(r"C:\Users\tester\AppData\Local\Programs\Codex"))
+    );
+    let portable_index = roots
+        .iter()
+        .position(|(path, _)| path.ends_with(r"Programs\Codex"))
+        .unwrap();
+    let windows_apps_index = roots
+        .iter()
+        .position(|(path, _)| path.ends_with("WindowsApps"))
+        .unwrap();
+    assert!(portable_index < windows_apps_index);
+}
+
+#[test]
+fn external_portable_detection_carries_its_real_version() {
+    let detected = DetectedRuntime::ExternalPortable {
+        path: r"C:\Users\tester\AppData\Local\Programs\Codex".into(),
+        version: Some("26.721.41059".into()),
+    };
+
+    match detected {
+        DetectedRuntime::ExternalPortable { version, .. } => {
+            assert_eq!(version.as_deref(), Some("26.721.41059"));
+        }
+        other => panic!("unexpected runtime: {other:?}"),
+    }
 }
 
 // ── Ownership JSON survives roundtrip ─────────────────────────────────────────

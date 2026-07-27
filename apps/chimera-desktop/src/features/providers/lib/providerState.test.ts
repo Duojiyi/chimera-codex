@@ -9,6 +9,7 @@ import {
   deleteProvider,
   setHealth,
   selectActive,
+  hydrateProviderView,
   type ProviderEntry,
 } from "./providerState.ts";
 
@@ -148,5 +149,37 @@ describe("selectActive", () => {
     const active = selectActive(state);
     assert.ok(active);
     assert.equal(active.displayName, "Active");
+  });
+});
+
+describe("hydrateProviderView", () => {
+  it("keeps an externally configured provider out of official mode", () => {
+    const hydrated = hydrateProviderView([], {
+      activeProviderId: null,
+      officialMode: false,
+      providerName: "ChimeraHub",
+      providerUrl: "https://api.chimerahub.org/v1",
+    });
+
+    assert.equal(hydrated.state.officialMode, false);
+    assert.equal(hydrated.state.activeId, null);
+    assert.deepEqual(hydrated.observedProvider, {
+      displayName: "ChimeraHub",
+      baseUrl: "https://api.chimerahub.org/v1",
+    });
+  });
+
+  it("selects a saved provider instead of creating an observed duplicate", () => {
+    const saved = makeEntry({ id: "saved", displayName: "ChimeraHub" });
+    const hydrated = hydrateProviderView([saved], {
+      activeProviderId: saved.id,
+      officialMode: false,
+      providerName: saved.displayName,
+      providerUrl: saved.baseUrl,
+    });
+
+    assert.equal(hydrated.state.activeId, saved.id);
+    assert.equal(hydrated.state.officialMode, false);
+    assert.equal(hydrated.observedProvider, null);
   });
 });
