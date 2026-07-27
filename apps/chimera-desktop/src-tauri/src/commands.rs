@@ -16,7 +16,9 @@ use chimera_platform::lock::{LockError, OperationLock};
 use chimera_provider::db::ProviderRow;
 use chimera_provider::keychain::{KeychainPort, SecretRef};
 use chimera_provider::probe::{UrlValidationError, validate_provider_url};
-use chimera_provider::projection::{ProviderProjection, revert_provider_projection};
+use chimera_provider::projection::{
+    ActiveProvider, ProviderProjection, detect_active_provider, revert_provider_projection,
+};
 use chimera_provider::transaction::{SwitchTransaction, TransactionOutcome, TxError};
 use chimera_runtime::detection::detect_external_runtime;
 use chimera_runtime::health::check_runtime_health;
@@ -62,15 +64,29 @@ pub fn get_system_status(state: State<'_, AppState>) -> Result<SystemStatusDto, 
         .list_all()
         .map_err(|_| "Could not read the provider list. Run Diagnose.".to_string())?;
 
-    // The first row is the active marker maintained by ProviderDb. The
-    // projection flag is the source of truth for Official mode, so a provider
-    // list can exist without implying that one is currently selected.
-    let projection_active = fs::read_to_string(state.paths.codex_config())
+    // Read what Codex will actually use. Other switchers do not write our
+    // ownership marker, so using that marker as provider detection incorrectly
+    // labelled every CC Switch or hand-written configuration as official mode.
+    let configured = fs::read_to_string(state.paths.codex_config())
         .ok()
-        .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok())
-        .and_then(|doc| doc.get("chimera_managed").and_then(|v| v.as_bool()))
-        .unwrap_or(false);
-    let active = projection_active.then(|| rows.first()).flatten();
+        .and_then(|text| detect_active_provider(&text).ok())
+        .unwrap_or(ActiveProvider::Official);
+    let configured_url = match &configured {
+        ActiveProvider::Custom { base_url, .. } => Some(normalize_provider_url(base_url)),
+        ActiveProvider::Official => None,
+    };
+    let active = configured_url.as_deref().and_then(|wanted| {
+        rows.iter()
+            .find(|row| normalize_provider_url(row.base_url.as_str()) == wanted)
+    });
+    let provider_name = match &configured {
+        ActiveProvider::Custom { display_name, .. } => Some(
+            active
+                .map(|row| row.display_name.clone())
+                .unwrap_or_else(|| display_name.clone()),
+        ),
+        ActiveProvider::Official => None,
+    };
 
     let health = check_runtime_health(&state.runtime);
     let external = detect_external_runtime();
@@ -86,15 +102,19 @@ pub fn get_system_status(state: State<'_, AppState>) -> Result<SystemStatusDto, 
         });
 
     Ok(SystemStatusDto {
-        provider_name: active.map(|r| r.display_name.clone()),
+        provider_name,
         active_provider_id: active.map(|r| r.id.to_string()),
         provider_health: active
             .map(|r| format!("{:?}", r.health).to_lowercase())
             .unwrap_or_else(|| "unknown".to_string()),
         codex_version,
         codex_running: codex_process_running(),
-        official_mode: active.is_none(),
+        official_mode: matches!(configured, ActiveProvider::Official),
     })
+}
+
+fn normalize_provider_url(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_ascii_lowercase()
 }
 
 /// Providers screen: full list. Keys are never included.
