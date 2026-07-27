@@ -22,6 +22,7 @@ test('the shipped window is full bleed instead of a framed mockup', () => {
   assert.match(styles, /\.app-window\s*{[^}]*border-radius:\s*0/s);
 });
 
-test('window controls keep the familiar circular traffic-light shape', () => {
-  assert.match(styles, /\.window-control\s*{[^}]*width:\s*12px[^}]*height:\s*12px[^}]*border-radius:\s*50%/s);
+test('window controls have accessible targets around familiar 12px traffic-light dots', () => {
+  assert.match(styles, /\.window-control\s*{[^}]*width:\s*28px[^}]*height:\s*28px/s);
+  assert.match(styles, /\.window-control::before\s*{[^}]*width:\s*12px[^}]*height:\s*12px[^}]*border-radius:\s*50%/s);
 });
