@@ -78,11 +78,11 @@ button:disabled { cursor: not-allowed; }
 .window-lights i:nth-child(3) { background: #4DCB79; }
 .window-title { color: #263638; font-size: 12px; font-weight: 600; }
 .window-bar-actions { gap: 10px; }
-.window-status { display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border-radius: 999px; background: #E6F3EE; color: #2D8A59; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; font-weight: 600; }
+.window-status { display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border-radius: 999px; background: #E6F3EE; color: #145F39; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; font-weight: 600; }
 .window-status i { width: 7px; height: 7px; border-radius: 50%; background: #35A96B; }
 .window-more { border: 0; background: transparent; color: #6D7D7D; font-size: 18px; line-height: 1; min-height: 28px; padding: 0 4px; }
 .app-content { min-width: 0; min-height: 0; flex: 1; display: flex; overflow: hidden; background: #EEF8F5; }
-.rail-label { display: block; margin: 0 4px 10px; color: #7C8E8E; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; font-weight: 600; }
+.rail-label { display: block; margin: 0 4px 10px; color: #2B4648; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; font-weight: 600; }
 .rail-promo { position: relative; overflow: hidden; min-height: 148px; margin: 10px 0; padding: 16px 14px; border-radius: 16px; background: #B5D8D8; box-sizing: border-box; }
 .rail-promo strong, .rail-promo span { position: relative; z-index: 1; display: block; max-width: 178px; }
 .rail-promo strong { color: #172425; font-size: 19px; line-height: 1.1; }
@@ -92,8 +92,8 @@ button:disabled { cursor: not-allowed; }
 .rail-avatar { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 50%; background: #D7E7FA; }
 .rail-account > span:nth-child(2) { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
 .rail-account strong { color: #1B2A2A; font-size: 11px; }
-.rail-account small { color: #7A898A; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; }
-.rail-chevron { color: #738183; font-size: 15px; }
+.rail-account small { color: #304B4D; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; }
+.rail-chevron { color: #2B4648; font-size: 15px; }
 
 .bento-card {
   background: #FFFFFF;
