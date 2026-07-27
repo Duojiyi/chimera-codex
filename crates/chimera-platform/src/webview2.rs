@@ -102,7 +102,10 @@ pub fn check_webview2(probe: &dyn RuntimeProbe) -> Webview2Status {
 #[cfg(windows)]
 mod real {
     use super::RuntimeProbe;
+    use std::os::windows::process::CommandExt;
     use std::process::Command;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     /// Evergreen runtime's registered client GUID. Stable across versions —
     /// it identifies the runtime itself, not a release of it.
@@ -123,7 +126,9 @@ mod real {
     /// user to install something they already have, and preflight has not
     /// modified anything either way.
     fn read_pv(root: &str, key: &str) -> Option<String> {
-        let output = Command::new("reg")
+        let mut command = Command::new("reg");
+        command.creation_flags(CREATE_NO_WINDOW);
+        let output = command
             .args(["query", &format!("{root}\\{key}"), "/v", "pv"])
             .output()
             .ok()?;

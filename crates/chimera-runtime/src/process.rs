@@ -19,6 +19,9 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use thiserror::Error;
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// Outcome of a successful launch, returned across the Tauri IPC boundary.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,9 +91,11 @@ pub fn launch_managed_codex(layout: &RuntimeLayout) -> Result<LaunchReport, Laun
 pub fn codex_process_running() -> bool {
     #[cfg(windows)]
     {
-        let output = Command::new("tasklist")
-            .args(["/FO", "CSV", "/NH"])
-            .output();
+        use std::os::windows::process::CommandExt;
+
+        let mut command = Command::new("tasklist");
+        command.creation_flags(CREATE_NO_WINDOW);
+        let output = command.args(["/FO", "CSV", "/NH"]).output();
         let Ok(output) = output else {
             return false;
         };
