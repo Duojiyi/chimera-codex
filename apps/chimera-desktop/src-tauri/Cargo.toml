@@ -32,6 +32,8 @@ chimera-theme = { path = "../../../crates/chimera-theme" }
 chimera-runtime = { path = "../../../crates/chimera-runtime" }
 chimera-platform = { path = "../../../crates/chimera-platform" }
 chimera-update = { path = "../../../crates/chimera-update" }
+codex-win-engine.workspace = true
+codex-theme-engine.workspace = true
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

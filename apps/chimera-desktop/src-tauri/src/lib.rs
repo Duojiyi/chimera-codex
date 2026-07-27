@@ -10,6 +10,7 @@ pub mod migration_cmds;
 pub mod portable_cmds;
 pub mod provider_cmds;
 pub mod runtime_cmds;
+pub mod skin_catalog;
 pub mod skin_cmds;
 pub mod state;
 pub mod tray;
@@ -82,6 +83,12 @@ pub fn run() {
             skin_cmds::try_skin,
             skin_cmds::cancel_try_skin,
             skin_cmds::restore_default_skin,
+            skin_catalog::list_skin_catalog,
+            skin_catalog::install_catalog_skin,
+            skin_catalog::import_skin_package,
+            skin_catalog::apply_skin_package,
+            skin_catalog::try_skin_package,
+            skin_catalog::restore_skin_package,
             // Codex screen — every command the tab calls must be here, or it
             // fails at runtime with "command not found" the moment it opens.
             runtime_cmds::get_runtime_status,

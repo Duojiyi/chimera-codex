@@ -114,6 +114,17 @@ The three engine components above are the primary adoption targets. The outer ma
 | License | MIT |
 | Modifications | None to dependency; Chimera adapter narrows release discovery and install contracts |
 
+### Codex theme engine dependency — from Codex-App-Manager
+
+| Field | Value |
+|---|---|
+| Source repo | https://github.com/Wangnov/Codex-App-Manager |
+| Source commit | `89b542b9299453dcd833757b10cdb15f6d14d527` |
+| Source path | `crates/codex-theme-engine` and catalog orchestration in `src-tauri/src/app/codex_theme.rs` |
+| Local path | `Cargo.toml` pinned dependency; adapter in `apps/chimera-desktop/src-tauri/src/skin_catalog.rs` |
+| License | MIT |
+| Modifications | Engine unmodified; catalog/download orchestration narrowed to Chimera paths and commands |
+
 ---
 
 ## 4. codex-app-mirror (Wangnov)
