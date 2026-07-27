@@ -34,13 +34,8 @@ const CHECKSUMS: &str = concat!(
 
 #[test]
 fn public_version_is_not_confused_with_the_msix_package_version() {
-    let plan = parse_windows_release_plan(
-        MANIFEST,
-        CHECKSUMS,
-        UpdateSource::Mirror,
-        Some("x64"),
-    )
-    .unwrap();
+    let plan =
+        parse_windows_release_plan(MANIFEST, CHECKSUMS, UpdateSource::Mirror, Some("x64")).unwrap();
 
     assert_eq!(plan.version, "26.721.41059");
     assert_eq!(plan.package_version, "26.721.4979.0");

@@ -85,7 +85,7 @@ This repository IS the current codebase from which Chimera++ v2 is derived. v2 i
 |---|---|
 | Repository | https://github.com/Wangnov/Codex-App-Manager |
 | Baseline version | v0.5.0 |
-| Baseline commit | `b1deeae3fc423100bb604dba8cbe93876f121491` |
+| Baseline commit | `89b542b9299453dcd833757b10cdb15f6d14d527` |
 | License | MIT |
 
 ### Adopted scope
@@ -102,6 +102,17 @@ This repository IS the current codebase from which Chimera++ v2 is derived. v2 i
 ### Notes
 
 The three engine components above are the primary adoption targets. The outer manager shell and self-updater are redundant with Chimera++ v2's own update infrastructure and are excluded to avoid duplication and maintenance burden.
+
+### Windows install engine dependency — from Codex-App-Manager
+
+| Field | Value |
+|---|---|
+| Source repo | https://github.com/Wangnov/Codex-App-Manager |
+| Source commit | `89b542b9299453dcd833757b10cdb15f6d14d527` |
+| Source path | `crates/codex-win-engine` |
+| Local path | `Cargo.toml` pinned dependency; adapter in `crates/chimera-runtime/src/manager.rs` |
+| License | MIT |
+| Modifications | None to dependency; Chimera adapter narrows release discovery and install contracts |
 
 ---
 

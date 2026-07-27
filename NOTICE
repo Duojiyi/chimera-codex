@@ -48,6 +48,15 @@ on farion1231/cc-switch and is used under the MIT License.
 Project: https://github.com/farion1231/cc-switch
 Copyright (c) 2025 Jason Young
 
+3.3 Codex-App-Manager engine
+
+Chimera++ uses the pinned `codex-win-engine` crate from
+Wangnov/Codex-App-Manager under the MIT License.
+
+Project: https://github.com/Wangnov/Codex-App-Manager
+Source commit: 89b542b9299453dcd833757b10cdb15f6d14d527
+Copyright (c) 2026 Wangnov
+
 The MIT terms below apply independently to each work listed above.
 
 MIT License

@@ -21,6 +21,7 @@ reqwest = { workspace = true, features = ["blocking"] }
 zip = { workspace = true }
 chimera-domain = { path = "../chimera-domain" }
 chimera-platform = { path = "../chimera-platform" }
+codex-win-engine = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
