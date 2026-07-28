@@ -11,8 +11,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Default China-reachable Codex mirror managed by the reference project.
-pub const DEFAULT_MIRROR_BASE: &str = "https://codexapp.agentsmirror.com";
+/// Public release asset base for the Chimera-controlled Codex mirror.
+pub const DEFAULT_MIRROR_RELEASE_BASE: &str =
+    "https://github.com/Duojiyi/codex-app-mirror/releases/latest/download";
 
 /// How the application chooses where Codex update bytes come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,21 +66,16 @@ impl FromStr for InstallMode {
 pub struct MirrorEndpoints {
     pub manifest_url: String,
     pub checksums_url: String,
-    pub package_url: String,
+    pub release_download_base: String,
 }
 
 /// Resolve the stable endpoints for the selected architecture.
 pub fn mirror_endpoints(source: UpdateSource, architecture: Option<&str>) -> MirrorEndpoints {
-    let _ = source;
-    let package = match architecture.map(|value| value.trim().to_ascii_lowercase()) {
-        Some(value) if value == "arm64" || value == "aarch64" => "win-arm64",
-        Some(value) if value == "x64" || value == "x86_64" || value == "amd64" => "win-x64",
-        _ => "win",
-    };
+    let _ = (source, architecture);
     MirrorEndpoints {
-        manifest_url: format!("{DEFAULT_MIRROR_BASE}/latest/manifest"),
-        checksums_url: format!("{DEFAULT_MIRROR_BASE}/latest/checksums"),
-        package_url: format!("{DEFAULT_MIRROR_BASE}/latest/{package}"),
+        manifest_url: format!("{DEFAULT_MIRROR_RELEASE_BASE}/release-manifest.json"),
+        checksums_url: format!("{DEFAULT_MIRROR_RELEASE_BASE}/SHA256SUMS-windows.txt"),
+        release_download_base: DEFAULT_MIRROR_RELEASE_BASE.to_string(),
     }
 }
 
@@ -209,7 +205,10 @@ pub fn parse_windows_release_plan(
         version: release.version,
         package_version: release.package_version,
         package_moniker: release.package_moniker,
-        package_url: endpoints.package_url,
+        package_url: format!(
+            "{}/{}.Msix",
+            endpoints.release_download_base, release.package_moniker
+        ),
         sha256: sha256.to_ascii_lowercase(),
         size_bytes: release.content_length.ok_or(ManagerError::MissingSize)?,
         released_at: release.released_at,
