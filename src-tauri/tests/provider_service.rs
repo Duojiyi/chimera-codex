@@ -188,8 +188,8 @@ command = "say"
         "Codex provider switching should preserve the existing live auth.json"
     );
 
-    let config_text =
-        std::fs::read_to_string(chimera_plus_plus_lib::get_codex_config_path()).expect("read config.toml");
+    let config_text = std::fs::read_to_string(chimera_plus_plus_lib::get_codex_config_path())
+        .expect("read config.toml");
     assert!(
         config_text.contains("mcp_servers.echo-server"),
         "config.toml should contain synced MCP servers"
@@ -310,8 +310,8 @@ requires_openai_auth = true
     ProviderService::switch(&state, AppType::Codex, "new-provider")
         .expect("switch provider should succeed");
 
-    let config_text =
-        std::fs::read_to_string(chimera_plus_plus_lib::get_codex_config_path()).expect("read config.toml");
+    let config_text = std::fs::read_to_string(chimera_plus_plus_lib::get_codex_config_path())
+        .expect("read config.toml");
     let parsed: toml::Value = toml::from_str(&config_text).expect("parse config.toml");
 
     assert_eq!(
@@ -467,8 +467,8 @@ requires_openai_auth = true
         "existing ChatGPT OAuth token should be preserved"
     );
 
-    let live_config =
-        std::fs::read_to_string(chimera_plus_plus_lib::get_codex_config_path()).expect("read config.toml");
+    let live_config = std::fs::read_to_string(chimera_plus_plus_lib::get_codex_config_path())
+        .expect("read config.toml");
     let parsed_live: toml::Value = toml::from_str(&live_config).expect("parse live config");
     assert_eq!(
         parsed_live
@@ -610,14 +610,16 @@ wire_api = "responses"
         .expect("switch from official subscription to DeepSeek");
 
     let auth_after_switch: serde_json::Value =
-        read_json_file(&chimera_plus_plus_lib::get_codex_auth_path()).expect("read auth after switch");
+        read_json_file(&chimera_plus_plus_lib::get_codex_auth_path())
+            .expect("read auth after switch");
     assert_eq!(
         auth_after_switch, oauth_auth,
         "normal provider switch with Codex preservation enabled must keep OAuth auth.json"
     );
 
     let config_after_switch =
-        std::fs::read_to_string(chimera_plus_plus_lib::get_codex_config_path()).expect("read config");
+        std::fs::read_to_string(chimera_plus_plus_lib::get_codex_config_path())
+            .expect("read config");
     assert!(
         config_after_switch.contains("https://api.deepseek.com/v1"),
         "normal switch should write the DeepSeek endpoint before takeover"
@@ -640,14 +642,16 @@ wire_api = "responses"
     let codex_proxy_base_url = format!("http://127.0.0.1:{}/v1", proxy_status.port);
 
     let auth_after_takeover: serde_json::Value =
-        read_json_file(&chimera_plus_plus_lib::get_codex_auth_path()).expect("read auth after takeover");
+        read_json_file(&chimera_plus_plus_lib::get_codex_auth_path())
+            .expect("read auth after takeover");
     assert_eq!(
         auth_after_takeover, oauth_auth,
         "enabling takeover must not rewrite Codex OAuth auth.json"
     );
 
     let config_after_takeover =
-        std::fs::read_to_string(chimera_plus_plus_lib::get_codex_config_path()).expect("read config");
+        std::fs::read_to_string(chimera_plus_plus_lib::get_codex_config_path())
+            .expect("read config");
     assert!(
         config_after_takeover.contains(&codex_proxy_base_url),
         "enabling takeover should point Codex config.toml at the local proxy"
@@ -874,8 +878,8 @@ requires_openai_auth = true
         "official provider should preserve the existing ChatGPT OAuth token"
     );
 
-    let live_config =
-        std::fs::read_to_string(chimera_plus_plus_lib::get_codex_config_path()).expect("read config.toml");
+    let live_config = std::fs::read_to_string(chimera_plus_plus_lib::get_codex_config_path())
+        .expect("read config.toml");
     assert!(
         !live_config.contains("experimental_bearer_token"),
         "official login provider has no API key to inject"
@@ -959,8 +963,8 @@ fn reapply_codex_official_live_resyncs_mcp_servers() {
 
     // 统一会话开关变更触发的 reapply 会整体重写 live config.toml（有意设计），
     // 写完必须重新投影 DB 里启用的 MCP，否则用户的 MCP 会静默失效。
-    let reapplied =
-        chimera_plus_plus_lib::reapply_current_codex_official_live(&state).expect("reapply official live");
+    let reapplied = chimera_plus_plus_lib::reapply_current_codex_official_live(&state)
+        .expect("reapply official live");
     assert!(
         reapplied,
         "current provider is official, reapply should run"
@@ -1649,8 +1653,8 @@ wire_api = "responses"
         "provider switch during takeover ownership must not rewrite Codex OAuth auth"
     );
 
-    let live_config =
-        std::fs::read_to_string(chimera_plus_plus_lib::get_codex_config_path()).expect("read config.toml");
+    let live_config = std::fs::read_to_string(chimera_plus_plus_lib::get_codex_config_path())
+        .expect("read config.toml");
     assert!(
         live_config.contains("http://127.0.0.1:15721/v1"),
         "live config should remain pointed at the local proxy"

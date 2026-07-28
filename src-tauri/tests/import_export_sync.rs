@@ -260,8 +260,8 @@ requires_openai_auth = true
 
     ConfigService::sync_current_providers_to_live(&mut config).expect("sync codex live");
 
-    let toml_text =
-        fs::read_to_string(chimera_plus_plus_lib::get_codex_config_path()).expect("read config.toml");
+    let toml_text = fs::read_to_string(chimera_plus_plus_lib::get_codex_config_path())
+        .expect("read config.toml");
     let parsed: toml::Value = toml::from_str(&toml_text).expect("parse config.toml");
 
     assert_eq!(
@@ -889,7 +889,8 @@ fn import_from_claude_merges_into_config() {
         },
     );
 
-    let changed = chimera_plus_plus_lib::import_from_claude(&mut config).expect("import from claude");
+    let changed =
+        chimera_plus_plus_lib::import_from_claude(&mut config).expect("import from claude");
     assert!(changed >= 1, "should mark at least one change");
 
     // v3.7.0: 检查统一结构
