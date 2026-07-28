@@ -678,11 +678,10 @@ pub fn run() {
                 }
             }
 
-            // 1.5. 自动导入 live 配置 + seed 官方预设供应商（Claude / Codex / Gemini）
+            // 1.5. 自动导入 live 配置。
             //
-            // 先 import 后 seed 是有意为之：先把用户手动配置的 settings.json / auth.json / .env
-            // 落成 "default" provider 设为 current，再追加官方预设（is_current=false）。
-            // 这样用户切到官方预设时，回填机制会保护原 live 配置不丢失。
+            // 把用户手动配置的 settings.json / auth.json / .env 落成默认供应商，
+            // 并保留为当前项，避免升级时覆盖已有 live 配置。
             //
             // 捕获首次运行快照：所有全新装用户都会看到欢迎弹窗介绍 CC Switch 的工作方式。
             // 读失败时默认不弹，宁可漏弹也不要因为故障打扰用户。
@@ -727,13 +726,14 @@ pub fn run() {
                 }
             }
 
-            match app_state.db.ensure_official_seed_by_id(
+            // Chimera++ does not expose an official Codex provider preset.
+            // Remove only the legacy fixed seed so upgrades get the same clean
+            // provider list as a fresh installation; user-created IDs remain intact.
+            if let Err(e) = app_state.db.delete_provider(
+                crate::app_config::AppType::Codex.as_str(),
                 crate::database::CODEX_OFFICIAL_PROVIDER_ID,
-                crate::app_config::AppType::Codex,
             ) {
-                Ok(true) => log::info!("✓ Seeded Codex official provider"),
-                Ok(false) => {}
-                Err(e) => log::warn!("✗ Failed to seed Codex official provider: {e}"),
+                log::warn!("✗ Failed to remove legacy Codex official provider seed: {e}");
             }
 
             {
@@ -1316,7 +1316,6 @@ pub fn run() {
             commands::get_claude_desktop_default_routes,
             commands::import_claude_desktop_providers_from_claude,
             commands::ensure_claude_desktop_official_provider,
-            commands::ensure_codex_official_provider,
             commands::ensure_grokbuild_official_provider,
             commands::get_claude_config_status,
             commands::get_config_status,

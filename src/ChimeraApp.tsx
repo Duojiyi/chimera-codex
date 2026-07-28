@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -49,6 +49,7 @@ import {
 } from "@/utils/providerConfigUtils";
 import { generateUUID } from "@/utils/uuid";
 import {
+  activityStorageKey,
   formatDuration,
   formatVersion,
   loadOperationRecords,
@@ -189,9 +190,8 @@ export default function ChimeraApp() {
     "update" | "repair" | "rollback" | "uninstall" | null
   >(null);
   const [skinEnabled, setSkinEnabled] = useState(false);
-  const [activity, setActivity] = useState<OperationRecord[]>(() =>
-    loadOperationRecords(),
-  );
+  const [activity, setActivity] = useState<OperationRecord[]>([]);
+  const activityKeyRef = useRef<string | null>(null);
   const [requestLogs, setRequestLogs] = useState<RequestLog[]>([]);
   const [connection, setConnection] = useState<ConnectionState>({
     kind: "unknown",
@@ -257,6 +257,19 @@ export default function ChimeraApp() {
   };
 
   useEffect(() => {
+    let active = true;
+    void settingsApi
+      .getAppConfigPath()
+      .then((path) => {
+        if (!active) return;
+        const key = activityStorageKey(path);
+        activityKeyRef.current = key;
+        setActivity(loadOperationRecords(window.localStorage, key));
+      })
+      .catch(() => {
+        // Activity history is optional; never fall back to a global profile.
+        activityKeyRef.current = null;
+      });
     void loadProviders();
     void loadRuntime();
     void invoke<ProductCapabilities>("get_product_capabilities")
@@ -279,6 +292,7 @@ export default function ChimeraApp() {
       },
     );
     return () => {
+      active = false;
       void unlisten.then((dispose) => dispose());
     };
   }, []);
@@ -290,8 +304,8 @@ export default function ChimeraApp() {
     provider = "Codex",
     durationMs?: number,
   ) => {
-    setActivity((items) =>
-      saveOperationRecords([
+    setActivity((items) => {
+      const records = [
         {
           id: generateUUID(),
           timestamp: Date.now(),
@@ -302,8 +316,12 @@ export default function ChimeraApp() {
           durationMs,
         },
         ...items,
-      ]),
-    );
+      ];
+      const key = activityKeyRef.current;
+      return key
+        ? saveOperationRecords(records, window.localStorage, key)
+        : records;
+    });
   };
 
   const switchProvider = async (id: string) => {
@@ -1885,7 +1903,7 @@ function AppearanceView({
                 ? "正在使用"
                 : skin.installed
                   ? "已安装"
-                  : `${skin.author || "Chimera"} · ${skin.version}`}
+                  : `皮肤包 · ${skin.version}`}
             </small>
           </button>
         ))}
@@ -1903,8 +1921,7 @@ function AppearanceView({
           <>
             <h2>{selected.name}</h2>
             <p>
-              {selected.description ||
-                `${selected.author || "Chimera"} · ${selected.version}`}
+              {selected.description || `Chimera++ 皮肤包 · ${selected.version}`}
             </p>
             <div className="skin-preview skin-preview-image">
               <img

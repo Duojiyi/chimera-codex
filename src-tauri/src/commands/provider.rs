@@ -279,14 +279,6 @@ pub fn ensure_claude_desktop_official_provider(state: State<'_, AppState>) -> Re
 }
 
 #[tauri::command]
-pub fn ensure_codex_official_provider(state: State<'_, AppState>) -> Result<bool, String> {
-    state
-        .db
-        .ensure_official_seed_by_id(crate::database::CODEX_OFFICIAL_PROVIDER_ID, AppType::Codex)
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
 pub fn ensure_grokbuild_official_provider(state: State<'_, AppState>) -> Result<bool, String> {
     state
         .db

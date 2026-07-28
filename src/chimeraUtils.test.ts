@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Provider } from "@/types";
 import {
+  activityStorageKey,
   formatDuration,
   loadOperationRecords,
   resolveCurrentProvider,
@@ -87,6 +88,15 @@ describe("operation records", () => {
       "b",
       "a",
     ]);
+  });
+
+  it("uses a stable, profile-specific storage key", () => {
+    expect(activityStorageKey("D:\\Chimera\\profile-a")).toBe(
+      activityStorageKey("d:/chimera/profile-a"),
+    );
+    expect(activityStorageKey("D:\\Chimera\\profile-a")).not.toBe(
+      activityStorageKey("D:\\Chimera\\profile-b"),
+    );
   });
 });
 

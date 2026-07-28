@@ -25,8 +25,23 @@ export interface CurrentProviderResolution {
   source: "live" | "stored" | "external" | "none";
 }
 
-const ACTIVITY_KEY = "chimera-plus-plus:activity:v2";
+const ACTIVITY_KEY_PREFIX = "chimera-plus-plus:activity:v3";
 const MAX_ACTIVITY_RECORDS = 200;
+
+/**
+ * Keep WebView activity records scoped to the backend's app-data directory.
+ * This prevents portable and isolated test profiles from sharing one browser
+ * localStorage history merely because they are opened by the same WebView.
+ */
+export function activityStorageKey(appConfigPath: string): string {
+  let hash = 2166136261;
+  const normalized = appConfigPath.trim().replace(/\\/g, "/").toLowerCase();
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash ^= normalized.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${ACTIVITY_KEY_PREFIX}:${(hash >>> 0).toString(36)}`;
+}
 
 function normalizeEndpoint(value: string | null | undefined): string {
   return (value ?? "").trim().replace(/\/+$/, "").toLocaleLowerCase("en-US");
@@ -93,9 +108,10 @@ function isOperationRecord(value: unknown): value is OperationRecord {
 
 export function loadOperationRecords(
   storage: Pick<Storage, "getItem"> = window.localStorage,
+  key = ACTIVITY_KEY_PREFIX,
 ): OperationRecord[] {
   try {
-    const raw = storage.getItem(ACTIVITY_KEY);
+    const raw = storage.getItem(key);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     return Array.isArray(parsed)
@@ -109,12 +125,13 @@ export function loadOperationRecords(
 export function saveOperationRecords(
   records: OperationRecord[],
   storage: Pick<Storage, "setItem"> = window.localStorage,
+  key = ACTIVITY_KEY_PREFIX,
 ): OperationRecord[] {
   const normalized = records
     .filter(isOperationRecord)
     .sort((left, right) => right.timestamp - left.timestamp)
     .slice(0, MAX_ACTIVITY_RECORDS);
-  storage.setItem(ACTIVITY_KEY, JSON.stringify(normalized));
+  storage.setItem(key, JSON.stringify(normalized));
   return normalized;
 }
 
