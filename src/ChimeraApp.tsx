@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Activity,
+  ArrowLeft,
   Check,
   ChevronDown,
   CircleAlert,
@@ -144,6 +145,7 @@ export default function ChimeraApp() {
     null,
   );
   const [models, setModels] = useState<FetchedModel[] | null>(null);
+  const [modelFetchError, setModelFetchError] = useState<string | null>(null);
   const [fetchingModels, setFetchingModels] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [pendingAction, setPendingAction] = useState<
@@ -164,6 +166,8 @@ export default function ChimeraApp() {
   const [installingAppUpdate, setInstallingAppUpdate] = useState(false);
   const [pendingProviderDelete, setPendingProviderDelete] =
     useState<Provider | null>(null);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [onboardingDeferred, setOnboardingDeferred] = useState(false);
 
   const loadProviders = async () => {
     try {
@@ -385,6 +389,12 @@ export default function ChimeraApp() {
     try {
       const result = await fetchModelsForConfig(editor.baseUrl, editor.apiKey);
       setModels(result);
+      setModelFetchError(
+        result.length
+          ? null
+          : "供应商没有返回可选模型，可保留手动填写的模型名称。",
+      );
+      setModelPickerOpen(result.length > 0);
       note(
         "获取模型",
         "success",
@@ -398,6 +408,9 @@ export default function ChimeraApp() {
         description: String(error),
       });
       setModels([]);
+      setModelFetchError(
+        "未能获取模型列表，请确认地址、密钥与供应商权限后重试。",
+      );
     } finally {
       setFetchingModels(false);
     }
@@ -488,6 +501,15 @@ export default function ChimeraApp() {
     }
   };
 
+  if (!loading && !providers.length && !editor && !onboardingDeferred) {
+    return (
+      <StandaloneOnboarding
+        onAdd={() => setEditor(providerDraft())}
+        onSkip={() => setOnboardingDeferred(true)}
+      />
+    );
+  }
+
   return (
     <div className="chimera-shell">
       <aside className="chimera-sidebar">
@@ -526,20 +548,35 @@ export default function ChimeraApp() {
         <header className="chimera-titlebar" data-tauri-drag-region>
           <div data-tauri-drag-region>
             <h1>
-              {view === "providers"
-                ? "供应商控制台"
-                : nav.find((item) => item[0] === view)?.[1]}
+              {editor ? (
+                <button
+                  className="page-back"
+                  aria-label="返回供应商控制台"
+                  onClick={() => setEditor(null)}
+                >
+                  <ArrowLeft size={18} />
+                </button>
+              ) : null}
+              {editor
+                ? editor.original
+                  ? "编辑供应商"
+                  : "添加供应商"
+                : view === "providers"
+                  ? "供应商控制台"
+                  : nav.find((item) => item[0] === view)?.[1]}
             </h1>
             <p>
-              {view === "providers"
-                ? "切换、配置并验证当前 API 连接"
-                : view === "runtime"
-                  ? "安装、更新与修复本机 Codex"
-                  : view === "appearance"
-                    ? "管理 Codex 客户端皮肤"
-                    : view === "settings"
-                      ? "应用行为、数据位置与更新策略"
-                      : "查看供应商切换、连接测试与模型同步历史"}
+              {editor
+                ? "保存后会写入 Codex 的当前供应商配置"
+                : view === "providers"
+                  ? "切换、配置并验证当前 API 连接"
+                  : view === "runtime"
+                    ? "安装、更新与修复本机 Codex"
+                    : view === "appearance"
+                      ? "管理 Codex 客户端皮肤"
+                      : view === "settings"
+                        ? "应用行为、数据位置与更新策略"
+                        : "查看供应商切换、连接测试与模型同步历史"}
             </p>
           </div>
           <WindowControls />
@@ -569,59 +606,78 @@ export default function ChimeraApp() {
             </button>
           </div>
         )}
-        {view === "providers" && (
-          <ProvidersView
-            providers={providers}
-            currentId={currentId}
-            currentSource={currentSource}
-            connection={connection}
-            loading={loading}
-            runtime={runtime}
-            activity={activity}
-            onSwitch={switchProvider}
-            onEdit={(provider) => {
-              setModels(null);
-              setEditor(providerDraft(provider));
+        {editor ? (
+          <ProviderEditor
+            editor={editor}
+            setEditor={setEditor}
+            showKey={showKey}
+            setShowKey={setShowKey}
+            fetchingModels={fetchingModels}
+            modelFetchError={modelFetchError}
+            onFetchModels={fetchModels}
+            onTest={() =>
+              void testConnection(editor.baseUrl, editor.name || "Codex")
+            }
+            onSave={saveProvider}
+            onDelete={() => {
+              if (editor.original) setPendingProviderDelete(editor.original);
             }}
-            onAdd={() => {
-              setModels(null);
-              setEditor(providerDraft());
-            }}
-            onTest={testConnection}
-            onCheckRuntime={checkRuntime}
-            onDiagnose={diagnose}
+            escapeDisabled={Boolean(pendingProviderDelete)}
           />
+        ) : (
+          <>
+            {view === "providers" && (
+              <ProvidersView
+                providers={providers}
+                currentId={currentId}
+                currentSource={currentSource}
+                connection={connection}
+                loading={loading}
+                runtime={runtime}
+                activity={activity}
+                onSwitch={switchProvider}
+                onEdit={(provider) => {
+                  setModels(null);
+                  setModelFetchError(null);
+                  setEditor(providerDraft(provider));
+                }}
+                onAdd={() => {
+                  setModels(null);
+                  setModelFetchError(null);
+                  setEditor(providerDraft());
+                }}
+                onTest={testConnection}
+                onCheckRuntime={checkRuntime}
+                onDiagnose={diagnose}
+              />
+            )}
+            {view === "runtime" && (
+              <RuntimeView
+                runtime={runtime}
+                release={release}
+                progress={downloadProgress}
+                onCheck={checkRuntime}
+                onDiagnose={diagnose}
+                onAction={setPendingAction}
+              />
+            )}
+            {view === "activity" && (
+              <ActivityView entries={activity} requests={requestLogs} />
+            )}
+            {view === "appearance" && <AppearanceView enabled={skinEnabled} />}
+            {view === "settings" && <SettingsView onCheck={checkRuntime} />}
+          </>
         )}
-        {view === "runtime" && (
-          <RuntimeView
-            runtime={runtime}
-            release={release}
-            progress={downloadProgress}
-            onCheck={checkRuntime}
-            onDiagnose={diagnose}
-            onAction={setPendingAction}
-          />
-        )}
-        {view === "activity" && (
-          <ActivityView entries={activity} requests={requestLogs} />
-        )}
-        {view === "appearance" && <AppearanceView enabled={skinEnabled} />}
-        {view === "settings" && <SettingsView onCheck={checkRuntime} />}
       </main>
-      {editor && (
-        <ProviderEditor
-          editor={editor}
-          setEditor={setEditor}
-          showKey={showKey}
-          setShowKey={setShowKey}
+      {editor && models && modelPickerOpen && (
+        <ModelPickerDialog
           models={models}
-          fetchingModels={fetchingModels}
-          onFetchModels={fetchModels}
-          onSave={saveProvider}
-          escapeDisabled={Boolean(pendingProviderDelete)}
-          onDelete={() => {
-            if (editor.original) setPendingProviderDelete(editor.original);
+          selected={editor.model}
+          onPick={(model) => {
+            setEditor({ ...editor, model });
+            setModelPickerOpen(false);
           }}
+          onClose={() => setModelPickerOpen(false)}
         />
       )}
       {pendingProviderDelete && (
@@ -932,9 +988,10 @@ function ProviderEditor({
   setEditor,
   showKey,
   setShowKey,
-  models,
   fetchingModels,
+  modelFetchError,
   onFetchModels,
+  onTest,
   onSave,
   onDelete,
   escapeDisabled,
@@ -943,9 +1000,10 @@ function ProviderEditor({
   setEditor: (value: ReturnType<typeof providerDraft> | null) => void;
   showKey: boolean;
   setShowKey: (value: boolean) => void;
-  models: FetchedModel[] | null;
   fetchingModels: boolean;
+  modelFetchError: string | null;
   onFetchModels: () => void;
+  onTest: () => void;
   onSave: () => void;
   onDelete: () => void;
   escapeDisabled: boolean;
@@ -954,132 +1012,156 @@ function ProviderEditor({
   const patch = (key: string, value: string) =>
     setEditor({ ...editor, [key]: value });
   return (
-    <div className="modal-backdrop">
+    <section
+      className="provider-editor"
+      aria-labelledby="provider-editor-title"
+    >
+      <header>
+        <span className="provider-editor-mark">
+          {(editor.name || "C").slice(0, 1).toUpperCase()}
+        </span>
+        <div>
+          <h2 id="provider-editor-title">
+            {editor.name || (editor.original ? "供应商" : "新供应商")}
+          </h2>
+          <p>保存后会写入 Codex 的当前供应商配置。</p>
+        </div>
+      </header>
+      <div className="editor-form">
+        <Field
+          label="供应商名称"
+          value={editor.name}
+          onChange={(value) => patch("name", value)}
+          placeholder="例如 Chimera Hub"
+        />
+        <Field
+          label="官网链接"
+          value={editor.websiteUrl}
+          onChange={(value) => patch("websiteUrl", value)}
+          placeholder="https://example.com"
+        />
+        <Field
+          label="API 请求地址"
+          value={editor.baseUrl}
+          onChange={(value) => patch("baseUrl", value)}
+          placeholder="https://api.example.com/v1"
+          hint="预设和自定义供应商都可编辑 URL。"
+        />
+        <label>
+          API Key
+          <div className="password-field">
+            <input
+              type={showKey ? "text" : "password"}
+              value={editor.apiKey}
+              onChange={(event) => patch("apiKey", event.target.value)}
+              placeholder="粘贴 API Key"
+            />
+            <button
+              aria-label={showKey ? "隐藏 API Key" : "显示 API Key"}
+              onClick={() => setShowKey(!showKey)}
+            >
+              {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+        </label>
+        <label>
+          默认模型
+          <div className="model-input">
+            <input
+              value={editor.model}
+              onChange={(event) => patch("model", event.target.value)}
+              placeholder="先获取模型列表，或手动输入"
+            />
+            <button onClick={onFetchModels} disabled={fetchingModels}>
+              {fetchingModels ? (
+                <LoaderCircle className="spin" size={15} />
+              ) : (
+                <Download size={15} />
+              )}{" "}
+              获取模型
+            </button>
+          </div>
+        </label>
+        <details>
+          <summary>高级选项</summary>
+          <p>
+            默认采用 Codex Responses
+            兼容配置。复杂协议和模型映射仅在需要时展开。
+          </p>
+        </details>
+        {modelFetchError && (
+          <p className="editor-model-error" role="status">
+            <CircleAlert size={15} /> {modelFetchError}
+          </p>
+        )}
+      </div>
+      <footer>
+        <button className="secondary" onClick={onTest}>
+          测试连接
+        </button>
+        <div>
+          {editor.original && (
+            <button className="danger" onClick={onDelete}>
+              <Trash2 size={15} /> 删除
+            </button>
+          )}
+          <button className="primary" onClick={onSave}>
+            保存并应用
+          </button>
+        </div>
+      </footer>
+    </section>
+  );
+}
+
+function ModelPickerDialog({
+  models,
+  selected,
+  onPick,
+  onClose,
+}: {
+  models: FetchedModel[];
+  selected: string;
+  onPick: (model: string) => void;
+  onClose: () => void;
+}) {
+  useEscapeClose(onClose);
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
       <section
-        className="provider-editor"
+        className="model-picker"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="provider-editor-title"
+        aria-labelledby="model-picker-title"
       >
         <header>
+          <div>
+            <h2 id="model-picker-title">选择默认模型</h2>
+            <p>列表来自当前供应商接口。</p>
+          </div>
           <button
             className="icon-button"
-            aria-label="关闭供应商编辑器"
-            onClick={() => setEditor(null)}
+            aria-label="关闭模型列表"
+            onClick={onClose}
           >
             <X size={18} />
           </button>
-          <div>
-            <h2 id="provider-editor-title">
-              {editor.original ? "编辑供应商" : "添加供应商"}
-            </h2>
-            <p>仅写入 Codex 的供应商配置。</p>
-          </div>
         </header>
-        <div className="editor-form">
-          <Field
-            label="供应商名称"
-            value={editor.name}
-            onChange={(value) => patch("name", value)}
-            placeholder="例如 Chimera Hub"
-          />
-          <Field
-            label="官网链接"
-            value={editor.websiteUrl}
-            onChange={(value) => patch("websiteUrl", value)}
-            placeholder="https://example.com"
-          />
-          <Field
-            label="API 请求地址"
-            value={editor.baseUrl}
-            onChange={(value) => patch("baseUrl", value)}
-            placeholder="https://api.example.com/v1"
-            hint="预设和自定义供应商都可编辑 URL。"
-          />
-          <label>
-            API Key
-            <div className="password-field">
-              <input
-                type={showKey ? "text" : "password"}
-                value={editor.apiKey}
-                onChange={(event) => patch("apiKey", event.target.value)}
-                placeholder="粘贴 API Key"
-              />
-              <button
-                aria-label={showKey ? "隐藏 API Key" : "显示 API Key"}
-                onClick={() => setShowKey(!showKey)}
-              >
-                {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-            </div>
-          </label>
-          <label>
-            默认模型
-            <div className="model-input">
-              <input
-                value={editor.model}
-                onChange={(event) => patch("model", event.target.value)}
-                placeholder="先获取模型列表，或手动输入"
-              />
-              <button onClick={onFetchModels} disabled={fetchingModels}>
-                {fetchingModels ? (
-                  <LoaderCircle className="spin" size={15} />
-                ) : (
-                  <Download size={15} />
-                )}{" "}
-                获取模型
-              </button>
-            </div>
-          </label>
-          {models !== null && (
-            <div className="model-results">
-              {models.length ? (
-                models.map((model) => (
-                  <button
-                    key={model.id}
-                    className={editor.model === model.id ? "picked" : ""}
-                    onClick={() => patch("model", model.id)}
-                  >
-                    {model.id}
-                    {editor.model === model.id && <Check size={15} />}
-                  </button>
-                ))
-              ) : (
-                <p>
-                  <CircleAlert size={15} />{" "}
-                  未能获取模型列表，可保留手动输入的模型名称。
-                </p>
-              )}
-            </div>
-          )}
-          <details>
-            <summary>高级选项</summary>
-            <p>
-              默认采用 Codex Responses
-              兼容配置。复杂协议和模型映射仅在需要时展开。
-            </p>
-          </details>
-        </div>
-        <footer>
-          <button
-            className="secondary"
-            onClick={async () => {
-              await onFetchModels();
-            }}
-          >
-            测试连接
-          </button>
-          <div>
-            {editor.original && (
-              <button className="danger" onClick={onDelete}>
-                <Trash2 size={15} /> 删除
-              </button>
-            )}
-            <button className="primary" onClick={onSave}>
-              保存并应用
+        <div className="model-picker-list">
+          {models.map((model) => (
+            <button
+              key={model.id}
+              className={selected === model.id ? "picked" : ""}
+              onClick={() => onPick(model.id)}
+            >
+              <span>{model.id}</span>
+              {selected === model.id && <Check size={16} />}
             </button>
-          </div>
-        </footer>
+          ))}
+        </div>
       </section>
     </div>
   );
@@ -1860,6 +1942,61 @@ function Onboarding({ onAdd }: { onAdd: () => void }) {
         开始配置
       </button>
     </section>
+  );
+}
+
+function StandaloneOnboarding({
+  onAdd,
+  onSkip,
+}: {
+  onAdd: () => void;
+  onSkip: () => void;
+}) {
+  return (
+    <main className="onboarding-screen">
+      <section className="onboarding onboarding-card">
+        <div className="onboarding-brand">
+          <Command size={18} /> Chimera++
+        </div>
+        <h1>开始配置你的 Codex</h1>
+        <p>
+          只需填写一次供应商地址和密钥，之后可在控制台快速切换。Chimera++
+          会自动识别本机 Codex 安装方式并同步模型列表。
+        </p>
+        <ol>
+          <li>
+            <b>1</b>
+            <div>
+              <strong>连接供应商</strong>
+              <span>粘贴接口地址和 API 密钥</span>
+            </div>
+          </li>
+          <li>
+            <b>2</b>
+            <div>
+              <strong>检测 Codex</strong>
+              <span>识别标准安装或免安装版本</span>
+            </div>
+          </li>
+          <li>
+            <b>3</b>
+            <div>
+              <strong>完成设置</strong>
+              <span>保存后即可快速切换</span>
+            </div>
+          </li>
+        </ol>
+        <footer>
+          <button className="secondary" onClick={onSkip}>
+            稍后配置
+          </button>
+          <button className="primary" onClick={onAdd}>
+            开始配置
+          </button>
+        </footer>
+        <small>Chimera++ 2.0 · 数据仅保存在本机</small>
+      </section>
+    </main>
   );
 }
 function Field({

@@ -85,7 +85,12 @@ fn portable_root() -> PathBuf {
             }
         }
     }
-    runtime_root().join("portable")
+    // Codex App Manager's portable installer uses the Windows per-user Programs
+    // directory. Reuse that location so Chimera++ adopts an existing manager
+    // installation instead of incorrectly reporting it as missing.
+    dirs::data_local_dir()
+        .map(|path| path.join("Programs").join("Codex"))
+        .unwrap_or_else(|| runtime_root().join("portable"))
 }
 
 fn operation_lock() -> OperationLock {

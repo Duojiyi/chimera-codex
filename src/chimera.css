@@ -1690,6 +1690,133 @@ button:disabled {
     monospace;
   overflow-wrap: anywhere;
 }
+.page-back {
+  width: 34px;
+  height: 34px;
+  margin-right: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  vertical-align: middle;
+}
+.onboarding-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 40px;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+.onboarding-card {
+  width: min(620px, 100%);
+  min-height: 590px;
+  margin: 0;
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+}
+.onboarding-card h1 {
+  margin: 28px 0 8px;
+  font-size: 26px;
+}
+.onboarding-card footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: auto;
+}
+.onboarding-card > small {
+  margin: 24px auto 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+.provider-editor {
+  width: 100%;
+  max-height: none;
+  min-height: 650px;
+  box-shadow: none;
+}
+.provider-editor header {
+  padding: 22px;
+}
+.provider-editor-mark {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--soft);
+  color: var(--accent);
+  font-weight: 700;
+}
+.provider-editor .editor-form {
+  overflow: visible;
+  padding: 22px;
+}
+.provider-editor footer {
+  margin-top: auto;
+}
+.model-picker {
+  width: min(560px, 100%);
+  max-height: min(640px, calc(100vh - 56px));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+.model-picker header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.model-picker h2 {
+  margin: 0;
+  font-size: 17px;
+}
+.model-picker p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.model-picker-list {
+  display: grid;
+  gap: 6px;
+  overflow: auto;
+  padding: 12px;
+}
+.model-picker-list button {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  padding: 0 12px;
+  text-align: left;
+  font:
+    12px ui-monospace,
+    monospace;
+}
+.model-picker-list button.picked {
+  border-color: var(--accent);
+  background: var(--soft);
+  color: var(--accent);
+}
+.editor-model-error {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  color: #b42318;
+  font-size: 11px;
+}
 button:focus-visible,
 input:focus-visible {
   outline: 2px solid var(--accent);
