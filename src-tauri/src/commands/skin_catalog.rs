@@ -235,9 +235,7 @@ pub async fn install_catalog_skin(
 
 /// Import a local schema-v2 `.codexskin` through the reference validator.
 #[tauri::command]
-pub async fn import_skin_package(
-    path: String,
-) -> Result<String, String> {
+pub async fn import_skin_package(path: String) -> Result<String, String> {
     let root = themes_root();
     let archive = PathBuf::from(path);
     let lock_path = operation_lock();
