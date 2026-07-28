@@ -25,7 +25,7 @@ mod model_capabilities;
 mod openclaw_config;
 mod opencode_config;
 mod panic_hook;
-mod product_policy;
+pub mod product_policy;
 mod prompt;
 mod prompt_files;
 mod provider;
