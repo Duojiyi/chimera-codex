@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -135,11 +135,6 @@ export default function ChimeraApp() {
       .then((value) => setSkinEnabled(value.capabilities.some((item) => item.id === "codex_themes" && item.enabledByDefault)))
       .catch(() => setSkinEnabled(false));
   }, []);
-
-  const activeProvider = useMemo(
-    () => providers.find((provider) => provider.id === currentId) ?? null,
-    [providers, currentId],
-  );
 
   const note = (message: string) => setActivity((items) => [`${new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}  ${message}`, ...items].slice(0, 20));
 
