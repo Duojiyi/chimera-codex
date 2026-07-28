@@ -30,6 +30,7 @@ pub fn reset_test_fs() {
         ".claude",
         ".codex",
         ".cc-switch",
+        chimera_plus_plus_lib::product_policy::PRODUCT_DATA_DIR,
         ".gemini",
         ".grok",
         ".config",
