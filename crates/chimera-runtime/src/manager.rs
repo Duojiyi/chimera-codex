@@ -201,14 +201,16 @@ pub fn parse_windows_release_plan(
         return Err(ManagerError::InvalidChecksum);
     }
     let endpoints = mirror_endpoints(source, release.download_architecture.as_deref());
+    let package_moniker = release.package_moniker;
+    let package_url = format!(
+        "{}/{}.Msix",
+        endpoints.release_download_base, package_moniker
+    );
     Ok(WindowsReleasePlan {
         version: release.version,
         package_version: release.package_version,
-        package_moniker: release.package_moniker,
-        package_url: format!(
-            "{}/{}.Msix",
-            endpoints.release_download_base, release.package_moniker
-        ),
+        package_moniker,
+        package_url,
         sha256: sha256.to_ascii_lowercase(),
         size_bytes: release.content_length.ok_or(ManagerError::MissingSize)?,
         released_at: release.released_at,
