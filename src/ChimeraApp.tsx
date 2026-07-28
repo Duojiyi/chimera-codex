@@ -166,6 +166,10 @@ export default function ChimeraApp() {
   const [installingAppUpdate, setInstallingAppUpdate] = useState(false);
   const [pendingProviderDelete, setPendingProviderDelete] =
     useState<Provider | null>(null);
+  const [pendingSkinAction, setPendingSkinAction] = useState<{
+    label: string;
+    execute: () => void;
+  } | null>(null);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [onboardingDeferred, setOnboardingDeferred] = useState(false);
 
@@ -664,7 +668,12 @@ export default function ChimeraApp() {
             {view === "activity" && (
               <ActivityView entries={activity} requests={requestLogs} />
             )}
-            {view === "appearance" && <AppearanceView enabled={skinEnabled} />}
+            {view === "appearance" && (
+              <AppearanceView
+                enabled={skinEnabled}
+                onRequestSkinAction={setPendingSkinAction}
+              />
+            )}
             {view === "settings" && <SettingsView onCheck={checkRuntime} />}
           </>
         )}
@@ -694,6 +703,17 @@ export default function ChimeraApp() {
             } catch (error) {
               toast.error("删除失败", { description: String(error) });
             }
+          }}
+        />
+      )}
+      {pendingSkinAction && (
+        <ConfirmSkinOperation
+          label={pendingSkinAction.label}
+          onCancel={() => setPendingSkinAction(null)}
+          onConfirm={() => {
+            const action = pendingSkinAction;
+            setPendingSkinAction(null);
+            action.execute();
           }}
         />
       )}
@@ -1030,18 +1050,21 @@ function ProviderEditor({
       <div className="editor-form">
         <Field
           label="供应商名称"
+          name="provider-name"
           value={editor.name}
           onChange={(value) => patch("name", value)}
           placeholder="例如 Chimera Hub"
         />
         <Field
           label="官网链接"
+          name="provider-website"
           value={editor.websiteUrl}
           onChange={(value) => patch("websiteUrl", value)}
           placeholder="https://example.com"
         />
         <Field
           label="API 请求地址"
+          name="provider-base-url"
           value={editor.baseUrl}
           onChange={(value) => patch("baseUrl", value)}
           placeholder="https://api.example.com/v1"
@@ -1051,6 +1074,9 @@ function ProviderEditor({
           API Key
           <div className="password-field">
             <input
+              name="provider-api-key"
+              autoComplete="off"
+              spellCheck={false}
               type={showKey ? "text" : "password"}
               value={editor.apiKey}
               onChange={(event) => patch("apiKey", event.target.value)}
@@ -1068,6 +1094,9 @@ function ProviderEditor({
           默认模型
           <div className="model-input">
             <input
+              name="provider-model"
+              autoComplete="off"
+              spellCheck={false}
               value={editor.model}
               onChange={(event) => patch("model", event.target.value)}
               placeholder="先获取模型列表，或手动输入"
@@ -1409,7 +1438,13 @@ function ActivityView({
   );
 }
 
-function AppearanceView({ enabled }: { enabled: boolean }) {
+function AppearanceView({
+  enabled,
+  onRequestSkinAction,
+}: {
+  enabled: boolean;
+  onRequestSkinAction: (action: { label: string; execute: () => void }) => void;
+}) {
   const [skins, setSkins] = useState<CatalogSkin[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -1523,8 +1558,13 @@ function AppearanceView({ enabled }: { enabled: boolean }) {
                 <button
                   className="dark"
                   onClick={() =>
-                    void run("应用皮肤", "apply_skin_package", {
-                      skinId: selected.id,
+                    onRequestSkinAction({
+                      label: "应用皮肤",
+                      execute: () =>
+                        void run("应用皮肤", "apply_skin_package", {
+                          skinId: selected.id,
+                          confirm: true,
+                        }),
                     })
                   }
                   disabled={Boolean(busy) || selected.applied}
@@ -1534,14 +1574,29 @@ function AppearanceView({ enabled }: { enabled: boolean }) {
               )}
               <button
                 onClick={() =>
-                  void run("试穿", "try_skin_package", { skinId: selected.id })
+                  onRequestSkinAction({
+                    label: "试穿皮肤",
+                    execute: () =>
+                      void run("试穿", "try_skin_package", {
+                        skinId: selected.id,
+                        confirm: true,
+                      }),
+                  })
                 }
                 disabled={Boolean(busy) || !selected.installed}
               >
                 试穿
               </button>
               <button
-                onClick={() => void run("恢复默认", "restore_skin_package")}
+                onClick={() =>
+                  onRequestSkinAction({
+                    label: "恢复默认外观",
+                    execute: () =>
+                      void run("恢复默认", "restore_skin_package", {
+                        confirm: true,
+                      }),
+                  })
+                }
                 disabled={Boolean(busy)}
               >
                 恢复默认
@@ -1561,9 +1616,9 @@ function AppearanceView({ enabled }: { enabled: boolean }) {
 }
 
 function SettingsView({ onCheck }: { onCheck: () => void }) {
-  const [section, setSection] = useState<"general" | "runtime" | "data">(
-    "general",
-  );
+  const [section, setSection] = useState<
+    "general" | "runtime" | "data" | "advanced"
+  >("general");
   const [settings, setSettings] = useState<Settings | null>(null);
   const [autoLaunch, setAutoLaunch] = useState<boolean | null>(null);
   const [configPath, setConfigPath] = useState("");
@@ -1622,8 +1677,9 @@ function SettingsView({ onCheck }: { onCheck: () => void }) {
       <aside>
         {[
           ["general", "常规"],
-          ["runtime", "更新策略"],
           ["data", "数据与隐私"],
+          ["runtime", "更新策略"],
+          ["advanced", "高级"],
         ].map(([id, label]) => (
           <button
             key={id}
@@ -1773,6 +1829,33 @@ function SettingsView({ onCheck }: { onCheck: () => void }) {
             </button>
           </>
         )}
+        {section === "advanced" && (
+          <>
+            <h2>高级</h2>
+            <div className="setting-row">
+              <div>
+                <b>Codex 免安装版目录</b>
+                <p title={settings?.codexPortableRoot || undefined}>
+                  {settings?.codexPortableRoot ||
+                    "自动识别 Codex App Manager 默认目录"}
+                </p>
+              </div>
+              <span>只在免安装模式下使用</span>
+            </div>
+            <div className="setting-row">
+              <div>
+                <b>运行时操作保护</b>
+                <p>升级、修复、回滚、卸载和皮肤应用均要求二次确认</p>
+              </div>
+              <span>已启用</span>
+            </div>
+            <div className="settings-actions">
+              <button onClick={onCheck}>
+                <RefreshCw size={15} /> 检查 Codex 更新
+              </button>
+            </div>
+          </>
+        )}
       </article>
     </section>
   );
@@ -1810,6 +1893,38 @@ function ConfirmOperation({
           该操作会修改 Codex 运行时。供应商配置和 `~/.codex`
           用户数据不会被删除。
         </p>
+        <footer>
+          <button onClick={onCancel}>取消</button>
+          <button className="primary" onClick={onConfirm}>
+            确认继续
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function ConfirmSkinOperation({
+  label,
+  onCancel,
+  onConfirm,
+}: {
+  label: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useEscapeClose(onCancel);
+  return (
+    <div className="modal-backdrop">
+      <section
+        className="confirm-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="skin-confirm-title"
+      >
+        <Paintbrush size={26} />
+        <h2 id="skin-confirm-title">确认{label}？</h2>
+        <p>该操作会关闭并重新启动 Codex。供应商配置和用户数据不会被修改。</p>
         <footer>
           <button onClick={onCancel}>取消</button>
           <button className="primary" onClick={onConfirm}>
@@ -2001,12 +2116,14 @@ function StandaloneOnboarding({
 }
 function Field({
   label,
+  name,
   value,
   onChange,
   placeholder,
   hint,
 }: {
   label: string;
+  name: string;
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
@@ -2016,6 +2133,8 @@ function Field({
     <label>
       {label}
       <input
+        name={name}
+        autoComplete="off"
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}

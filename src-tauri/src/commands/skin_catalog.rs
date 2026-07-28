@@ -305,7 +305,10 @@ async fn inject_skin(root: PathBuf, skin_id: &str) -> Result<(), String> {
 
 /// Apply a skin's native settings, restart Codex with loopback CDP, and inject.
 #[tauri::command]
-pub async fn apply_skin_package(skin_id: String) -> Result<(), String> {
+pub async fn apply_skin_package(skin_id: String, confirm: bool) -> Result<(), String> {
+    if !confirm {
+        return Err("Applying a skin requires explicit confirmation.".to_string());
+    }
     let root = themes_root();
     let portable_root = portable_root();
     let native = native_paths();
@@ -360,7 +363,10 @@ pub async fn apply_skin_package(skin_id: String) -> Result<(), String> {
 
 /// Try a skin live without changing native settings or the persisted selection.
 #[tauri::command]
-pub async fn try_skin_package(skin_id: String) -> Result<(), String> {
+pub async fn try_skin_package(skin_id: String, confirm: bool) -> Result<(), String> {
+    if !confirm {
+        return Err("Trying a skin requires explicit confirmation.".to_string());
+    }
     let root = themes_root();
     let portable_root = portable_root();
     tauri::async_runtime::spawn_blocking(move || {
@@ -373,7 +379,10 @@ pub async fn try_skin_package(skin_id: String) -> Result<(), String> {
 
 /// Restore stock Codex rendering and the original native appearance settings.
 #[tauri::command]
-pub async fn restore_skin_package() -> Result<(), String> {
+pub async fn restore_skin_package(confirm: bool) -> Result<(), String> {
+    if !confirm {
+        return Err("Restoring Codex appearance requires explicit confirmation.".to_string());
+    }
     let portable_root = portable_root();
     let native = native_paths();
     let active = active_path();
