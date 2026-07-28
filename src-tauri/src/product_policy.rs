@@ -67,7 +67,7 @@ pub fn get_product_capabilities() -> ProductCapabilities {
             capability("webdav_sync", false, false),
             capability("s3_sync", false, false),
             capability("codex_runtime_manager", true, false),
-            capability("codex_themes", false, false),
+            capability("codex_themes", true, false),
         ],
     }
 }
@@ -132,7 +132,7 @@ pub const fn refresh_usage_from_tray() -> bool {
 }
 
 pub const fn app_update_channel_configured() -> bool {
-    false
+    true
 }
 
 #[cfg(test)]
@@ -178,7 +178,7 @@ mod tests {
         assert!(!sync_session_usage_on_startup());
         assert!(!start_cloud_sync_workers());
         assert!(!refresh_usage_from_tray());
-        assert!(!app_update_channel_configured());
+        assert!(app_update_channel_configured());
     }
 
     #[test]

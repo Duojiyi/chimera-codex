@@ -74,10 +74,18 @@ fn runtime_root() -> PathBuf {
 }
 
 fn portable_root() -> PathBuf {
-    crate::settings::get_settings()
-        .codex_portable_root
-        .map(PathBuf::from)
-        .unwrap_or_else(|| runtime_root().join("portable"))
+    if let Some(configured) = crate::settings::get_settings().codex_portable_root {
+        return PathBuf::from(configured);
+    }
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(parent) = executable.parent() {
+            let bundled = parent.join("Codex");
+            if bundled.exists() {
+                return bundled;
+            }
+        }
+    }
+    runtime_root().join("portable")
 }
 
 fn operation_lock() -> OperationLock {

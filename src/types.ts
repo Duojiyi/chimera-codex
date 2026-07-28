@@ -393,6 +393,14 @@ export interface Settings {
   claudeConfigDir?: string;
   // 覆盖 Codex 配置目录（可选）
   codexConfigDir?: string;
+  /** Codex desktop release source managed by Codex App Manager. */
+  codexUpdateSource?: "auto" | "mirror";
+  /** Windows installation strategy managed by Codex App Manager. */
+  codexInstallMode?: "standard" | "portable";
+  /** Optional manager-owned portable Codex directory. */
+  codexPortableRoot?: string;
+  /** Check the Codex release channel after Chimera++ starts. */
+  checkCodexUpdatesOnStart?: boolean;
   // 覆盖 Gemini 配置目录（可选）
   geminiConfigDir?: string;
   // 覆盖 Grok Build 配置目录（可选）

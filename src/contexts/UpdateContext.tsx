@@ -25,7 +25,18 @@ interface UpdateContextValue {
   resetDismiss: () => void;
 }
 
-const UpdateContext = createContext<UpdateContextValue | undefined>(undefined);
+const DEFAULT_UPDATE_CONTEXT: UpdateContextValue = {
+  hasUpdate: false,
+  updateInfo: null,
+  isChecking: false,
+  error: null,
+  isDismissed: false,
+  dismissUpdate: () => undefined,
+  checkUpdate: async () => false,
+  resetDismiss: () => undefined,
+};
+
+const UpdateContext = createContext<UpdateContextValue>(DEFAULT_UPDATE_CONTEXT);
 
 export function UpdateProvider({ children }: { children: React.ReactNode }) {
   const DISMISSED_VERSION_KEY = "ccswitch:update:dismissedVersion";
@@ -142,9 +153,5 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
 }
 
 export function useUpdate() {
-  const context = useContext(UpdateContext);
-  if (!context) {
-    throw new Error("useUpdate must be used within UpdateProvider");
-  }
-  return context;
+  return useContext(UpdateContext);
 }

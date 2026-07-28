@@ -39,6 +39,8 @@ jobs:
 
       - name: Build Windows test package
         run: pnpm tauri build --bundles msi
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
       - name: Upload Windows test package
         uses: actions/upload-artifact@v7

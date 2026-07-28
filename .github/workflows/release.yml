@@ -488,17 +488,42 @@ jobs:
             $portableDir = 'release-assets/Chimera++-Portable'
             New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
             Copy-Item $exePath $portableDir
+
+            # Bundle the matching Codex desktop package from our audited mirror.
+            $mirrorRelease = Invoke-RestMethod -Uri 'https://api.github.com/repos/Duojiyi/codex-app-mirror/releases/latest' -Headers @{ 'User-Agent' = 'Chimera-Release' }
+            $archPattern = if ($isArm64) { '_arm64__.*\.Msix$' } else { '_x64__.*\.Msix$' }
+            $msixAsset = $mirrorRelease.assets | Where-Object { $_.name -match $archPattern } | Select-Object -First 1
+            $sumsAsset = $mirrorRelease.assets | Where-Object { $_.name -eq 'SHA256SUMS-windows.txt' } | Select-Object -First 1
+            if ($null -eq $msixAsset -or $null -eq $sumsAsset) {
+              throw "Codex mirror does not contain the required $env:WINDOWS_RELEASE_ARCH package or checksum"
+            }
+            $codexMsix = Join-Path $env:RUNNER_TEMP $msixAsset.name
+            $checksumFile = Join-Path $env:RUNNER_TEMP 'SHA256SUMS-windows.txt'
+            Invoke-WebRequest -Uri $msixAsset.browser_download_url -OutFile $codexMsix
+            Invoke-WebRequest -Uri $sumsAsset.browser_download_url -OutFile $checksumFile
+            $expectedHash = ((Get-Content $checksumFile | Where-Object { $_ -match [regex]::Escape($msixAsset.name) } | Select-Object -First 1) -split '\s+')[0]
+            $actualHash = (Get-FileHash -Algorithm SHA256 $codexMsix).Hash.ToLowerInvariant()
+            if ([string]::IsNullOrWhiteSpace($expectedHash) -or $actualHash -ne $expectedHash.ToLowerInvariant()) {
+              throw 'Codex mirror checksum verification failed'
+            }
+            $codexArchive = Join-Path $env:RUNNER_TEMP 'codex-package.zip'
+            Copy-Item $codexMsix $codexArchive
+            Expand-Archive -LiteralPath $codexArchive -DestinationPath (Join-Path $portableDir 'Codex') -Force
+            Set-Content -Path (Join-Path $portableDir 'Codex\CHIMERA-CODEX-VERSION.txt') -Value $mirrorRelease.tag_name -Encoding UTF8
+
             $portableIniPath = Join-Path $portableDir 'portable.ini'
             $portableContent = if ($isArm64) {
               @(
                 '# Chimera++ portable ARM64 build marker',
                 'portable=true',
-                'arch=arm64'
+                'arch=arm64',
+                'codexRoot=Codex'
               )
             } else {
               @(
                 '# Chimera++ portable build marker',
-                'portable=true'
+                'portable=true',
+                'codexRoot=Codex'
               )
             }
             $portableContent | Set-Content -Path $portableIniPath -Encoding UTF8
@@ -609,7 +634,8 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: Chimera++ ${{ github.ref_name }}
-          prerelease: true
+          prerelease: false
+          make_latest: true
           body: |
             ## Chimera++ ${{ github.ref_name }}
 
