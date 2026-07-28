@@ -45,22 +45,27 @@ fn public_version_is_not_confused_with_the_msix_package_version() {
         plan.sha256,
         "f0c1d75045952a11a581d34f28f595d1d110fb13f8f7e5c5201802ed2bbd7093"
     );
+    assert_eq!(
+        plan.package_url,
+        "https://github.com/Duojiyi/codex-app-mirror/releases/latest/download/OpenAI.Codex_26.721.4979.0_x64__2p2nqsd0c76g0.Msix"
+    );
 }
 
 #[test]
-fn mirror_endpoints_are_architecture_specific() {
+fn mirror_endpoints_use_the_owned_github_release() {
     let endpoints = mirror_endpoints(UpdateSource::Auto, Some("x64"));
     assert_eq!(
         endpoints.manifest_url,
-        "https://codexapp.agentsmirror.com/latest/manifest"
+        "https://github.com/Duojiyi/codex-app-mirror/releases/latest/download/release-manifest.json"
     );
     assert_eq!(
-        endpoints.package_url,
-        "https://codexapp.agentsmirror.com/latest/win-x64"
+        endpoints.checksums_url,
+        "https://github.com/Duojiyi/codex-app-mirror/releases/latest/download/SHA256SUMS-windows.txt"
     );
-
-    let arm = mirror_endpoints(UpdateSource::Mirror, Some("arm64"));
-    assert!(arm.package_url.ends_with("/latest/win-arm64"));
+    assert_eq!(
+        endpoints.release_download_base,
+        "https://github.com/Duojiyi/codex-app-mirror/releases/latest/download"
+    );
 }
 
 #[test]
@@ -88,7 +93,7 @@ fn update_comparison_accepts_both_app_and_package_versions() {
         version: "26.721.41059".into(),
         package_version: "26.721.4979.0".into(),
         package_moniker: "OpenAI.Codex_26.721.4979.0_x64__2p2nqsd0c76g0".into(),
-        package_url: "https://codexapp.agentsmirror.com/latest/win-x64".into(),
+        package_url: "https://github.com/Duojiyi/codex-app-mirror/releases/latest/download/OpenAI.Codex_26.721.4979.0_x64__2p2nqsd0c76g0.Msix".into(),
         sha256: "f".repeat(64),
         size_bytes: 1,
         released_at: None,
