@@ -126,7 +126,10 @@ fn test_parse_invalid_scheme() {
 
     let result = parse_deeplink_url(url);
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("Invalid scheme"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("Invalid Chimera++ deep-link scheme"));
 }
 
 #[test]
