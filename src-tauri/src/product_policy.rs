@@ -31,7 +31,7 @@ pub struct BackendCapability {
 #[serde(rename_all = "camelCase")]
 pub struct ProductCapabilities {
     pub policy_version: u32,
-    pub available_apps: Vec<&'static str>,
+    pub available_apps: Vec<String>,
     pub default_visible_apps: Vec<&'static str>,
     pub startup_managed_apps: Vec<&'static str>,
     pub commercial_presets_enabled: bool,
@@ -45,7 +45,9 @@ pub struct ProductCapabilities {
 pub fn get_product_capabilities() -> ProductCapabilities {
     ProductCapabilities {
         policy_version: 2,
-        available_apps: AppType::all().map(|app| app.as_str()).collect(),
+        // `AppType::all()` yields values, so retain owned names in the
+        // capability payload rather than borrowing from each temporary value.
+        available_apps: AppType::all().map(|app| app.as_str().to_owned()).collect(),
         default_visible_apps: DEFAULT_VISIBLE_APPS.iter().map(AppType::as_str).collect(),
         startup_managed_apps: STARTUP_MANAGED_APPS.iter().map(AppType::as_str).collect(),
         commercial_presets_enabled: false,

@@ -5,7 +5,6 @@
 use once_cell::sync::Lazy;
 use tauri::menu::{CheckMenuItem, Menu, MenuBuilder, MenuItem, Submenu, SubmenuBuilder};
 use tauri::{Emitter, Manager};
-use tauri_plugin_opener::OpenerExt;
 
 use crate::app_config::AppType;
 use crate::error::AppError;
