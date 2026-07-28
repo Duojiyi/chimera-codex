@@ -20,6 +20,7 @@ import {
   Trash2,
   Wrench,
   X,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { Provider } from "@/types";
