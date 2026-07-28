@@ -21,6 +21,14 @@ fn default_true() -> bool {
     true
 }
 
+fn default_codex_update_source() -> String {
+    "auto".to_string()
+}
+
+fn default_codex_install_mode() -> String {
+    "standard".to_string()
+}
+
 /// 主页面显示的应用配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -336,7 +344,7 @@ pub struct CodexOfficialHistoryUnifyMigration {
 
 /// 应用设置结构
 ///
-/// 存储设备级别设置，保存在本地 `~/.cc-switch/settings.json`，不随数据库同步。
+/// 存储设备级别设置，保存在 Chimera++ 本地配置目录，不随数据库同步。
 /// 这确保了云同步场景下多设备可以独立运作。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -412,6 +420,19 @@ pub struct AppSettings {
     pub claude_config_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_config_dir: Option<String>,
+    /// Codex desktop release source: `auto` or `mirror`.
+    #[serde(default = "default_codex_update_source")]
+    pub codex_update_source: String,
+    /// Windows install strategy: `standard` or `portable`.
+    #[serde(default = "default_codex_install_mode")]
+    pub codex_install_mode: String,
+    /// Optional path for a manager-owned portable Codex installation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_portable_root: Option<String>,
+    /// Whether the UI may request an update check after startup.
+    /// The backend itself never performs the network request implicitly.
+    #[serde(default = "default_true")]
+    pub check_codex_updates_on_start: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gemini_config_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -528,6 +549,10 @@ impl Default for AppSettings {
             visible_apps: None,
             claude_config_dir: None,
             codex_config_dir: None,
+            codex_update_source: default_codex_update_source(),
+            codex_install_mode: default_codex_install_mode(),
+            codex_portable_root: None,
+            check_codex_updates_on_start: true,
             gemini_config_dir: None,
             grok_config_dir: None,
             opencode_config_dir: None,
@@ -557,11 +582,7 @@ impl Default for AppSettings {
 impl AppSettings {
     fn settings_path() -> Option<PathBuf> {
         // settings.json 保留用于旧版本迁移和无数据库场景
-        Some(
-            crate::config::get_home_dir()
-                .join(".cc-switch")
-                .join("settings.json"),
-        )
+        Some(crate::config::get_app_config_dir().join("settings.json"))
     }
 
     fn normalize_paths(&mut self) {
@@ -578,6 +599,20 @@ impl AppSettings {
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
+
+        self.codex_portable_root = self
+            .codex_portable_root
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
+        if !matches!(self.codex_update_source.as_str(), "auto" | "mirror") {
+            self.codex_update_source = default_codex_update_source();
+        }
+        if !matches!(self.codex_install_mode.as_str(), "standard" | "portable") {
+            self.codex_install_mode = default_codex_install_mode();
+        }
 
         self.gemini_config_dir = self
             .gemini_config_dir

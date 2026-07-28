@@ -49,7 +49,6 @@ static TRAY_SECTION_SUBMENUS: Lazy<
 #[derive(Clone, Copy)]
 pub struct TrayTexts {
     pub show_main: &'static str,
-    pub open_website: &'static str,
     pub no_providers_label: &'static str,
     pub lightweight_mode: &'static str,
     pub quit: &'static str,
@@ -98,7 +97,6 @@ impl TrayTexts {
         match language {
             "en" => Self {
                 show_main: "Open main window",
-                open_website: "Open Official Website",
                 no_providers_label: "(no providers)",
                 lightweight_mode: "Lightweight Mode",
                 quit: "Quit",
@@ -108,7 +106,6 @@ impl TrayTexts {
             },
             "ja" => Self {
                 show_main: "メインウィンドウを開く",
-                open_website: "公式サイトを開く",
                 no_providers_label: "(プロバイダーなし)",
                 lightweight_mode: "軽量モード",
                 quit: "終了",
@@ -118,7 +115,6 @@ impl TrayTexts {
             },
             "zh-TW" => Self {
                 show_main: "開啟主介面",
-                open_website: "開啟官方網站",
                 no_providers_label: "(無供應商)",
                 lightweight_mode: "輕量模式",
                 quit: "退出",
@@ -128,7 +124,6 @@ impl TrayTexts {
             },
             _ => Self {
                 show_main: "打开主界面",
-                open_website: "打开官方网站",
                 no_providers_label: "(无供应商)",
                 lightweight_mode: "轻量模式",
                 quit: "退出",
@@ -151,7 +146,7 @@ pub struct TrayAppSection {
 
 /// Auto 菜单项后缀
 pub const AUTO_SUFFIX: &str = "auto";
-pub const TRAY_ID: &str = "cc-switch";
+pub const TRAY_ID: &str = crate::product_policy::PRODUCT_TRAY_ID;
 
 pub const TRAY_SECTIONS: [TrayAppSection; 4] = [
     TrayAppSection {
@@ -654,29 +649,20 @@ pub fn create_tray_menu(
     let mut section_handles: std::collections::HashMap<AppType, Submenu<tauri::Wry>> =
         std::collections::HashMap::new();
 
-    // 顶部：打开主界面 / 打开官方网站
+    // 顶部仅保留产品主界面。外部推广入口不进入 Chimera++ 构建。
     let show_main_item =
         MenuItem::with_id(app, "show_main", tray_texts.show_main, true, None::<&str>)
             .map_err(|e| AppError::Message(format!("创建打开主界面菜单失败: {e}")))?;
-    let open_website_item = MenuItem::with_id(
-        app,
-        "open_website",
-        tray_texts.open_website,
-        true,
-        None::<&str>,
-    )
-    .map_err(|e| AppError::Message(format!("创建打开官方网站菜单失败: {e}")))?;
-    menu_builder = menu_builder
-        .item(&show_main_item)
-        .item(&open_website_item)
-        .separator();
+    menu_builder = menu_builder.item(&show_main_item).separator();
 
     // Pre-compute proxy running state (used to disable official providers in tray menu)
     let is_proxy_running = futures::executor::block_on(app_state.proxy_service.is_running());
 
     // 每个应用类型折叠为子菜单，避免供应商过多时菜单过长
     for section in TRAY_SECTIONS.iter() {
-        if !visible_apps.is_visible(&section.app_type) {
+        if !crate::product_policy::is_app_visible_by_product(&section.app_type)
+            || !visible_apps.is_visible(&section.app_type)
+        {
             continue;
         }
 
@@ -762,10 +748,10 @@ pub fn create_tray_menu(
         use crate::services::profile::ProfileScope;
 
         let any_scope_visible = ProfileScope::ALL.iter().any(|scope| {
-            scope
-                .apps()
-                .iter()
-                .any(|app_type| visible_apps.is_visible(app_type))
+            scope.apps().iter().any(|app_type| {
+                crate::product_policy::is_app_visible_by_product(app_type)
+                    && visible_apps.is_visible(app_type)
+            })
         });
         let profiles = if any_scope_visible {
             app_state.db.get_all_profiles()?
@@ -776,10 +762,10 @@ pub fn create_tray_menu(
         let mut scope_submenus = Vec::new();
         for scope in ProfileScope::ALL {
             if profiles.is_empty()
-                || !scope
-                    .apps()
-                    .iter()
-                    .any(|app_type| visible_apps.is_visible(app_type))
+                || !scope.apps().iter().any(|app_type| {
+                    crate::product_policy::is_app_visible_by_product(app_type)
+                        && visible_apps.is_visible(app_type)
+                })
             {
                 continue;
             }
@@ -966,11 +952,6 @@ pub fn handle_tray_menu_event(app: &tauri::AppHandle, event_id: &str) {
                 }
             }
         }
-        "open_website" => {
-            if let Err(e) = app.opener().open_url("https://ccswitch.io", None::<String>) {
-                log::error!("打开官方网站失败: {e}");
-            }
-        }
         "lightweight_mode" => {
             if crate::lightweight::is_lightweight_mode() {
                 if let Err(e) = crate::lightweight::exit_lightweight_mode(app) {
@@ -1059,7 +1040,9 @@ pub(crate) async fn refresh_all_usage_in_tray(app: &tauri::AppHandle) {
     let mut script_futures = Vec::new();
 
     for section in TRAY_SECTIONS.iter() {
-        if !visible_apps.is_visible(&section.app_type) {
+        if !crate::product_policy::is_app_visible_by_product(&section.app_type)
+            || !visible_apps.is_visible(&section.app_type)
+        {
             continue;
         }
 
@@ -1131,7 +1114,7 @@ mod tests {
 
     #[test]
     fn tray_id_is_unique_to_app() {
-        assert_eq!(TRAY_ID, "cc-switch");
+        assert_eq!(TRAY_ID, "chimera-plus-plus");
         assert_ne!(TRAY_ID, "main");
     }
 
