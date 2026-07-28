@@ -8,6 +8,11 @@ export interface CodexTemplate {
   config: string;
 }
 
+export interface ChimeraHubTemplate extends CodexTemplate {
+  name: string;
+  websiteUrl: string;
+}
+
 /**
  * 获取 Codex 自定义模板
  * @returns Codex 模板配置
@@ -24,6 +29,30 @@ wire_api = "responses"
 requires_openai_auth = true`;
 
   return {
+    auth: { OPENAI_API_KEY: "" },
+    config,
+  };
+}
+
+/**
+ * The only customer-facing built-in provider template. Its endpoint remains
+ * editable in the provider editor for users with a dedicated relay address.
+ */
+export function getChimeraHubTemplate(): ChimeraHubTemplate {
+  const config = `model_provider = "custom"
+model = "gpt-5.6-sol"
+model_reasoning_effort = "high"
+disable_response_storage = true
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://api.chimerahub.org/v1"`;
+
+  return {
+    name: "ChimeraHub",
+    websiteUrl: "https://api.chimerahub.org/",
     auth: { OPENAI_API_KEY: "" },
     config,
   };

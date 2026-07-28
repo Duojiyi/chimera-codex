@@ -26,7 +26,12 @@ import {
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { Provider } from "@/types";
+import type {
+  ClaudeApiKeyField,
+  CodexApiFormat,
+  CodexCatalogModel,
+  Provider,
+} from "@/types";
 import { providersApi } from "@/lib/api/providers";
 import { settingsApi } from "@/lib/api/settings";
 import { vscodeApi } from "@/lib/api/vscode";
@@ -35,7 +40,7 @@ import { useUpdate } from "@/contexts/UpdateContext";
 import type { RequestLog } from "@/types/usage";
 import type { Settings } from "@/types";
 import { fetchModelsForConfig, type FetchedModel } from "@/lib/api/model-fetch";
-import { getCodexCustomTemplate } from "@/config/codexTemplates";
+import { getChimeraHubTemplate } from "@/config/codexTemplates";
 import {
   extractCodexBaseUrl,
   extractCodexModelName,
@@ -49,9 +54,11 @@ import {
   loadOperationRecords,
   resolveCurrentProvider,
   saveOperationRecords,
+  setCodexProviderApiKey,
   type ConnectionState,
   type OperationRecord,
 } from "./chimeraUtils";
+import routeGateIcon from "@/assets/icons/chimera-route-gate.svg";
 import "./chimera.css";
 
 function useEscapeClose(onClose: () => void, enabled = true) {
@@ -110,22 +117,52 @@ const runtimeText = (mode?: string | null) =>
   mode === "standard" ? "稳定版" : "免安装版";
 
 function providerDraft(provider?: Provider | null) {
-  const template = getCodexCustomTemplate();
+  const template = getChimeraHubTemplate();
   const config = String(provider?.settingsConfig?.config ?? template.config);
   const auth = (provider?.settingsConfig?.auth ?? template.auth) as Record<
     string,
     unknown
   >;
+  const meta = provider?.meta ?? {};
+  const apiFormat: CodexApiFormat =
+    meta.apiFormat === "openai_chat" || meta.apiFormat === "anthropic"
+      ? meta.apiFormat
+      : "openai_responses";
+  const anthropicAuthField: ClaudeApiKeyField =
+    meta.apiKeyField === "ANTHROPIC_API_KEY"
+      ? "ANTHROPIC_API_KEY"
+      : "ANTHROPIC_AUTH_TOKEN";
+  const catalogModels = Array.isArray(
+    provider?.settingsConfig?.modelCatalog?.models,
+  )
+    ? provider.settingsConfig.modelCatalog.models
+    : [];
   return {
     id: provider?.id ?? generateUUID(),
-    name: provider?.name ?? "",
-    websiteUrl: provider?.websiteUrl ?? "",
+    name: provider?.name ?? template.name,
+    websiteUrl: provider?.websiteUrl ?? template.websiteUrl,
     notes: provider?.notes ?? "",
     baseUrl: extractCodexBaseUrl(config) ?? "",
-    apiKey: String(auth.OPENAI_API_KEY ?? auth.api_key ?? ""),
+    apiKey: String(
+      auth.OPENAI_API_KEY ?? auth[anthropicAuthField] ?? auth.api_key ?? "",
+    ),
     model: extractCodexModelName(config) ?? "",
     config,
     auth,
+    apiFormat,
+    anthropicAuthField,
+    impersonateClaudeCode: meta.impersonateClaudeCode === true,
+    maxOutputTokens:
+      typeof meta.maxOutputTokens === "number" && meta.maxOutputTokens > 0
+        ? String(meta.maxOutputTokens)
+        : "",
+    isFullUrl: meta.isFullUrl === true,
+    modelsUrl: typeof meta.modelsUrl === "string" ? meta.modelsUrl : "",
+    customUserAgent:
+      typeof meta.customUserAgent === "string" ? meta.customUserAgent : "",
+    promptCacheRouting: meta.promptCacheRouting ?? "auto",
+    codexChatReasoning: meta.codexChatReasoning ?? {},
+    catalogModels: catalogModels as CodexCatalogModel[],
     original: provider ?? null,
   };
 }
@@ -348,26 +385,62 @@ export default function ChimeraApp() {
       setCodexBaseUrl(editor.config, editor.baseUrl),
       editor.model,
     );
+    const auth = setCodexProviderApiKey(editor.auth, editor.apiKey);
+    const catalogModels = editor.catalogModels.filter((item) =>
+      item.model.trim(),
+    );
     const provider: Provider = {
       id: editor.id,
       name: editor.name.trim(),
       websiteUrl: editor.websiteUrl.trim() || undefined,
       notes: editor.notes.trim() || undefined,
       category: "custom",
+      meta: {
+        ...editor.original?.meta,
+        apiFormat: editor.apiFormat,
+        apiKeyField:
+          editor.apiFormat === "anthropic"
+            ? editor.anthropicAuthField
+            : undefined,
+        impersonateClaudeCode:
+          editor.apiFormat === "anthropic" && editor.impersonateClaudeCode
+            ? true
+            : undefined,
+        maxOutputTokens:
+          editor.apiFormat === "anthropic" && Number(editor.maxOutputTokens) > 0
+            ? Number(editor.maxOutputTokens)
+            : undefined,
+        isFullUrl: editor.isFullUrl || undefined,
+        modelsUrl: editor.modelsUrl.trim() || undefined,
+        customUserAgent: editor.customUserAgent.trim() || undefined,
+        promptCacheRouting:
+          editor.apiFormat === "openai_chat" &&
+          editor.promptCacheRouting !== "auto"
+            ? editor.promptCacheRouting
+            : undefined,
+        codexChatReasoning:
+          editor.apiFormat === "openai_chat" &&
+          (editor.codexChatReasoning.supportsThinking ||
+            editor.codexChatReasoning.supportsEffort)
+            ? editor.codexChatReasoning
+            : undefined,
+      },
       settingsConfig: {
         ...editor.original?.settingsConfig,
-        auth: { ...editor.auth, OPENAI_API_KEY: editor.apiKey.trim() },
+        auth,
         config,
-        ...(models
-          ? {
-              modelCatalog: {
-                models: models.map((model) => ({
-                  id: model.id,
-                  name: model.id,
-                })),
-              },
-            }
-          : {}),
+        ...(catalogModels.length
+          ? { modelCatalog: { models: catalogModels } }
+          : models
+            ? {
+                modelCatalog: {
+                  models: models.map((model) => ({
+                    id: model.id,
+                    name: model.id,
+                  })),
+                },
+              }
+            : { modelCatalog: undefined }),
       },
     };
     try {
@@ -391,7 +464,13 @@ export default function ChimeraApp() {
     }
     setFetchingModels(true);
     try {
-      const result = await fetchModelsForConfig(editor.baseUrl, editor.apiKey);
+      const result = await fetchModelsForConfig(
+        editor.baseUrl,
+        editor.apiKey,
+        editor.isFullUrl,
+        editor.modelsUrl.trim() || undefined,
+        editor.customUserAgent.trim() || undefined,
+      );
       setModels(result);
       setModelFetchError(
         result.length
@@ -519,7 +598,7 @@ export default function ChimeraApp() {
       <aside className="chimera-sidebar">
         <div className="chimera-brand">
           <span>
-            <Command size={16} />
+            <img src={routeGateIcon} alt="" />
           </span>
           <strong>Chimera++</strong>
         </div>
@@ -537,9 +616,12 @@ export default function ChimeraApp() {
           ))}
         </nav>
         <div className="chimera-sidebar-footer">
-          <span className="status-dot" /> 全部服务正常
-          <br />
-          <small>最后检测 刚刚</small>
+          <span
+            className={
+              runtime?.installed ? "status-dot" : "status-dot is-muted"
+            }
+          />
+          {runtime?.installed ? "Codex 运行时已识别" : "正在等待 Codex 运行时"}
         </div>
         <div className="workspace-identity">
           <b>H</b>
@@ -952,7 +1034,7 @@ function ProvidersView({
                 <b>运行时检测</b>
                 <small>
                   {runtime?.installed
-                    ? "Codex App Manager 引擎已识别"
+                    ? "已识别当前 Codex 安装"
                     : "等待安装或重新检测"}
                 </small>
               </span>
@@ -1048,6 +1130,21 @@ function ProviderEditor({
         </div>
       </header>
       <div className="editor-form">
+        {!editor.original && (
+          <div className="provider-template" role="status">
+            <div>
+              <b>ChimeraHub 默认模板</b>
+              <small>已填入 Responses 地址和默认模型；只需粘贴 API Key。</small>
+            </div>
+            <button
+              type="button"
+              className="secondary compact"
+              onClick={() => setEditor(providerDraft())}
+            >
+              恢复模板
+            </button>
+          </div>
+        )}
         <Field
           label="供应商名称"
           name="provider-name"
@@ -1111,12 +1208,290 @@ function ProviderEditor({
             </button>
           </div>
         </label>
-        <details>
+        <details className="advanced-options">
           <summary>高级选项</summary>
-          <p>
-            默认采用 Codex Responses
-            兼容配置。复杂协议和模型映射仅在需要时展开。
-          </p>
+          <div className="advanced-options-body">
+            <p className="advanced-intro">
+              仅在供应商不是标准 Responses API 时调整。保存后会应用到 Codex
+              的兼容路由与配置。
+            </p>
+            <label>
+              上游格式
+              <select
+                name="provider-api-format"
+                value={editor.apiFormat}
+                onChange={(event) => patch("apiFormat", event.target.value)}
+              >
+                <option value="openai_responses">
+                  Responses（原生，推荐）
+                </option>
+                <option value="openai_chat">
+                  Chat Completions（需路由接管）
+                </option>
+                <option value="anthropic">
+                  Anthropic Messages（需路由接管）
+                </option>
+              </select>
+              <small>
+                Responses 可直连；Chat 与 Anthropic Messages 由本地路由转换为
+                Codex 所需格式。
+              </small>
+            </label>
+            <div className="advanced-grid">
+              <label className="toggle-field">
+                <span>
+                  <b>完整 API 地址</b>
+                  <small>地址已含完整请求路径时开启，不再自动补全路径。</small>
+                </span>
+                <input
+                  name="provider-full-url"
+                  type="checkbox"
+                  checked={editor.isFullUrl}
+                  onChange={(event) =>
+                    setEditor({ ...editor, isFullUrl: event.target.checked })
+                  }
+                />
+              </label>
+              <label>
+                模型列表地址（可选）
+                <input
+                  name="provider-models-url"
+                  type="url"
+                  autoComplete="url"
+                  spellCheck={false}
+                  value={editor.modelsUrl}
+                  onChange={(event) => patch("modelsUrl", event.target.value)}
+                  placeholder="https://api.example.com/v1/models"
+                />
+                <small>供应商的模型接口不同于主接口时填写。</small>
+              </label>
+              <label>
+                自定义 User-Agent（可选）
+                <input
+                  name="provider-user-agent"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={editor.customUserAgent}
+                  onChange={(event) =>
+                    patch("customUserAgent", event.target.value)
+                  }
+                  placeholder="留空使用默认请求标识"
+                />
+              </label>
+            </div>
+            {editor.apiFormat === "anthropic" && (
+              <div className="advanced-group">
+                <label>
+                  Anthropic 认证字段
+                  <select
+                    name="provider-anthropic-auth"
+                    value={editor.anthropicAuthField}
+                    onChange={(event) =>
+                      patch("anthropicAuthField", event.target.value)
+                    }
+                  >
+                    <option value="ANTHROPIC_AUTH_TOKEN">
+                      Authorization: Bearer
+                    </option>
+                    <option value="ANTHROPIC_API_KEY">x-api-key</option>
+                  </select>
+                </label>
+                <label>
+                  最大输出 tokens（可选）
+                  <input
+                    name="provider-max-output-tokens"
+                    type="number"
+                    min="1"
+                    inputMode="numeric"
+                    value={editor.maxOutputTokens}
+                    onChange={(event) =>
+                      patch(
+                        "maxOutputTokens",
+                        event.target.value.replace(/[^\d]/g, ""),
+                      )
+                    }
+                    placeholder="默认 8192"
+                  />
+                </label>
+                <label className="toggle-field">
+                  <span>
+                    <b>模拟 Claude Code 客户端</b>
+                    <small>
+                      仅当供应商明确要求 Claude Code 请求特征时开启。
+                    </small>
+                  </span>
+                  <input
+                    name="provider-impersonate-claude-code"
+                    type="checkbox"
+                    checked={editor.impersonateClaudeCode}
+                    onChange={(event) =>
+                      setEditor({
+                        ...editor,
+                        impersonateClaudeCode: event.target.checked,
+                      })
+                    }
+                  />
+                </label>
+              </div>
+            )}
+            {editor.apiFormat === "openai_chat" && (
+              <div className="advanced-group">
+                <label>
+                  提示词缓存路由
+                  <select
+                    name="provider-prompt-cache-routing"
+                    value={editor.promptCacheRouting}
+                    onChange={(event) =>
+                      patch("promptCacheRouting", event.target.value)
+                    }
+                  >
+                    <option value="auto">自动（推荐）</option>
+                    <option value="enabled">开启</option>
+                    <option value="disabled">关闭</option>
+                  </select>
+                  <small>严格网关遇到未知缓存字段时可选择关闭。</small>
+                </label>
+                <label className="toggle-field">
+                  <span>
+                    <b>支持思考模式</b>
+                    <small>将 Codex 思考开关转换为上游 Chat 参数。</small>
+                  </span>
+                  <input
+                    name="provider-supports-thinking"
+                    type="checkbox"
+                    checked={
+                      editor.codexChatReasoning.supportsThinking === true
+                    }
+                    onChange={(event) =>
+                      setEditor({
+                        ...editor,
+                        codexChatReasoning: {
+                          ...editor.codexChatReasoning,
+                          supportsThinking: event.target.checked,
+                          supportsEffort: event.target.checked
+                            ? editor.codexChatReasoning.supportsEffort
+                            : false,
+                        },
+                      })
+                    }
+                  />
+                </label>
+                <label className="toggle-field">
+                  <span>
+                    <b>支持思考等级</b>
+                    <small>支持 low、high、max 等推理强度时开启。</small>
+                  </span>
+                  <input
+                    name="provider-supports-effort"
+                    type="checkbox"
+                    checked={editor.codexChatReasoning.supportsEffort === true}
+                    onChange={(event) =>
+                      setEditor({
+                        ...editor,
+                        codexChatReasoning: {
+                          ...editor.codexChatReasoning,
+                          supportsThinking: event.target.checked
+                            ? true
+                            : editor.codexChatReasoning.supportsThinking,
+                          supportsEffort: event.target.checked,
+                          effortParam: event.target.checked
+                            ? (editor.codexChatReasoning.effortParam ??
+                              "reasoning_effort")
+                            : "none",
+                        },
+                      })
+                    }
+                  />
+                </label>
+              </div>
+            )}
+            <div className="advanced-group model-mapping">
+              <div className="advanced-section-heading">
+                <div>
+                  <b>模型映射</b>
+                  <small>
+                    菜单显示名与实际请求模型可不同；留空则直接使用默认模型。
+                  </small>
+                </div>
+                <button
+                  type="button"
+                  className="secondary compact"
+                  onClick={() =>
+                    setEditor({
+                      ...editor,
+                      catalogModels: [
+                        ...editor.catalogModels,
+                        { model: "", displayName: "", contextWindow: "" },
+                      ],
+                    })
+                  }
+                >
+                  添加模型
+                </button>
+              </div>
+              {editor.catalogModels.map((item, index) => (
+                <div className="mapping-row" key={`${item.model}-${index}`}>
+                  <input
+                    aria-label="模型显示名"
+                    value={item.displayName ?? ""}
+                    onChange={(event) => {
+                      const catalogModels = [...editor.catalogModels];
+                      catalogModels[index] = {
+                        ...item,
+                        displayName: event.target.value,
+                      };
+                      setEditor({ ...editor, catalogModels });
+                    }}
+                    placeholder="菜单显示名"
+                  />
+                  <input
+                    aria-label="实际请求模型"
+                    value={item.model}
+                    onChange={(event) => {
+                      const catalogModels = [...editor.catalogModels];
+                      catalogModels[index] = {
+                        ...item,
+                        model: event.target.value,
+                      };
+                      setEditor({ ...editor, catalogModels });
+                    }}
+                    placeholder="实际请求模型"
+                  />
+                  <input
+                    aria-label="上下文窗口"
+                    type="number"
+                    min="1"
+                    inputMode="numeric"
+                    value={item.contextWindow ?? ""}
+                    onChange={(event) => {
+                      const catalogModels = [...editor.catalogModels];
+                      catalogModels[index] = {
+                        ...item,
+                        contextWindow: event.target.value.replace(/[^\d]/g, ""),
+                      };
+                      setEditor({ ...editor, catalogModels });
+                    }}
+                    placeholder="上下文"
+                  />
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label="删除模型映射"
+                    onClick={() =>
+                      setEditor({
+                        ...editor,
+                        catalogModels: editor.catalogModels.filter(
+                          (_, i) => i !== index,
+                        ),
+                      })
+                    }
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
         </details>
         {modelFetchError && (
           <p className="editor-model-error" role="status">
@@ -1306,10 +1681,7 @@ function RuntimeView({
       </article>
       <aside className="runtime-diagnostics">
         <h2>修复与诊断</h2>
-        <p>
-          所有维护能力来自 Codex App Manager 引擎；操作前会二次确认，并保留
-          `~/.codex` 用户数据。
-        </p>
+        <p>操作前会二次确认，并会保留 `~/.codex` 用户数据。</p>
         <button onClick={onDiagnose}>
           查看诊断结果 <span>↗</span>
           <small>安装目录、版本、进程和启动状态</small>
@@ -1359,7 +1731,7 @@ function ActivityView({
         <Metric
           label="API 请求"
           value={String(requests.length)}
-          detail="CC Switch 代理记录"
+          detail="本机路由请求记录"
         />
         <Metric
           label="本机操作"
@@ -1603,8 +1975,7 @@ function AppearanceView({
               </button>
             </div>
             <p className="integrity">
-              <ShieldCheck size={16} /> 皮肤包经过 SHA256 校验，并由 Codex App
-              Manager 主题引擎应用。
+              <ShieldCheck size={16} /> 皮肤包经过 SHA256 完整性校验。
             </p>
           </>
         ) : (
@@ -1836,8 +2207,7 @@ function SettingsView({ onCheck }: { onCheck: () => void }) {
               <div>
                 <b>Codex 免安装版目录</b>
                 <p title={settings?.codexPortableRoot || undefined}>
-                  {settings?.codexPortableRoot ||
-                    "自动识别 Codex App Manager 默认目录"}
+                  {settings?.codexPortableRoot || "自动识别默认安装目录"}
                 </p>
               </div>
               <span>只在免安装模式下使用</span>
@@ -1993,7 +2363,7 @@ function DiagnosticsDialog({
         <header>
           <div>
             <h2 id="diagnostics-title">Codex 诊断结果</h2>
-            <p>结果由 Codex App Manager 运行时引擎生成。</p>
+            <p>检测结果来自当前系统的 Codex 安装状态。</p>
           </div>
           <button
             className="icon-button"
@@ -2024,7 +2394,7 @@ function Onboarding({ onAdd }: { onAdd: () => void }) {
   return (
     <section className="onboarding">
       <div className="onboarding-brand">
-        <Command size={18} /> Chimera++
+        <img src={routeGateIcon} alt="" /> Chimera++
       </div>
       <h2>开始配置你的 Codex</h2>
       <p>
@@ -2071,7 +2441,7 @@ function StandaloneOnboarding({
     <main className="onboarding-screen">
       <section className="onboarding onboarding-card">
         <div className="onboarding-brand">
-          <Command size={18} /> Chimera++
+          <img src={routeGateIcon} alt="" /> Chimera++
         </div>
         <h1>开始配置你的 Codex</h1>
         <p>

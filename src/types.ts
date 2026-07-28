@@ -206,6 +206,8 @@ export interface ProviderMeta {
   apiKeyField?: ClaudeApiKeyField;
   // 是否将 base_url 视为完整 API 端点（代理直接使用此 URL，不拼接路径）
   isFullUrl?: boolean;
+  // Optional exact endpoint used only for model discovery.
+  modelsUrl?: string;
   // Prompt cache key for OpenAI Responses-compatible endpoints (improves cache hit rate)
   promptCacheKey?: string;
   // Session-based prompt-cache routing for Codex Responses -> Chat conversions.

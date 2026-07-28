@@ -127,3 +127,15 @@ export function formatDuration(durationMs?: number): string {
 export function formatVersion(value: string | null | undefined): string {
   return value?.trim() || "未检测到";
 }
+
+/** Keeps Codex credentials in the auth.json field used by the runtime adapter. */
+export function setCodexProviderApiKey(
+  existing: Record<string, unknown>,
+  apiKey: string,
+): Record<string, unknown> {
+  const auth = { ...existing };
+  delete auth.ANTHROPIC_AUTH_TOKEN;
+  delete auth.ANTHROPIC_API_KEY;
+  auth.OPENAI_API_KEY = apiKey.trim();
+  return auth;
+}

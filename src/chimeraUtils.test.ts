@@ -5,6 +5,7 @@ import {
   loadOperationRecords,
   resolveCurrentProvider,
   saveOperationRecords,
+  setCodexProviderApiKey,
 } from "./chimeraUtils";
 
 function provider(id: string, endpoint: string, model: string): Provider {
@@ -94,5 +95,20 @@ describe("formatDuration", () => {
     expect(formatDuration(240)).toBe("240ms");
     expect(formatDuration(1250)).toBe("1.3s");
     expect(formatDuration()).toBe("-");
+  });
+});
+
+describe("setCodexProviderApiKey", () => {
+  it("uses the canonical Codex credential field for Anthropic-compatible providers", () => {
+    expect(
+      setCodexProviderApiKey(
+        {
+          ANTHROPIC_AUTH_TOKEN: "obsolete-token",
+          ANTHROPIC_API_KEY: "obsolete-key",
+          unrelated: true,
+        },
+        "  sk-current  ",
+      ),
+    ).toEqual({ OPENAI_API_KEY: "sk-current", unrelated: true });
   });
 });

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Chimera++ Route Gate">
+  <g id="icon">
+    <rect width="512" height="512" rx="112" fill="#181817"/>
+    <path d="M101 153h95c41 0 56 33 56 77v52c0 43 20 77 61 77h98M101 359h95c41 0 56-34 56-77v-52c0-44 20-77 61-77h98" fill="none" stroke="#FFFFFF" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="386" cy="381" r="31" fill="#FF5A36" stroke="#181817" stroke-width="10"/>
+  </g>
+</svg>
