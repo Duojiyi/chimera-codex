@@ -1,0 +1,50 @@
+name: Windows Test Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - chimera/v2-backend
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chimera-windows-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.12.3
+          run_install: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Windows test package
+        run: pnpm tauri build --bundles msi
+
+      - name: Upload Windows test package
+        uses: actions/upload-artifact@v7
+        with:
+          name: Chimera++-Windows-Test-${{ github.sha }}
+          path: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/chimera-plus-plus.exe
+          if-no-files-found: error
