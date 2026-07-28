@@ -123,7 +123,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
  "x11rb",
 ]
 
@@ -816,7 +816,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 [[package]]
 name = "chimera-domain"
 version = "1.2.42-chimera.1"
-source = "git+https://github.com/Duojiyi/chimera-codex.git?rev=3e87f0b4fc9d65b54dcf74fffa0b5fb2270398af#3e87f0b4fc9d65b54dcf74fffa0b5fb2270398af"
+source = "git+https://github.com/Duojiyi/chimera-codex.git?rev=a5075e6e4d58aad13db259e3eebeabdc0417e3b3#a5075e6e4d58aad13db259e3eebeabdc0417e3b3"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -827,7 +827,7 @@ dependencies = [
 [[package]]
 name = "chimera-platform"
 version = "1.2.42-chimera.1"
-source = "git+https://github.com/Duojiyi/chimera-codex.git?rev=3e87f0b4fc9d65b54dcf74fffa0b5fb2270398af#3e87f0b4fc9d65b54dcf74fffa0b5fb2270398af"
+source = "git+https://github.com/Duojiyi/chimera-codex.git?rev=a5075e6e4d58aad13db259e3eebeabdc0417e3b3#a5075e6e4d58aad13db259e3eebeabdc0417e3b3"
 dependencies = [
  "anyhow",
  "chimera-domain",
@@ -915,7 +915,7 @@ dependencies = [
 [[package]]
 name = "chimera-runtime"
 version = "1.2.42-chimera.1"
-source = "git+https://github.com/Duojiyi/chimera-codex.git?rev=3e87f0b4fc9d65b54dcf74fffa0b5fb2270398af#3e87f0b4fc9d65b54dcf74fffa0b5fb2270398af"
+source = "git+https://github.com/Duojiyi/chimera-codex.git?rev=a5075e6e4d58aad13db259e3eebeabdc0417e3b3#a5075e6e4d58aad13db259e3eebeabdc0417e3b3"
 dependencies = [
  "anyhow",
  "chimera-domain",
@@ -1434,7 +1434,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1639,7 +1639,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4289,7 +4289,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4833,7 +4833,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4892,7 +4892,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5413,7 +5413,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6136,7 +6136,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6618,7 +6618,7 @@ checksum = "51b70b87d15e91f553711b40df3048faf27a7a04e01e0ddc0cf9309f0af7c2ca"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

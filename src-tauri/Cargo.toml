@@ -82,8 +82,8 @@ hmac = "0.12"
 json5 = "0.4"
 json-five = "0.3.1"
 sys-locale = "0.3"
-chimera-runtime = { git = "https://github.com/Duojiyi/chimera-codex.git", rev = "3e87f0b4fc9d65b54dcf74fffa0b5fb2270398af", package = "chimera-runtime" }
-chimera-platform = { git = "https://github.com/Duojiyi/chimera-codex.git", rev = "3e87f0b4fc9d65b54dcf74fffa0b5fb2270398af", package = "chimera-platform" }
+chimera-runtime = { git = "https://github.com/Duojiyi/chimera-codex.git", rev = "a5075e6e4d58aad13db259e3eebeabdc0417e3b3", package = "chimera-runtime" }
+chimera-platform = { git = "https://github.com/Duojiyi/chimera-codex.git", rev = "a5075e6e4d58aad13db259e3eebeabdc0417e3b3", package = "chimera-platform" }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2"
