@@ -128,6 +128,8 @@ The tools page groups health scan, connection test, backup, config transfer, and
 
 Use tonal layers and one-pixel borders for normal surfaces. Do not combine decorative borders with large soft shadows. Only sheets, menus, and dialogs may use elevation: `0 8px 24px rgba(20, 24, 32, 0.14)`. Modal backdrops use a solid translucent ink layer; no blur is required.
 
+Liquid glass is reserved for the floating bottom navigation and the provider switcher. It is not frosted glass: keep the transmitted content clear, use edge refraction, a narrow specular highlight, subtle saturation/contrast, and physical press deformation. Do not use broad blur, cloudy translucent panels, or glass cards elsewhere in the product. Unsupported environments fall back to the same translucent fill and crisp edge treatment without filtering.
+
 ## Shapes
 
 Use `6px` radii for controls, `8px` for panels, and `12px` only for large dialogs or preview frames. Pills are reserved for compact state tags. Windows window controls must use correct Windows behavior and recognizable symbols; never imitate macOS traffic lights.
@@ -169,5 +171,5 @@ No page-load choreography, looping glows, parallax, or universal staggered entra
 - Don't build screens from repeated same-size metric cards.
 - Don't use upstream author names, sponsor marks, provider advertising, or repository labels in the customer interface.
 - Don't hide expert settings, but don't put them in the beginner flow.
-- Don't use fake macOS controls, gradient backgrounds, glass cards, or large rounded rectangles as decoration.
+- Don't use fake macOS controls, gradient page backgrounds, frosted-glass cards, or large rounded rectangles as decoration.
 - Don't make a full page scroll just to change a skin or switch a provider.
