@@ -167,7 +167,16 @@ type ReleaseStatus = {
 type Capability = { id: string; enabledByDefault: boolean };
 type ProductCapabilities = { capabilities: Capability[] };
 type Diagnostic = { name: string; result: string };
-type DownloadProgress = { downloaded: number; total: number };
+type DownloadProgress = {
+  downloaded: number;
+  total: number;
+  stage?: "downloading" | "installing";
+};
+type RuntimeAction = "update" | "repair" | "rollback" | "uninstall";
+type RuntimeOperation = {
+  action: RuntimeAction;
+  stage: "preparing" | "downloading" | "installing";
+};
 type CatalogSkin = {
   id: string;
   name: string;
@@ -274,9 +283,12 @@ export default function ChimeraApp() {
   const [modelFetchError, setModelFetchError] = useState<string | null>(null);
   const [fetchingModels, setFetchingModels] = useState(false);
   const [showKey, setShowKey] = useState(false);
-  const [pendingAction, setPendingAction] = useState<
-    "update" | "repair" | "rollback" | "uninstall" | null
-  >(null);
+  const [pendingAction, setPendingAction] = useState<RuntimeAction | null>(
+    null,
+  );
+  const [runtimeOperation, setRuntimeOperation] =
+    useState<RuntimeOperation | null>(null);
+  const [diagnosing, setDiagnosing] = useState(false);
   const [skinEnabled, setSkinEnabled] = useState(false);
   const [activity, setActivity] = useState<OperationRecord[]>([]);
   const activityKeyRef = useRef<string | null>(null);
@@ -411,7 +423,25 @@ export default function ChimeraApp() {
     const unlisten = listen<DownloadProgress>(
       "codex-runtime-download-progress",
       (event) => {
-        setDownloadProgress(event.payload);
+        const payload = event.payload;
+        setDownloadProgress({
+          ...payload,
+          stage:
+            payload.total > 0 && payload.downloaded >= payload.total
+              ? "installing"
+              : "downloading",
+        });
+        setRuntimeOperation((current) =>
+          current
+            ? {
+                ...current,
+                stage:
+                  payload.total > 0 && payload.downloaded >= payload.total
+                    ? "installing"
+                    : "downloading",
+              }
+            : current,
+        );
       },
     );
     return () => {
@@ -682,6 +712,7 @@ export default function ChimeraApp() {
   };
 
   const diagnose = async () => {
+    setDiagnosing(true);
     try {
       const result = await invoke<Diagnostic[]>("diagnose_codex_runtime");
       setDiagnostics(result);
@@ -689,6 +720,8 @@ export default function ChimeraApp() {
     } catch (error) {
       note("运行诊断", "error", String(error));
       toast.error("诊断失败", { description: String(error) });
+    } finally {
+      setDiagnosing(false);
     }
   };
 
@@ -696,9 +729,24 @@ export default function ChimeraApp() {
     if (!pendingAction) return;
     const action = pendingAction;
     const started = performance.now();
+    // Close the confirmation immediately. Keeping it mounted allows a second
+    // click to enter the backend lock and produces a misleading duplicate-app
+    // error while the first operation is still running.
+    setPendingAction(null);
+    setRuntimeOperation({
+      action,
+      stage:
+        action === "update" || action === "repair"
+          ? "downloading"
+          : "preparing",
+    });
     setDownloadProgress(
       action === "update" || action === "repair"
-        ? { downloaded: 0, total: release?.sizeBytes ?? 0 }
+        ? {
+            downloaded: 0,
+            total: release?.sizeBytes ?? 0,
+            stage: "downloading",
+          }
         : null,
     );
     try {
@@ -739,7 +787,7 @@ export default function ChimeraApp() {
       );
       toast.error("操作失败", { description: String(error) });
     } finally {
-      setPendingAction(null);
+      setRuntimeOperation(null);
       setDownloadProgress(null);
     }
   };
@@ -834,8 +882,10 @@ export default function ChimeraApp() {
               runtime={runtime}
               release={release}
               progress={downloadProgress}
+              operation={runtimeOperation}
               onCheck={checkRuntime}
               onDiagnose={diagnose}
+              diagnosing={diagnosing}
               onAction={setPendingAction}
             />
           )}
@@ -1220,16 +1270,20 @@ function NewRuntimeView({
   runtime,
   release,
   progress,
+  operation,
   onCheck,
   onDiagnose,
+  diagnosing,
   onAction,
 }: {
   runtime: RuntimeStatus | null;
   release: ReleaseStatus | null;
   progress: DownloadProgress | null;
+  operation: RuntimeOperation | null;
   onCheck: () => void;
   onDiagnose: () => void;
-  onAction: (value: "update" | "repair" | "rollback" | "uninstall") => void;
+  diagnosing: boolean;
+  onAction: (value: RuntimeAction) => void;
 }) {
   const [maintenanceOpen, setMaintenanceOpen] = useState(false);
   const [installMode, setInstallMode] = useState<"standard" | "portable">(
@@ -1240,6 +1294,25 @@ function NewRuntimeView({
   const percent = progress?.total
     ? Math.min(100, Math.round((progress.downloaded / progress.total) * 100))
     : 0;
+  const startAction = (action: RuntimeAction) => {
+    setMaintenanceOpen(false);
+    onAction(action);
+  };
+  const runDiagnostics = () => {
+    setMaintenanceOpen(false);
+    onDiagnose();
+  };
+  const operationLabel = progress
+    ? progress.stage === "installing"
+      ? "正在校验并安装，请勿关闭窗口"
+      : `正在下载 ${percent}%`
+    : operation?.action === "uninstall"
+      ? "正在卸载 Codex，请稍候"
+      : operation?.action === "rollback"
+        ? "正在恢复上一版本，请稍候"
+        : operation
+          ? "正在准备操作，请稍候"
+          : null;
   useEffect(() => {
     setInstallMode(
       runtime?.installMode === "portable" ? "portable" : "standard",
@@ -1305,7 +1378,7 @@ function NewRuntimeView({
           <button
             className="secondary"
             onClick={onCheck}
-            disabled={Boolean(progress)}
+            disabled={Boolean(operation)}
           >
             <RefreshCw size={14} />
             检查更新
@@ -1313,7 +1386,7 @@ function NewRuntimeView({
           <button
             className="secondary"
             onClick={() => void openInstallDirectory()}
-            disabled={!runtime?.installed}
+            disabled={!runtime?.installed || Boolean(operation)}
           >
             <FolderOpen size={14} />
             打开安装目录
@@ -1321,16 +1394,24 @@ function NewRuntimeView({
           <button
             className="secondary"
             onClick={() => setMaintenanceOpen(true)}
+            disabled={Boolean(operation)}
           >
             <Settings2 size={14} />
             管理更新源
           </button>
         </div>
-        {progress && (
+        {operationLabel && (
           <div className="runtime-reference-progress">
-            <span>正在下载 {percent}%</span>
+            <span>{operationLabel}</span>
             <i>
-              <u style={{ width: `${percent}%` }} />
+              <u
+                className={
+                  !progress || progress.stage === "installing"
+                    ? "is-indeterminate"
+                    : ""
+                }
+                style={{ width: progress ? `${percent}%` : "38%" }}
+              />
             </i>
           </div>
         )}
@@ -1415,16 +1496,16 @@ function NewRuntimeView({
               </div>
               <b>维护</b>
               <div className="runtime-maintenance-list">
-                <button onClick={onDiagnose}>
+                <button onClick={runDiagnostics} disabled={diagnosing}>
                   <Activity size={16} />
                   <span>
-                    <strong>诊断</strong>
+                    <strong>{diagnosing ? "正在诊断" : "诊断"}</strong>
                     <small>只检查，不修改本机文件</small>
                   </span>
                   <ChevronDown size={15} />
                 </button>
                 <button
-                  onClick={() => onAction("repair")}
+                  onClick={() => startAction("repair")}
                   disabled={!runtime?.canRepair}
                 >
                   <Wrench size={16} />
@@ -1435,7 +1516,7 @@ function NewRuntimeView({
                   <ChevronDown size={15} />
                 </button>
                 <button
-                  onClick={() => onAction("rollback")}
+                  onClick={() => startAction("rollback")}
                   disabled={!runtime?.canRollback}
                 >
                   <RefreshCw size={16} />
@@ -1447,7 +1528,7 @@ function NewRuntimeView({
                 </button>
                 <button
                   className="danger"
-                  onClick={() => onAction("uninstall")}
+                  onClick={() => startAction("uninstall")}
                   disabled={!runtime?.canUninstall}
                 >
                   <Trash2 size={16} />
@@ -1461,8 +1542,8 @@ function NewRuntimeView({
             </div>
             <button
               className="primary runtime-maintenance-primary"
-              onClick={() => onAction("update")}
-              disabled={Boolean(progress)}
+              onClick={() => startAction("update")}
+              disabled={Boolean(operation)}
             >
               <Download size={15} />
               下载并安装稳定版
@@ -3488,6 +3569,37 @@ function DiagnosticsDialog({
   onClose: () => void;
 }) {
   const dialogRef = useDialogFocus<HTMLElement>(onClose);
+  const diagnosticNames: Record<string, string> = {
+    installation: "安装状态",
+    executable: "程序文件",
+    "package integrity": "安装包完整性",
+    "package registration": "系统注册",
+    dependencies: "运行依赖",
+    launch: "启动检查",
+    "package signature": "安装包签名",
+    ownership: "安装目录权限",
+  };
+  const describeDiagnostic = (item: Diagnostic) => {
+    if (item.name === "installation" && item.result === "fail") {
+      return {
+        status: "未检测到安装",
+        detail: "没有找到可维护的 Codex 标准版或免安装版。",
+      };
+    }
+    if (item.name === "package signature" && item.result === "warn") {
+      return {
+        status: "已在安装前验证",
+        detail: "免安装版提取后不再携带可独立验证的安装包签名。",
+      };
+    }
+    if (item.result === "pass") {
+      return { status: "正常", detail: "本项检查已通过。" };
+    }
+    if (item.result === "warn") {
+      return { status: "需要留意", detail: "该项目不影响当前基本使用。" };
+    }
+    return { status: "检查失败", detail: "建议先修复安装后再次诊断。" };
+  };
   return (
     <div
       className="modal-backdrop"
@@ -3518,12 +3630,25 @@ function DiagnosticsDialog({
           </button>
         </header>
         <div className="diagnostics-list">
-          {diagnostics.map((item) => (
-            <article key={item.name}>
-              <b>{item.name}</b>
-              <p>{item.result}</p>
-            </article>
-          ))}
+          {diagnostics.map((item) => {
+            const presentation = describeDiagnostic(item);
+            return (
+              <article key={item.name} className={`is-${item.result}`}>
+                <span aria-hidden="true">
+                  {item.result === "pass" ? (
+                    <CircleCheck size={18} />
+                  ) : (
+                    <CircleAlert size={18} />
+                  )}
+                </span>
+                <div>
+                  <b>{diagnosticNames[item.name] ?? item.name}</b>
+                  <p>{presentation.detail}</p>
+                </div>
+                <strong>{presentation.status}</strong>
+              </article>
+            );
+          })}
         </div>
         <footer>
           <button className="primary" onClick={onClose}>

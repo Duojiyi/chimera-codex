@@ -1,6 +1,6 @@
 [package]
 name = "chimera-plus-plus"
-version = "2.0.8"
+version = "2.0.9"
 description = "Clean Codex provider switcher and desktop runtime manager"
 authors = ["Duojiyi", "CC Switch contributors"]
 license = "MIT"
@@ -95,7 +95,7 @@ webkit2gtk = { version = "2.0.1", features = ["v2_16"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.52"
-windows-sys = { version = "0.61", features = ["Win32_Globalization", "Win32_UI_Shell"] }
+windows-sys = { version = "0.61", features = ["Win32_Globalization", "Win32_Graphics_Dwm", "Win32_UI_Shell"] }
 
 [target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
 rquickjs = { version = "0.8", features = ["bindgen"] }

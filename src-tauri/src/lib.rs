@@ -79,6 +79,33 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 #[cfg(target_os = "windows")]
+fn apply_windows_rounded_corners(app: &tauri::AppHandle) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    };
+
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(hwnd) = window.hwnd() else {
+        log::warn!("无法取得主窗口句柄，未应用 Windows 圆角");
+        return;
+    };
+    let preference = DWMWCP_ROUND;
+    let result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd.0 as _,
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+            (&preference as *const i32).cast(),
+            std::mem::size_of_val(&preference) as u32,
+        )
+    };
+    if result < 0 {
+        log::warn!("Windows DWM 圆角设置失败: HRESULT={result}");
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn set_windows_app_user_model_id(app: &tauri::AppHandle) {
     let app_id = app.config().identifier.clone();
     let wide_app_id: Vec<u16> = app_id.encode_utf16().chain(std::iter::once(0)).collect();
@@ -490,7 +517,10 @@ pub fn run() {
             let _ = app_store::refresh_app_config_dir_override(app.handle());
 
             #[cfg(target_os = "windows")]
-            set_windows_app_user_model_id(app.handle());
+            {
+                set_windows_app_user_model_id(app.handle());
+                apply_windows_rounded_corners(app.handle());
+            }
 
             // 注册 Updater 插件（桌面端）；放在 logger 之后，确保失败可诊断。
             #[cfg(desktop)]
