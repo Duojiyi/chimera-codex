@@ -42,7 +42,8 @@ describe("Chimera++ application shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
     expect(screen.getByRole("heading", { name: "设置" })).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /^检查 Codex 更新/ }),
+      screen.getByRole("button", { name: /^数据与日志/ }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "恢复默认设置" })).toBeInTheDocument();
   });
 });
