@@ -94,6 +94,27 @@ fn set_windows_app_user_model_id(app: &tauri::AppHandle) {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn migrate_legacy_main_window_size(window: &tauri::WebviewWindow) {
+    if window.is_maximized().unwrap_or(false) {
+        return;
+    }
+    let Ok(physical) = window.inner_size() else {
+        return;
+    };
+    let Ok(scale_factor) = window.scale_factor() else {
+        return;
+    };
+    let logical = physical.to_logical::<f64>(scale_factor);
+    let is_legacy_default =
+        (1350.0..=1500.0).contains(&logical.width) && (880.0..=1020.0).contains(&logical.height);
+    if is_legacy_default {
+        if let Err(error) = window.set_size(tauri::LogicalSize::new(1140.0, 816.0)) {
+            log::warn!("迁移旧版窗口尺寸失败: {error}");
+        }
+    }
+}
+
 pub(crate) struct RedactedUrl<'a> {
     url: &'a str,
     known_secrets: &'a [String],
@@ -1272,6 +1293,8 @@ pub fn run() {
             // 静默启动：根据设置决定是否显示主窗口
             let settings = crate::settings::get_settings();
             if let Some(window) = app.get_webview_window("main") {
+                #[cfg(target_os = "windows")]
+                migrate_legacy_main_window_size(&window);
                 // 在窗口首次显示前同步装饰状态，避免前端加载后再切换导致标题栏闪烁
                 // 仅 Linux 生效：解决 Wayland 下系统窗口按钮不可用的问题
                 #[cfg(target_os = "linux")]
