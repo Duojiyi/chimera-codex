@@ -79,14 +79,12 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 #[cfg(target_os = "windows")]
-fn apply_windows_rounded_corners(app: &tauri::AppHandle) {
+fn apply_windows_rounded_corners(window: &tauri::WebviewWindow) {
     use windows_sys::Win32::Graphics::Dwm::{
         DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
     };
+    use windows_sys::Win32::Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn};
 
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
     let Ok(hwnd) = window.hwnd() else {
         log::warn!("无法取得主窗口句柄，未应用 Windows 圆角");
         return;
@@ -102,6 +100,36 @@ fn apply_windows_rounded_corners(app: &tauri::AppHandle) {
     };
     if result < 0 {
         log::warn!("Windows DWM 圆角设置失败: HRESULT={result}");
+    }
+
+    // Windows 10 and some borderless/transparent window configurations ignore
+    // DWMWA_WINDOW_CORNER_PREFERENCE. A real window region keeps the portable
+    // build rounded on those systems as well, and is recalculated on resize.
+    let Ok(size) = window.outer_size() else {
+        log::warn!("无法取得主窗口尺寸，未应用 Windows 兼容圆角");
+        return;
+    };
+    let scale_factor = window.scale_factor().unwrap_or(1.0);
+    let diameter = (32.0 * scale_factor).round().max(1.0) as i32;
+    let region = unsafe {
+        CreateRoundRectRgn(
+            0,
+            0,
+            size.width.saturating_add(1) as i32,
+            size.height.saturating_add(1) as i32,
+            diameter,
+            diameter,
+        )
+    };
+    if region.is_null() {
+        log::warn!("创建 Windows 兼容圆角区域失败");
+        return;
+    }
+
+    // SetWindowRgn owns the region after success; only delete it on failure.
+    if unsafe { SetWindowRgn(hwnd.0 as _, region, 1) } == 0 {
+        unsafe { DeleteObject(region as _) };
+        log::warn!("应用 Windows 兼容圆角区域失败");
     }
 }
 
@@ -421,6 +449,16 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         // 拦截窗口关闭：根据设置决定是否最小化到托盘
         .on_window_event(|window, event| {
+            #[cfg(target_os = "windows")]
+            if matches!(
+                event,
+                tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }
+            ) {
+                if let Some(webview_window) = window.app_handle().get_webview_window(window.label()) {
+                    apply_windows_rounded_corners(&webview_window);
+                }
+            }
+
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // 数据库版本过新的恢复模式下没有托盘可唤回，关闭即退出，避免应用隐身后台
                 let in_db_recovery = crate::init_status::get_init_error()
@@ -519,7 +557,9 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             {
                 set_windows_app_user_model_id(app.handle());
-                apply_windows_rounded_corners(app.handle());
+                if let Some(window) = app.get_webview_window("main") {
+                    apply_windows_rounded_corners(&window);
+                }
             }
 
             // 注册 Updater 插件（桌面端）；放在 logger 之后，确保失败可诊断。
