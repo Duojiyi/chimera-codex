@@ -120,7 +120,7 @@ pub const fn initialize_skills_on_startup() -> bool {
 }
 
 pub const fn sync_session_usage_on_startup() -> bool {
-    true
+    false
 }
 
 pub const fn start_cloud_sync_workers() -> bool {
@@ -175,7 +175,7 @@ mod tests {
         assert!(!import_extended_apps_on_startup());
         assert!(!import_content_on_startup());
         assert!(!initialize_skills_on_startup());
-        assert!(sync_session_usage_on_startup());
+        assert!(!sync_session_usage_on_startup());
         assert!(!start_cloud_sync_workers());
         assert!(!refresh_usage_from_tray());
         assert!(app_update_channel_configured());

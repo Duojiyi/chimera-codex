@@ -180,6 +180,10 @@ export const usageApi = {
     return invoke("sync_session_usage");
   },
 
+  syncCodexSessionUsage: async (): Promise<SessionSyncResult> => {
+    return invoke("sync_codex_session_usage");
+  },
+
   rebuildCodexUsage: async (): Promise<SessionSyncResult> => {
     return invoke("rebuild_codex_usage");
   },

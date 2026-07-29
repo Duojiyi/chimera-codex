@@ -289,6 +289,25 @@ pub async fn sync_session_usage(
     .map_err(|error| AppError::Message(format!("会话用量同步任务失败: {error}")))
 }
 
+/// 只同步 Codex 会话。Chimera++ 的公开界面仅展示 Codex，避免扫描其它
+/// 工具的会话目录拖慢首次统计。
+#[tauri::command]
+pub async fn sync_codex_session_usage(
+    state: State<'_, AppState>,
+) -> Result<crate::services::session_usage::SessionSyncResult, AppError> {
+    let db = state.db.clone();
+    let _guard = crate::services::session_usage::session_sync_mutex()
+        .lock()
+        .await;
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = crate::services::session_usage_codex::sync_codex_usage(&db)?;
+        crate::services::session_usage::notify_sync_result(&result);
+        Ok(result)
+    })
+    .await
+    .map_err(|error| AppError::Message(format!("Codex 会话用量同步任务失败: {error}")))?
+}
+
 /// Codex reset 成功后，无论重导是否导入新行或返回错误，都必须通知前端刷新。
 /// 调用方应只在 reset 成功后调用，避免把未发生的数据变更误报为重建完成。
 fn finish_codex_rebuild(

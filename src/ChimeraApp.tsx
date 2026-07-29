@@ -2351,7 +2351,7 @@ function UsageView({ requests }: { requests: RequestLog[] }) {
       setError("");
       if (syncSessions) {
         try {
-          const result = await usageApi.syncSessionUsage();
+        const result = await usageApi.syncCodexSessionUsage();
           setSyncNote(
             result.errors.length
               ? `已读取 ${result.filesScanned} 个文件，${result.errors.length} 项未能导入`
