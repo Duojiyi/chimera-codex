@@ -7,14 +7,14 @@ describe("Chimera++ application shell", () => {
     render(<App />);
 
     expect(
-      screen.getByRole("heading", { name: "供应商控制台" }),
+      screen.getByRole("heading", { name: "路由门" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "供应商" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "路由门" })).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Codex 运行时" }),
+      screen.getByRole("button", { name: "运行时" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "连接记录" }),
+      screen.getByRole("button", { name: "词元" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "外观" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "设置" })).toBeInTheDocument();
@@ -23,17 +23,17 @@ describe("Chimera++ application shell", () => {
     expect(screen.queryByText("OpenClaw")).not.toBeInTheDocument();
   });
 
-  it("switches between the runtime, activity, appearance, and settings surfaces", () => {
+  it("switches between the runtime, token, appearance, and settings surfaces", () => {
     render(<App />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Codex 运行时" }));
+    fireEvent.click(screen.getByRole("button", { name: "运行时" }));
     expect(
-      screen.getByRole("heading", { name: "Codex 运行时", level: 1 }),
+      screen.getByRole("heading", { name: "运行时", level: 1 }),
     ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "连接记录" }));
+    fireEvent.click(screen.getByRole("button", { name: "词元" }));
     expect(
-      screen.getByRole("heading", { name: "连接记录" }),
+      screen.getByRole("heading", { name: "词元" }),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "外观" }));
@@ -42,7 +42,7 @@ describe("Chimera++ application shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
     expect(screen.getByRole("heading", { name: "设置" })).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "更新策略" }),
+      screen.getByRole("button", { name: /^检查 Codex 更新/ }),
     ).toBeInTheDocument();
   });
 });

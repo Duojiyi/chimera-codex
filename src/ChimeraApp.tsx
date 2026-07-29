@@ -4,9 +4,11 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Activity,
-  ArrowLeft,
+  ArrowRight,
+  BarChart3,
   Check,
   ChevronDown,
+  CircleCheck,
   CircleAlert,
   Command,
   Download,
@@ -15,9 +17,11 @@ import {
   LoaderCircle,
   FolderOpen,
   MoreHorizontal,
+  Package,
   Paintbrush,
   Plus,
   RefreshCw,
+  Route,
   Settings2,
   ShieldCheck,
   Trash2,
@@ -37,7 +41,12 @@ import { settingsApi } from "@/lib/api/settings";
 import { vscodeApi } from "@/lib/api/vscode";
 import { usageApi } from "@/lib/api/usage";
 import { useUpdate } from "@/contexts/UpdateContext";
-import type { RequestLog } from "@/types/usage";
+import type {
+  DailyStats,
+  ModelStats,
+  RequestLog,
+  UsageSummary,
+} from "@/types/usage";
 import type { Settings } from "@/types";
 import { fetchModelsForConfig, type FetchedModel } from "@/lib/api/model-fetch";
 import { getChimeraHubTemplate } from "@/config/codexTemplates";
@@ -62,6 +71,8 @@ import {
 import routeGateIcon from "@/assets/icons/chimera-route-gate.svg";
 import "./chimera.css";
 
+const runningInTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
 function useEscapeClose(onClose: () => void, enabled = true) {
   useEffect(() => {
     if (!enabled) return;
@@ -73,7 +84,7 @@ function useEscapeClose(onClose: () => void, enabled = true) {
   }, [enabled, onClose]);
 }
 
-type View = "providers" | "runtime" | "activity" | "appearance" | "settings";
+type View = "providers" | "runtime" | "usage" | "appearance" | "settings";
 type RuntimeStatus = {
   installed: boolean;
   version?: string | null;
@@ -107,9 +118,9 @@ type CatalogSkin = {
 };
 
 const nav: Array<[View, string, typeof Command]> = [
-  ["providers", "供应商", Command],
-  ["runtime", "Codex 运行时", Download],
-  ["activity", "连接记录", Activity],
+  ["providers", "路由门", Route],
+  ["runtime", "运行时", Package],
+  ["usage", "词元", BarChart3],
   ["appearance", "外观", Paintbrush],
   ["settings", "设置", Settings2],
 ];
@@ -209,8 +220,24 @@ export default function ChimeraApp() {
   } | null>(null);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [onboardingDeferred, setOnboardingDeferred] = useState(false);
+  void activity;
 
   const loadProviders = async () => {
+    if (!runningInTauri) {
+      const template = getChimeraHubTemplate();
+      const previewProvider: Provider = {
+        id: "preview-chimerahub",
+        name: template.name,
+        websiteUrl: template.websiteUrl,
+        category: "custom",
+        settingsConfig: { auth: template.auth, config: template.config },
+      };
+      setProviders([previewProvider]);
+      setCurrentId(previewProvider.id);
+      setCurrentSource("live");
+      setLoading(false);
+      return;
+    }
     try {
       const [all, stored] = await Promise.all([
         providersApi.getAll("codex"),
@@ -244,6 +271,18 @@ export default function ChimeraApp() {
   };
 
   const loadRuntime = async () => {
+    if (!runningInTauri) {
+      setRuntime({
+        installed: true,
+        version: "26.721.41059",
+        installMode: "standard",
+        installPath: "预览模式 · 未访问本机文件",
+        canRepair: true,
+        canRollback: true,
+        canUninstall: true,
+      });
+      return;
+    }
     try {
       const status = await invoke<RuntimeStatus>("get_codex_runtime_status");
       setRuntime(status);
@@ -257,6 +296,12 @@ export default function ChimeraApp() {
   };
 
   useEffect(() => {
+    if (!runningInTauri) {
+      setSkinEnabled(true);
+      void loadProviders();
+      void loadRuntime();
+      return;
+    }
     let active = true;
     void settingsApi
       .getAppConfigPath()
@@ -613,77 +658,17 @@ export default function ChimeraApp() {
 
   return (
     <div className="chimera-shell">
-      <aside className="chimera-sidebar">
-        <div className="chimera-brand">
-          <span>
-            <img src={routeGateIcon} alt="" />
-          </span>
-          <strong>Chimera++</strong>
-        </div>
-        <p className="chimera-kicker">CODEX WORKSPACE</p>
-        <nav>
-          {nav.map(([id, label, Icon]) => (
-            <button
-              key={id}
-              className={view === id ? "is-active" : ""}
-              onClick={() => setView(id)}
-            >
-              <Icon size={17} />
-              {label}
-            </button>
-          ))}
-        </nav>
-        <div className="chimera-sidebar-footer">
-          <span
-            className={
-              runtime?.installed ? "status-dot" : "status-dot is-muted"
-            }
-          />
-          {runtime?.installed ? "Codex 运行时已识别" : "正在等待 Codex 运行时"}
-        </div>
-        <div className="workspace-identity">
-          <b>H</b>
-          <span>
-            本机工作区<small>Chimera++ 2.0</small>
-          </span>
-        </div>
-      </aside>
       <main className="chimera-main">
         <header className="chimera-titlebar" data-tauri-drag-region>
-          <div data-tauri-drag-region>
-            <h1>
-              {editor ? (
-                <button
-                  className="page-back"
-                  aria-label="返回供应商控制台"
-                  onClick={() => setEditor(null)}
-                >
-                  <ArrowLeft size={18} />
-                </button>
-              ) : null}
-              {editor
-                ? editor.original
-                  ? "编辑供应商"
-                  : "添加供应商"
-                : view === "providers"
-                  ? "供应商控制台"
-                  : nav.find((item) => item[0] === view)?.[1]}
-            </h1>
-            <p>
-              {editor
-                ? "保存后会写入 Codex 的当前供应商配置"
-                : view === "providers"
-                  ? "切换、配置并验证当前 API 连接"
-                  : view === "runtime"
-                    ? "安装、更新与修复本机 Codex"
-                    : view === "appearance"
-                      ? "管理 Codex 客户端皮肤"
-                      : view === "settings"
-                        ? "应用行为、数据位置与更新策略"
-                        : "查看供应商切换、连接测试与模型同步历史"}
-            </p>
+          <div className="route-brand" data-tauri-drag-region>
+            <span className="route-brand-mark"><img src={routeGateIcon} alt="" /></span>
+            <strong>Chimera++</strong>
           </div>
-          <WindowControls />
+          <div className="route-page-label"><span className="status-dot" />路由门</div>
+          <div className="route-window-tools">
+            <button aria-label="打开设置" onClick={() => setView("settings")}><Settings2 size={16} /></button>
+            <WindowControls />
+          </div>
         </header>
         {hasUpdate && updateInfo && !isDismissed && (
           <div className="app-update-notice" role="status">
@@ -710,35 +695,16 @@ export default function ChimeraApp() {
             </button>
           </div>
         )}
-        {editor ? (
-          <ProviderEditor
-            editor={editor}
-            setEditor={setEditor}
-            showKey={showKey}
-            setShowKey={setShowKey}
-            fetchingModels={fetchingModels}
-            modelFetchError={modelFetchError}
-            onFetchModels={fetchModels}
-            onTest={() =>
-              void testConnection(editor.baseUrl, editor.name || "Codex")
-            }
-            onSave={saveProvider}
-            onDelete={() => {
-              if (editor.original) setPendingProviderDelete(editor.original);
-            }}
-            escapeDisabled={Boolean(pendingProviderDelete)}
-          />
-        ) : (
-          <>
+        <h1 className="sr-only">{editor ? (editor.original ? "编辑供应商" : "添加供应商") : view === "providers" ? "路由门" : view === "runtime" ? "运行时" : view === "usage" ? "词元" : view === "appearance" ? "外观" : "设置"}</h1>
+        <section className="chimera-content">
             {view === "providers" && (
-              <ProvidersView
+              <NewProvidersView
                 providers={providers}
                 currentId={currentId}
                 currentSource={currentSource}
                 connection={connection}
                 loading={loading}
                 runtime={runtime}
-                activity={activity}
                 onSwitch={switchProvider}
                 onEdit={(provider) => {
                   setModels(null);
@@ -756,7 +722,7 @@ export default function ChimeraApp() {
               />
             )}
             {view === "runtime" && (
-              <RuntimeView
+              <NewRuntimeView
                 runtime={runtime}
                 release={release}
                 progress={downloadProgress}
@@ -765,8 +731,8 @@ export default function ChimeraApp() {
                 onAction={setPendingAction}
               />
             )}
-            {view === "activity" && (
-              <ActivityView entries={activity} requests={requestLogs} />
+            {view === "usage" && (
+              <UsageView requests={requestLogs} />
             )}
             {view === "appearance" && (
               <AppearanceView
@@ -774,8 +740,31 @@ export default function ChimeraApp() {
                 onRequestSkinAction={setPendingSkinAction}
               />
             )}
-            {view === "settings" && <SettingsView onCheck={checkRuntime} />}
-          </>
+            {view === "settings" && <NewSettingsView onCheck={checkRuntime} />}
+        </section>
+        <nav className="route-bottom-nav" aria-label="主导航">
+          {nav.map(([id, label, Icon]) => (
+            <button key={id} className={view === id ? "is-active" : ""} onClick={() => setView(id)}>
+              <span><Icon size={16} /></span><small>{label}</small>
+            </button>
+          ))}
+        </nav>
+        {editor && (
+          <div className="provider-sheet-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setEditor(null)}>
+            <ProviderEditor
+              editor={editor}
+              setEditor={setEditor}
+              showKey={showKey}
+              setShowKey={setShowKey}
+              fetchingModels={fetchingModels}
+              modelFetchError={modelFetchError}
+              onFetchModels={fetchModels}
+              onTest={() => void testConnection(editor.baseUrl, editor.name || "Codex")}
+              onSave={saveProvider}
+              onDelete={() => { if (editor.original) setPendingProviderDelete(editor.original); }}
+              escapeDisabled={Boolean(pendingProviderDelete)}
+            />
+          </div>
         )}
       </main>
       {editor && models && modelPickerOpen && (
@@ -1099,6 +1088,84 @@ function ProvidersView({
           </div>
         </aside>
       </div>
+    </section>
+  );
+}
+
+function NewRuntimeView({
+  runtime,
+  release,
+  progress,
+  onCheck,
+  onDiagnose,
+  onAction,
+}: {
+  runtime: RuntimeStatus | null;
+  release: ReleaseStatus | null;
+  progress: DownloadProgress | null;
+  onCheck: () => void;
+  onDiagnose: () => void;
+  onAction: (value: "update" | "repair" | "rollback" | "uninstall") => void;
+}) {
+  const version = runtime?.version ?? "等待识别";
+  const percent = progress?.total ? Math.min(100, Math.round((progress.downloaded / progress.total) * 100)) : 0;
+  return <section className="runtime-reference-view">
+    <span className="eyebrow">CODEX 运行时</span>
+    <h1>本机 Codex 已准备就绪</h1>
+    <div className="runtime-ring"><div><CircleCheck size={28} /><code>{version}</code><small>{runtime?.installed ? `${runtimeText(runtime.installMode)} · 稳定版` : "未检测到安装"}</small></div></div>
+    <div className="runtime-info-strip"><div><FolderOpen size={16} /><span>安装位置<b>{runtime?.installed ? "已识别" : "未检测到"}</b></span></div><div><Download size={16} /><span>更新通道<b>{release?.source === "mirror" ? "镜像" : "自动"}</b></span></div><div><Activity size={16} /><span>自动检查<b>已开启</b></span></div></div>
+    <div className="runtime-reference-actions"><button className="secondary" onClick={onCheck} disabled={Boolean(progress)}><RefreshCw size={14} />检查更新</button><button className="secondary" onClick={onDiagnose}><Wrench size={14} />查看诊断</button>{release?.updateAvailable && <button className="primary" onClick={() => onAction("update")} disabled={Boolean(progress)}><Download size={14} />下载更新</button>}</div>
+    {progress && <div className="runtime-reference-progress"><span>正在下载 {percent}%</span><i><u style={{ width: `${percent}%` }} /></i></div>}
+    <div className="runtime-reference-maintenance"><button onClick={() => onAction("repair")} disabled={!runtime?.canRepair}><Wrench size={14} />修复</button><button onClick={() => onAction("rollback")} disabled={!runtime?.canRollback}><Activity size={14} />回滚</button><button className="danger" onClick={() => onAction("uninstall")} disabled={!runtime?.canUninstall}><Trash2 size={14} />卸载 Codex</button></div>
+  </section>;
+}
+
+function NewProvidersView({
+  providers,
+  currentId,
+  currentSource,
+  connection,
+  loading,
+  runtime,
+  onSwitch,
+  onEdit,
+  onAdd,
+  onTest,
+  onCheckRuntime,
+  onDiagnose,
+}: {
+  providers: Provider[];
+  currentId: string;
+  currentSource: "live" | "stored" | "external" | "none";
+  connection: ConnectionState;
+  loading: boolean;
+  runtime: RuntimeStatus | null;
+  onSwitch: (id: string) => void;
+  onEdit: (provider: Provider) => void;
+  onAdd: () => void;
+  onTest: (url: string, name?: string) => Promise<boolean>;
+  onCheckRuntime: () => void;
+  onDiagnose: () => void;
+}) {
+  if (loading) return <Empty label="正在读取供应商…" />;
+  if (!providers.length) return <Onboarding onAdd={onAdd} />;
+  const current = providers.find((provider) => provider.id === currentId) ?? providers[0];
+  const endpoint = extractCodexBaseUrl(String(current.settingsConfig?.config ?? "")) || "未配置请求地址";
+  const model = extractCodexModelName(String(current.settingsConfig?.config ?? "")) || "未设置";
+  const connectionLabel = connection.kind === "connected" ? `已连接 · ${connection.message}` : connection.kind === "checking" ? "测试中" : connection.kind === "error" ? "连接失败" : currentSource === "live" ? "配置已识别" : "等待测试";
+  return (
+    <section className="route-gate-view">
+      <div className="route-gate-heading"><div><span className="eyebrow">当前路由</span><h1>让 Codex 走向正确的端点</h1><p>选择供应商，测试连接后即可一键写入本机配置。</p></div><code>Codex Desktop · {formatVersion(runtime?.version)}</code></div>
+      <div className="route-map" aria-label="当前 Codex 路由状态">
+        <span className="map-point map-point-left" /><span className="map-point map-point-right" /><span className="map-line map-line-left" /><span className="map-line map-line-right" />
+        <article className="route-provider-node"><div className="provider-emblem"><Route size={22} /></div><div><h2>{current.name}</h2><code>{endpoint}</code></div><span className={`route-status ${connection.kind === "error" ? "is-error" : ""}`}><i />{connectionLabel}</span></article>
+        <article className="route-side-node route-model-node"><Package size={18} /><b>默认模型</b><code title={model}>{model}</code></article>
+        <article className="route-side-node route-codex-node"><Command size={18} /><b>本机 Codex</b><span>{runtime?.installed ? "配置已同步" : "等待识别"}</span></article>
+        <div className="route-selector"><span className="selector-mark"><Route size={18} /></span><div><b>{current.name}</b><code>{model} · OpenAI Compatible</code></div><button aria-label="编辑当前供应商" onClick={() => onEdit(current)}><ChevronDown size={17} /></button><button className="primary compact" onClick={() => void onSwitch(current.id)}><ArrowRight size={15} />应用</button></div>
+      </div>
+      <div className="route-meta"><span>当前模型：<code>{model}</code></span><span className="ok">● {connection.kind === "connected" ? "已就绪" : "尚未验证"}</span></div>
+      <div className="route-provider-list"><header><b>已保存路由</b><button className="link-button" onClick={onAdd}><Plus size={14} />连接新供应商</button></header>{providers.slice(0, 4).map((provider) => { const active = provider.id === current.id; const providerModel = extractCodexModelName(String(provider.settingsConfig?.config ?? "")) || "未设置模型"; return <button key={provider.id} className={`route-list-row ${active ? "is-active" : ""}`} onClick={() => !active && onSwitch(provider.id)}><span className="provider-list-dot" /><span><b>{provider.name}</b><code>{providerModel}</code></span>{active ? <em>当前</em> : <ChevronDown size={15} />}</button>; })}</div>
+      <footer className="route-actions"><button className="secondary" onClick={() => void onTest(endpoint, current.name)} disabled={!endpoint}><Activity size={15} />测试连接</button><button className="secondary" onClick={onDiagnose}><Wrench size={15} />运行诊断</button><button className="primary" onClick={onCheckRuntime}><RefreshCw size={15} />检查更新</button></footer>
     </section>
   );
 }
@@ -1828,6 +1895,62 @@ function ActivityView({
   );
 }
 
+function UsageView({ requests }: { requests: RequestLog[] }) {
+  const [summary, setSummary] = useState<UsageSummary | null>(null);
+  const [trends, setTrends] = useState<DailyStats[]>([]);
+  const [models, setModels] = useState<ModelStats[]>([]);
+  const [range, setRange] = useState<"today" | "7d" | "30d">("30d");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!runningInTauri) {
+      setSummary({ totalRequests: 1842, totalCost: "0", totalInputTokens: 2491880, totalOutputTokens: 792740, totalCacheCreationTokens: 0, totalCacheReadTokens: 0, successRate: 0.992, realTotalTokens: 3284620, cacheHitRate: 0 });
+      setTrends(Array.from({ length: 24 }, (_, index) => ({ date: `2026-07-${String(index + 1).padStart(2, "0")}`, requestCount: 60 + index * 4, totalCost: "0", totalTokens: 90000 + index * 7300, totalInputTokens: 68000, totalOutputTokens: 22000, totalCacheCreationTokens: 0, totalCacheReadTokens: 0 })));
+      setModels([{ model: "gpt-5.6-sol", requestCount: 1200, totalTokens: 2412800, totalCost: "0", avgCostPerRequest: "0" }, { model: "claude-sonnet-4", requestCount: 420, totalTokens: 642120, totalCost: "0", avgCostPerRequest: "0" }, { model: "其他模型", requestCount: 222, totalTokens: 229700, totalCost: "0", avgCostPerRequest: "0" }]);
+      return;
+    }
+    const end = Date.now();
+    const days = range === "today" ? 1 : range === "7d" ? 7 : 30;
+    const start = end - days * 24 * 60 * 60 * 1000;
+    let active = true;
+    void Promise.all([
+      usageApi.getUsageSummary(start, end, "codex"),
+      usageApi.getUsageTrends(start, end, "codex"),
+      usageApi.getModelStats(start, end, "codex"),
+    ]).then(([nextSummary, nextTrends, nextModels]) => {
+      if (!active) return;
+      setSummary(nextSummary);
+      setTrends(nextTrends);
+      setModels(nextModels.slice(0, 3));
+      setError("");
+    }).catch((reason) => {
+      if (active) setError(String(reason));
+    });
+    return () => { active = false; };
+  }, [range]);
+
+  const total = summary?.realTotalTokens ?? 0;
+  const input = summary?.totalInputTokens ?? 0;
+  const output = summary?.totalOutputTokens ?? 0;
+  const max = Math.max(...trends.map((item) => item.totalTokens), 1);
+  const modelTotal = Math.max(...models.map((item) => item.totalTokens), 1);
+  const fallback = requests.reduce((sum, item) => sum + item.inputTokens + item.outputTokens, 0);
+  return (
+    <section className="usage-surface">
+      <div className="usage-heading">
+        <div><span className="eyebrow">词元统计</span><h1>了解 Codex 的词元消耗</h1><p>数据来自本机使用记录，不会上传。</p></div>
+        <div className="range-segment">{([["today", "今日"], ["7d", "7 天"], ["30d", "30 天"]] as const).map(([id, label]) => <button key={id} className={range === id ? "is-active" : ""} onClick={() => setRange(id)}>{label}</button>)}</div>
+      </div>
+      {error && <div className="inline-error"><CircleAlert size={15} /> 词元统计暂时不可用：{error}</div>}
+      <div className="usage-grid">
+        <article className="usage-summary-card"><span>本期总用量</span><strong>{(total || fallback).toLocaleString("zh-CN")}</strong><small>词元</small><hr /><dl><div><dt>输入词元</dt><dd>{input.toLocaleString("zh-CN")}</dd></div><div><dt>输出词元</dt><dd>{output.toLocaleString("zh-CN")}</dd></div><div><dt>请求数</dt><dd>{summary?.totalRequests ?? requests.length}</dd></div></dl></article>
+        <article className="usage-trend-card"><header><b>每日词元趋势</b><small>{summary ? `成功率 ${Math.round(summary.successRate * 100)}%` : "正在同步"}</small></header><div className="usage-chart" aria-label="每日词元趋势">{trends.length ? trends.map((item) => <span key={item.date} title={`${item.date} ${item.totalTokens.toLocaleString("zh-CN")} 词元`} style={{ height: `${Math.max(4, (item.totalTokens / max) * 100)}%` }} />) : <div className="chart-empty">暂无趋势数据</div>}</div><footer><small>较早</small><small>最近</small></footer></article>
+      </div>
+      <article className="usage-models"><header><b>模型消耗</b><small>按词元总量排序</small></header>{models.length ? models.map((item) => <div className="usage-model-row" key={item.model}><div><code>{item.model}</code><span>{item.totalTokens.toLocaleString("zh-CN")} 词元</span></div><strong>{Math.round((item.totalTokens / modelTotal) * 100)}%</strong><i><u style={{ width: `${Math.max(3, (item.totalTokens / modelTotal) * 100)}%` }} /></i></div>) : <p className="muted-copy">暂无模型统计。</p>}</article>
+    </section>
+  );
+}
+
 function AppearanceView({
   enabled,
   onRequestSkinAction,
@@ -1840,6 +1963,16 @@ function AppearanceView({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   const load = async () => {
+    if (!runningInTauri) {
+      const preview = routeGateIcon;
+      setSkins([
+        { id: "preview-nerv", name: "NERV EVA-02", description: "Asuka Terminal", version: "1.4.2", author: "Chimera Market", preview, installed: true, applied: true },
+        { id: "preview-oled", name: "OLED Mono", description: "Pure Black", version: "2.1.0", preview, installed: false, applied: false },
+        { id: "preview-sakura", name: "Sakura Glass", description: "Soft Pink", version: "1.8.3", preview, installed: false, applied: false },
+      ]);
+      setSelectedId("preview-nerv");
+      return;
+    }
     try {
       setError("");
       const result = await invoke<CatalogSkin[]>("list_skin_catalog");
@@ -1894,7 +2027,7 @@ function AppearanceView({
             onClick={() => setSelectedId(skin.id)}
           >
             <img
-              src={`https://skins.agentsmirror.com/${skin.preview.replace(/^\/+/, "")}`}
+              src={skin.preview.startsWith("/") ? skin.preview : `https://skins.agentsmirror.com/${skin.preview.replace(/^\/+/, "")}`}
               alt=""
             />
             {skin.name}
@@ -1924,10 +2057,7 @@ function AppearanceView({
               {selected.description || `Chimera++ 皮肤包 · ${selected.version}`}
             </p>
             <div className="skin-preview skin-preview-image">
-              <img
-                src={`https://skins.agentsmirror.com/${selected.preview.replace(/^\/+/, "")}`}
-                alt={`${selected.name} 预览`}
-              />
+              {selected.preview === routeGateIcon ? <div className="skin-preview-fallback"><aside><b>CHATGPT</b><span>新对话</span><span>Codex</span><span>设置</span></aside><main><code>{selected.name} // CODEX ROUTE</code><div><b>ChimeraHub 已连接</b><small>gpt-5.6-sol · 420 ms</small></div><footer>给 ChatGPT 发送消息 <i>↑</i></footer></main></div> : <img src={selected.preview.startsWith("/") ? selected.preview : `https://skins.agentsmirror.com/${selected.preview.replace(/^\/+/, "")}`} alt={`${selected.name} 预览`} />}
             </div>
             <div className="skin-actions">
               {!selected.installed && (
@@ -2001,6 +2131,18 @@ function AppearanceView({
       </article>
     </section>
   );
+}
+
+function NewSettingsView({ onCheck }: { onCheck: () => void }) {
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [autoLaunch, setAutoLaunch] = useState(true);
+  useEffect(() => {
+    if (!runningInTauri) { setSettings({ codexUpdateSource: "auto", codexInstallMode: "standard" } as Settings); return; }
+    void Promise.all([settingsApi.get(), settingsApi.getAutoLaunchStatus()]).then(([value, launch]) => { setSettings(value); setAutoLaunch(launch); }).catch((reason) => toast.error("无法读取设置", { description: String(reason) }));
+  }, []);
+  const save = async (patch: Partial<Settings>) => { if (!settings) return; const next = { ...settings, ...patch }; if (!runningInTauri) { setSettings(next); return; } try { await settingsApi.save(next); setSettings(next); toast.success("设置已保存"); } catch (reason) { toast.error("设置保存失败", { description: String(reason) }); } };
+  const toggleAutoLaunch = async () => { if (!runningInTauri) { setAutoLaunch((value) => !value); return; } try { setAutoLaunch(await settingsApi.setAutoLaunch(!autoLaunch)); toast.success("设置已保存"); } catch (reason) { toast.error("设置失败", { description: String(reason) }); } };
+  return <section className="new-settings-view"><span className="eyebrow">设置</span><h1>保持简单，也保留控制权</h1><div className="settings-reference-list"><div className="settings-reference-row" role="button" tabIndex={0} onClick={() => void toggleAutoLaunch()}><span><b>启动时检查 Codex 更新</b><small>仅提醒，不会静默替换当前版本</small></span><i className="settings-switch is-on"><u /></i></div><div className="settings-reference-row"><span><b>自动检查供应商状态</b><small>在后台轻量验证当前路由</small></span><i className="settings-switch is-on"><u /></i></div><div className="settings-reference-row"><span><b>关闭窗口后最小化到托盘</b><small>保留快速切换能力</small></span><i className="settings-switch"><u /></i></div><div className="settings-reference-row settings-segment-row"><span><b>更新通道</b><small>只提供稳定版和免安装版</small></span><div className="settings-segment"><button className={settings?.codexUpdateSource !== "mirror" ? "is-active" : ""} onClick={() => void save({ codexUpdateSource: "auto" })}>稳定版</button><button className={settings?.codexUpdateSource === "mirror" ? "is-active" : ""} onClick={() => void save({ codexUpdateSource: "mirror" })}>免安装版</button></div></div><button className="settings-reference-row settings-link-row" onClick={onCheck}><span><b>检查 Codex 更新</b><small>当前版本 {formatVersion("26.721.41059")}</small></span><RefreshCw size={16} /></button><button className="settings-reference-row settings-link-row" onClick={() => toast.info("配置目录功能将在桌面运行时打开") }><span><b>数据与日志</b><small>配置保存在本机</small></span><ChevronDown size={16} /></button></div><footer className="settings-reference-footer"><code>Chimera++ 2.0</code><button className="secondary" onClick={() => void save({ codexUpdateSource: "auto", codexInstallMode: "standard" })}>恢复默认设置</button></footer></section>;
 }
 
 function SettingsView({ onCheck }: { onCheck: () => void }) {
@@ -2569,6 +2711,11 @@ function Metric({
     </article>
   );
 }
+void ProvidersView;
+void ActivityView;
+void RuntimeView;
+void SettingsView;
+
 function WindowControls() {
   const run = (action: "close" | "minimize" | "maximize") => {
     const window = getCurrentWindow();
