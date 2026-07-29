@@ -133,12 +133,26 @@ html {
   line-height: 1.5;
   color-scheme: light;
   overscroll-behavior: none;
+  background: transparent;
 }
 
 body {
   @apply m-0 p-0 text-sm;
-  background-color: hsl(var(--background));
+  background-color: transparent;
   color: hsl(var(--foreground));
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+#root {
+  border-radius: 16px;
+  background: transparent;
 }
 
 html.dark {

@@ -8,9 +8,7 @@ describe("Chimera++ application shell", () => {
 
     expect(screen.getByRole("heading", { name: "供应商" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "供应商" })).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "更新检测" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "更新" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "词元" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "外观" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "设置" })).toBeInTheDocument();
@@ -22,19 +20,28 @@ describe("Chimera++ application shell", () => {
   it("switches between the runtime, token, appearance, and settings surfaces", () => {
     render(<App />);
 
-    fireEvent.click(screen.getByRole("button", { name: "更新检测" }));
+    fireEvent.click(screen.getByRole("button", { name: "更新" }));
     expect(
-      screen.getByRole("heading", { name: "更新检测", level: 1 }),
+      screen.getByRole("heading", {
+        name: "本机 Codex 已准备就绪",
+        level: 1,
+      }),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "词元" }));
-    expect(screen.getByRole("heading", { name: "词元" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "词元消耗" }),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "外观" }));
-    expect(screen.getByRole("heading", { name: "外观" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "皮肤市场" }),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    expect(screen.getByRole("heading", { name: "设置" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "保持简单，也保留控制权" }),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /^数据与日志/ }),
     ).toBeInTheDocument();

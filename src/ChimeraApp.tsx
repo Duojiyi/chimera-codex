@@ -32,6 +32,16 @@ import {
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import type {
   ClaudeApiKeyField,
   CodexApiFormat,
@@ -70,21 +80,70 @@ import {
   type ConnectionState,
   type OperationRecord,
 } from "./chimeraUtils";
-import routeGateIcon from "@/assets/icons/chimera-route-gate.svg";
+import routeGateIcon from "@/assets/icons/chimera-dragon-mark.png";
+import kineticTopography from "@/assets/chimera/kinetic-topography.png";
 import "./chimera.css";
 
 const runningInTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-function useEscapeClose(onClose: () => void, enabled = true) {
+function useDialogFocus<T extends HTMLElement>(
+  onClose: () => void,
+  enabled = true,
+  returnFocusRef?: { current: HTMLElement | null },
+) {
+  const dialogRef = useRef<T>(null);
+  const closeRef = useRef(onClose);
+  useEffect(() => {
+    closeRef.current = onClose;
+  }, [onClose]);
   useEffect(() => {
     if (!enabled) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const focusableSelector =
+      'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
+    const focusFirst = () => {
+      const preferred = dialog.querySelector<HTMLElement>("[data-autofocus]");
+      const first = dialog.querySelector<HTMLElement>(focusableSelector);
+      (preferred ?? first ?? dialog).focus();
     };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [enabled, onClose]);
+    const focusFrame = requestAnimationFrame(focusFirst);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(focusableSelector),
+      ).filter((element) => element.offsetParent !== null);
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", onKeyDown);
+      const returnTarget = returnFocusRef?.current ?? previousFocus;
+      if (returnTarget?.isConnected) returnTarget.focus();
+    };
+  }, [enabled, returnFocusRef]);
+  return dialogRef;
 }
 
 type View = "providers" | "runtime" | "usage" | "appearance" | "settings";
@@ -120,9 +179,20 @@ type CatalogSkin = {
   applied: boolean;
 };
 
+function skinToneClass(skin: CatalogSkin) {
+  const identity = `${skin.id} ${skin.name}`.toLowerCase();
+  if (identity.includes("oled") || identity.includes("mono")) {
+    return "skin-tone-oled";
+  }
+  if (identity.includes("sakura") || identity.includes("pink")) {
+    return "skin-tone-sakura";
+  }
+  return "skin-tone-nerv";
+}
+
 const nav: Array<[View, string, typeof Command]> = [
   ["providers", "供应商", Route],
-  ["runtime", "更新检测", Package],
+  ["runtime", "更新", Package],
   ["usage", "词元", BarChart3],
   ["appearance", "外观", Paintbrush],
   ["settings", "设置", Settings2],
@@ -729,13 +799,15 @@ export default function ChimeraApp() {
             </button>
           </div>
         )}
-        <h1 className="sr-only">
-          {editor
-            ? editor.original
-              ? "编辑供应商"
-              : "添加供应商"
-            : viewLabels[view]}
-        </h1>
+        {view === "providers" && (
+          <h1 className="sr-only">
+            {editor
+              ? editor.original
+                ? "编辑供应商"
+                : "添加供应商"
+              : viewLabels[view]}
+          </h1>
+        )}
         <section className="chimera-content">
           {view === "providers" && (
             <NewProvidersView
@@ -781,6 +853,7 @@ export default function ChimeraApp() {
             <button
               key={id}
               className={view === id ? "is-active" : ""}
+              aria-current={view === id ? "page" : undefined}
               onClick={() => setView(id)}
             >
               <span>
@@ -1422,13 +1495,16 @@ function NewProvidersView({
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const pickerTriggerRef = useRef<HTMLButtonElement>(null);
+  const pickerRef = useDialogFocus<HTMLDivElement>(
+    () => setPickerOpen(false),
+    pickerOpen,
+    pickerTriggerRef,
+  );
   if (loading) return <Empty label="正在读取供应商…" />;
   if (!providers.length) return <Onboarding onAdd={onAdd} />;
   const current =
     providers.find((provider) => provider.id === currentId) ?? providers[0];
-  const endpoint =
-    extractCodexBaseUrl(String(current.settingsConfig?.config ?? "")) ||
-    "未配置请求地址";
   const model =
     extractCodexModelName(String(current.settingsConfig?.config ?? "")) ||
     "未设置";
@@ -1447,28 +1523,52 @@ function NewProvidersView({
       `${provider.name} ${extractCodexModelName(String(provider.settingsConfig?.config ?? ""))}`.toLowerCase();
     return haystack.includes(query.trim().toLowerCase());
   });
+  const globeStageLabel =
+    connection.kind === "connected"
+      ? "连接稳定"
+      : connection.kind === "checking"
+        ? "正在检测"
+        : connection.kind === "error"
+          ? "连接异常"
+          : "等待检测";
   return (
     <section className="route-gate-view route-gate-reference">
-      <div className="route-map" aria-label="当前 Codex 路由状态">
-        <code className="route-stage-label">CODEX ROUTING</code>
-        <div className="route-radar-field" aria-hidden="true" />
-        <span className="route-stage-plus route-stage-plus-left">＋</span>
-        <span className="route-stage-plus route-stage-plus-right">＋</span>
-        <div className={`route-radar is-${connection.kind}`} aria-hidden="true">
-          <span>
-            <span>
-              <i />
-            </span>
-          </span>
+      <div className="route-map" aria-label="当前 Codex 连接状态">
+        <code className="route-stage-label">{globeStageLabel}</code>
+        <div className="route-globe-stage">
+          <img
+            className="route-static-art"
+            src={kineticTopography}
+            alt=""
+            aria-hidden="true"
+            draggable={false}
+          />
+          <div className={`route-globe-status is-${connection.kind}`}>
+            <i aria-hidden="true" />
+            <span>{globeStageLabel}</span>
+            <code>{model}</code>
+          </div>
         </div>
         {pickerOpen && (
-          <div className="route-picker" role="dialog" aria-label="选择供应商">
+          <div
+            ref={pickerRef}
+            id="provider-picker"
+            className="route-picker"
+            role="dialog"
+            aria-modal="true"
+            aria-label="选择供应商"
+            tabIndex={-1}
+          >
             <label>
-              <Search size={15} />
+              <Search size={15} aria-hidden="true" />
               <input
+                name="provider-search"
+                aria-label="搜索供应商或模型"
+                autoComplete="off"
+                spellCheck={false}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索供应商或模型"
+                placeholder="搜索供应商或模型…"
                 autoFocus
               />
             </label>
@@ -1479,10 +1579,6 @@ function NewProvidersView({
                   extractCodexModelName(
                     String(provider.settingsConfig?.config ?? ""),
                   ) || "未设置模型";
-                const providerEndpoint =
-                  extractCodexBaseUrl(
-                    String(provider.settingsConfig?.config ?? ""),
-                  ) || "未配置地址";
                 return (
                   <button
                     key={provider.id}
@@ -1497,14 +1593,15 @@ function NewProvidersView({
                     </span>
                     <span>
                       <b>{provider.name}</b>
-                      <code>
-                        {providerModel} · {providerEndpoint}
-                      </code>
+                      <code>{providerModel}</code>
                     </span>
                     {active && <Check size={16} />}
                   </button>
                 );
               })}
+              {!visibleProviders.length && (
+                <p className="route-picker-empty">没有匹配的供应商。</p>
+              )}
             </div>
             <button
               className="route-picker-add"
@@ -1527,22 +1624,27 @@ function NewProvidersView({
             <Route size={18} />
           </button>
           <div>
+            <small>当前供应商</small>
             <b>{current.name}</b>
-            <code>
-              {model} · {endpoint}
-            </code>
           </div>
           <button
+            ref={pickerTriggerRef}
             aria-label="选择供应商"
+            aria-expanded={pickerOpen}
+            aria-controls="provider-picker"
             onClick={() => setPickerOpen((value) => !value)}
           >
-            <ChevronDown size={17} />
+            <ChevronDown
+              className={pickerOpen ? "is-open" : ""}
+              size={17}
+              aria-hidden="true"
+            />
           </button>
           <button
             className="primary compact"
             onClick={() => void onSwitch(current.id)}
           >
-            <span>应用</span>
+            <span>切换</span>
             <ArrowRight size={15} />
           </button>
         </div>
@@ -1587,13 +1689,20 @@ function ProviderEditor({
   onDelete: () => void;
   escapeDisabled: boolean;
 }) {
-  useEscapeClose(() => setEditor(null), !escapeDisabled);
+  const dialogRef = useDialogFocus<HTMLElement>(
+    () => setEditor(null),
+    !escapeDisabled,
+  );
   const patch = (key: string, value: string) =>
     setEditor({ ...editor, [key]: value });
   return (
     <section
+      ref={dialogRef}
       className="provider-editor"
+      role="dialog"
+      aria-modal="true"
       aria-labelledby="provider-editor-title"
+      tabIndex={-1}
     >
       <header>
         <span className="provider-editor-mark">
@@ -2006,17 +2115,19 @@ function ModelPickerDialog({
   onPick: (model: string) => void;
   onClose: () => void;
 }) {
-  useEscapeClose(onClose);
+  const dialogRef = useDialogFocus<HTMLElement>(onClose);
   return (
     <div
       className="modal-backdrop"
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
       <section
+        ref={dialogRef}
         className="model-picker"
         role="dialog"
         aria-modal="true"
         aria-labelledby="model-picker-title"
+        tabIndex={-1}
       >
         <header>
           <div>
@@ -2351,7 +2462,7 @@ function UsageView({ requests }: { requests: RequestLog[] }) {
       setError("");
       if (syncSessions) {
         try {
-        const result = await usageApi.syncCodexSessionUsage();
+          const result = await usageApi.syncCodexSessionUsage();
           setSyncNote(
             result.errors.length
               ? `已读取 ${result.filesScanned} 个文件，${result.errors.length} 项未能导入`
@@ -2390,20 +2501,24 @@ function UsageView({ requests }: { requests: RequestLog[] }) {
   const total = summary?.realTotalTokens ?? 0;
   const input = summary?.totalInputTokens ?? 0;
   const output = summary?.totalOutputTokens ?? 0;
-  const max = Math.max(...trends.map((item) => item.totalTokens), 1);
   const modelTotal = Math.max(...models.map((item) => item.totalTokens), 1);
   const fallback = requests.reduce(
     (sum, item) => sum + item.inputTokens + item.outputTokens,
     0,
   );
+  const displayTotal = total || fallback;
+  const peak = Math.max(...trends.map((item) => item.totalTokens), 0);
+  const spectrum = ["#36c5d9", "#53d7c2", "#ffb84d", "#ff7e57", "#e85d9e"];
   return (
-    <section className="usage-surface">
+    <section className="usage-surface usage-spectrum">
       <div className="usage-heading">
         <div>
-          <span className="eyebrow">词元统计</span>
-          <h1>了解 Codex 的词元消耗</h1>
+          <span className="eyebrow">本机统计</span>
+          <h1>词元消耗</h1>
           <p>
-            {syncing ? "正在同步本机会话记录…" : `${syncNote}，数据不会上传。`}
+            {syncing
+              ? "正在同步本机会话记录…"
+              : `${syncNote}，所有数据仅保存在这台电脑。`}
           </p>
         </div>
         <div className="usage-toolbar">
@@ -2439,84 +2554,132 @@ function UsageView({ requests }: { requests: RequestLog[] }) {
           <CircleAlert size={15} /> 词元统计暂时不可用：{error}
         </div>
       )}
-      <div className="usage-grid">
-        <article className="usage-summary-card">
-          <span>本期总用量</span>
-          <strong>{(total || fallback).toLocaleString("zh-CN")}</strong>
+      <article className="usage-spectrum-panel">
+        <section className="usage-spectrum-summary">
+          <span>30 天累计</span>
+          <strong>{displayTotal.toLocaleString("zh-CN")}</strong>
           <small>词元</small>
-          <hr />
           <dl>
             <div>
               <dt>输入词元</dt>
-              <dd>{input.toLocaleString("zh-CN")}</dd>
+              <dd className="is-input">{input.toLocaleString("zh-CN")}</dd>
             </div>
             <div>
               <dt>输出词元</dt>
-              <dd>{output.toLocaleString("zh-CN")}</dd>
+              <dd className="is-output">{output.toLocaleString("zh-CN")}</dd>
             </div>
             <div>
-              <dt>请求数</dt>
-              <dd>{summary?.totalRequests ?? requests.length}</dd>
+              <dt>成功率</dt>
+              <dd className="is-success">
+                {summary
+                  ? `${Math.round(summary.successRate * 1000) / 10}%`
+                  : "--"}
+              </dd>
             </div>
           </dl>
-        </article>
-        <article className="usage-trend-card">
+        </section>
+        <section className="usage-spectrum-trend">
           <header>
-            <b>每日词元趋势</b>
-            <small>
-              {summary
-                ? `成功率 ${Math.round(summary.successRate * 100)}%`
-                : "正在同步"}
-            </small>
+            <b>每日消耗光谱</b>
+            <span>
+              峰值 {peak.toLocaleString("zh-CN")} ·{" "}
+              {summary?.totalRequests ?? requests.length} 次请求
+            </span>
           </header>
-          <div className="usage-chart" aria-label="每日词元趋势">
+          <div className="usage-spectrum-chart" aria-label="每日词元消耗光谱">
             {trends.length ? (
-              trends.map((item) => (
-                <span
-                  key={item.date}
-                  title={`${item.date} ${item.totalTokens.toLocaleString("zh-CN")} 词元`}
-                  style={{
-                    height: `${Math.max(4, (item.totalTokens / max) * 100)}%`,
-                  }}
-                />
-              ))
+              <ResponsiveContainer
+                width="100%"
+                height="100%"
+                initialDimension={{ width: 760, height: 190 }}
+              >
+                <BarChart
+                  data={trends}
+                  margin={{ top: 12, right: 16, bottom: 0, left: 0 }}
+                >
+                  <CartesianGrid vertical={false} stroke="#e8edf0" />
+                  <XAxis
+                    dataKey="date"
+                    axisLine={false}
+                    tickLine={false}
+                    minTickGap={24}
+                    tick={{ fill: "#69737d", fontSize: 9 }}
+                    tickFormatter={(value: string) => value.slice(5)}
+                  />
+                  <YAxis hide domain={[0, "dataMax"]} />
+                  <Tooltip
+                    cursor={{ fill: "#eef5f6" }}
+                    contentStyle={{
+                      border: "1px solid #dfe6e9",
+                      borderRadius: 8,
+                      background: "#ffffff",
+                      color: "#20272d",
+                      fontSize: 11,
+                      boxShadow: "0 4px 8px rgba(31, 43, 51, 0.1)",
+                    }}
+                    labelStyle={{ color: "#69737d", marginBottom: 4 }}
+                    formatter={(value) => [
+                      Number(value).toLocaleString("zh-CN"),
+                      "词元",
+                    ]}
+                  />
+                  <Bar
+                    dataKey="totalTokens"
+                    radius={[4, 4, 1, 1]}
+                    maxBarSize={18}
+                  >
+                    {trends.map((item, index) => (
+                      <Cell
+                        key={item.date}
+                        fill={
+                          spectrum[
+                            Math.min(
+                              spectrum.length - 1,
+                              Math.floor(
+                                (index / Math.max(1, trends.length - 1)) *
+                                  spectrum.length,
+                              ),
+                            )
+                          ]
+                        }
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             ) : (
               <div className="chart-empty">暂无趋势数据</div>
             )}
           </div>
-          <footer>
-            <small>较早</small>
-            <small>最近</small>
-          </footer>
-        </article>
-      </div>
-      <article className="usage-models">
-        <header>
-          <b>模型消耗</b>
-          <small>按词元总量排序</small>
-        </header>
-        {models.length ? (
-          models.map((item) => (
-            <div className="usage-model-row" key={item.model}>
-              <div>
-                <code>{item.model}</code>
-                <span>{item.totalTokens.toLocaleString("zh-CN")} 词元</span>
-              </div>
-              <strong>
-                {Math.round((item.totalTokens / modelTotal) * 100)}%
-              </strong>
-              <i>
-                <u
-                  style={{
-                    width: `${Math.max(3, (item.totalTokens / modelTotal) * 100)}%`,
-                  }}
-                />
-              </i>
-            </div>
-          ))
-        ) : (
-          <p className="muted-copy">暂无模型统计。</p>
-        )}
+        </section>
+        <section className="usage-spectrum-models" aria-label="模型词元分布">
+          {models.length ? (
+            models.map((item, index) => {
+              const ratio = Math.round((item.totalTokens / modelTotal) * 100);
+              const color = spectrum[(index * 2) % spectrum.length];
+              return (
+                <div className="usage-spectrum-model" key={item.model}>
+                  <header>
+                    <code title={item.model}>{item.model}</code>
+                    <strong style={{ color }}>{ratio}%</strong>
+                  </header>
+                  <span>{item.totalTokens.toLocaleString("zh-CN")} 词元</span>
+                  <i>
+                    <u
+                      style={{
+                        width: `${Math.max(3, ratio)}%`,
+                        background: color,
+                        boxShadow: `0 0 8px ${color}80`,
+                      }}
+                    />
+                  </i>
+                </div>
+              );
+            })
+          ) : (
+            <p className="muted-copy">暂无模型统计。</p>
+          )}
+        </section>
       </article>
     </section>
   );
@@ -2637,15 +2800,27 @@ function AppearanceView({
               className={skin.id === selectedId ? "active" : ""}
               onClick={() => setSelectedId(skin.id)}
             >
-              <span className="skin-card-preview">
-                <img
-                  src={
-                    skin.preview.startsWith("/")
-                      ? skin.preview
-                      : `https://skins.agentsmirror.com/${skin.preview.replace(/^\/+/, "")}`
-                  }
-                  alt=""
-                />
+              <span
+                className={`skin-card-preview ${skinToneClass(skin)}`}
+                aria-hidden="true"
+              >
+                {skin.preview === routeGateIcon ? (
+                  <span className="skin-card-miniature">
+                    <i />
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                ) : (
+                  <img
+                    src={
+                      skin.preview.startsWith("/")
+                        ? skin.preview
+                        : `https://skins.agentsmirror.com/${skin.preview.replace(/^\/+/, "")}`
+                    }
+                    alt=""
+                  />
+                )}
               </span>
               <span>
                 <b>{skin.name}</b>
@@ -2669,7 +2844,13 @@ function AppearanceView({
         <article className="skin-detail">
           {selected ? (
             <>
-              <div className="skin-preview skin-preview-image">
+              <div
+                className={`skin-preview skin-preview-image ${skinToneClass(selected)} ${
+                  selected.preview === routeGateIcon
+                    ? "is-fallback"
+                    : "has-catalog-image"
+                }`}
+              >
                 {selected.preview === routeGateIcon ? (
                   <div className="skin-preview-fallback">
                     <aside>
@@ -2841,6 +3022,8 @@ function NewSettingsView() {
       <div className="settings-reference-list">
         <button
           className="settings-reference-row"
+          role="switch"
+          aria-checked={updateChecks}
           onClick={() => void save({ checkCodexUpdatesOnStart: !updateChecks })}
         >
           <span>
@@ -2853,6 +3036,8 @@ function NewSettingsView() {
         </button>
         <button
           className="settings-reference-row"
+          role="switch"
+          aria-checked={providerChecks}
           onClick={() =>
             void save({ checkProviderStatusOnStart: !providerChecks })
           }
@@ -2867,6 +3052,8 @@ function NewSettingsView() {
         </button>
         <button
           className="settings-reference-row"
+          role="switch"
+          aria-checked={minimizeToTray}
           onClick={() => void save({ minimizeToTrayOnClose: !minimizeToTray })}
         >
           <span>
@@ -2887,6 +3074,7 @@ function NewSettingsView() {
               className={
                 settings?.codexUpdateSource !== "mirror" ? "is-active" : ""
               }
+              aria-pressed={settings?.codexUpdateSource !== "mirror"}
               onClick={() => void save({ codexUpdateSource: "auto" })}
             >
               稳定版
@@ -2895,6 +3083,7 @@ function NewSettingsView() {
               className={
                 settings?.codexUpdateSource === "mirror" ? "is-active" : ""
               }
+              aria-pressed={settings?.codexUpdateSource === "mirror"}
               onClick={() => void save({ codexUpdateSource: "mirror" })}
             >
               免安装版
@@ -2909,7 +3098,7 @@ function NewSettingsView() {
             <b>数据与日志</b>
             <small>配置保存在本机</small>
           </span>
-          <ChevronDown size={16} />
+          <FolderOpen size={16} aria-hidden="true" />
         </button>
       </div>
       <footer className="settings-reference-footer">
@@ -3187,7 +3376,7 @@ function ConfirmOperation({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  useEscapeClose(onCancel);
+  const dialogRef = useDialogFocus<HTMLElement>(onCancel);
   const label =
     action === "update"
       ? "下载并安装更新"
@@ -3199,10 +3388,12 @@ function ConfirmOperation({
   return (
     <div className="modal-backdrop">
       <section
+        ref={dialogRef}
         className="confirm-dialog"
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="runtime-confirm-title"
+        tabIndex={-1}
       >
         <CircleAlert size={26} />
         <h2 id="runtime-confirm-title">确认{label}？</h2>
@@ -3230,14 +3421,16 @@ function ConfirmSkinOperation({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  useEscapeClose(onCancel);
+  const dialogRef = useDialogFocus<HTMLElement>(onCancel);
   return (
     <div className="modal-backdrop">
       <section
+        ref={dialogRef}
         className="confirm-dialog"
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="skin-confirm-title"
+        tabIndex={-1}
       >
         <Paintbrush size={26} />
         <h2 id="skin-confirm-title">确认{label}？</h2>
@@ -3262,14 +3455,16 @@ function ConfirmProviderDelete({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  useEscapeClose(onCancel);
+  const dialogRef = useDialogFocus<HTMLElement>(onCancel);
   return (
     <div className="modal-backdrop">
       <section
+        ref={dialogRef}
         className="confirm-dialog"
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="provider-delete-title"
+        tabIndex={-1}
       >
         <CircleAlert size={26} />
         <h2 id="provider-delete-title">确认删除“{provider.name}”？</h2>
@@ -3292,7 +3487,7 @@ function DiagnosticsDialog({
   diagnostics: Diagnostic[];
   onClose: () => void;
 }) {
-  useEscapeClose(onClose);
+  const dialogRef = useDialogFocus<HTMLElement>(onClose);
   return (
     <div
       className="modal-backdrop"
@@ -3302,10 +3497,12 @@ function DiagnosticsDialog({
       }}
     >
       <section
+        ref={dialogRef}
         className="diagnostics-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="diagnostics-title"
+        tabIndex={-1}
       >
         <header>
           <div>
