@@ -433,6 +433,9 @@ pub struct AppSettings {
     /// The backend itself never performs the network request implicitly.
     #[serde(default = "default_true")]
     pub check_codex_updates_on_start: bool,
+    /// Whether the frontend validates the active provider after startup.
+    #[serde(default = "default_true")]
+    pub check_provider_status_on_start: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gemini_config_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -553,6 +556,7 @@ impl Default for AppSettings {
             codex_install_mode: default_codex_install_mode(),
             codex_portable_root: None,
             check_codex_updates_on_start: true,
+            check_provider_status_on_start: true,
             gemini_config_dir: None,
             grok_config_dir: None,
             opencode_config_dir: None,

@@ -14,7 +14,8 @@ use chimera_runtime::manager::{
     MaintenanceRoute, UpdateSource,
 };
 use serde::Serialize;
-use tauri::Emitter;
+use tauri::{AppHandle, Emitter};
+use tauri_plugin_opener::OpenerExt;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -201,6 +202,24 @@ pub async fn get_codex_runtime_status() -> Result<CodexRuntimeStatus, String> {
     })
     .await
     .map_err(|_| "读取 Codex 安装状态时任务中断".to_string())?
+}
+
+#[tauri::command]
+pub async fn open_codex_runtime_directory(handle: AppHandle) -> Result<bool, String> {
+    require_windows()?;
+    let installed =
+        detect_windows_codex(&portable_root()).ok_or_else(|| "未检测到 Codex 安装".to_string())?;
+    let path = PathBuf::from(installed.path);
+    let directory = if path.is_file() {
+        path.parent().map(PathBuf::from).unwrap_or(path)
+    } else {
+        path
+    };
+    handle
+        .opener()
+        .open_path(directory.to_string_lossy().to_string(), None::<String>)
+        .map_err(|error| format!("打开安装目录失败: {error}"))?;
+    Ok(true)
 }
 
 /// Explicitly query the selected Codex release source.

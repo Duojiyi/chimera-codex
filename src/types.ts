@@ -403,6 +403,8 @@ export interface Settings {
   codexPortableRoot?: string;
   /** Check the Codex release channel after Chimera++ starts. */
   checkCodexUpdatesOnStart?: boolean;
+  /** Validate the active provider endpoint once after Chimera++ starts. */
+  checkProviderStatusOnStart?: boolean;
   // 覆盖 Gemini 配置目录（可选）
   geminiConfigDir?: string;
   // 覆盖 Grok Build 配置目录（可选）

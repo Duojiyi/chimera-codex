@@ -1339,6 +1339,7 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::get_codex_runtime_status,
+            commands::open_codex_runtime_directory,
             commands::check_codex_runtime_update,
             commands::diagnose_codex_runtime,
             commands::apply_codex_runtime_update,
