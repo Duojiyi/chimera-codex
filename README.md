@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/branding/chimera-route-gate-master.png" width="112" alt="Chimera++" />
+<img src="src-tauri/icons/icon.png" width="112" alt="Chimera++" />
 
 # Chimera++
 
