@@ -880,14 +880,66 @@ pub fn run() {
                 }
             }
 
-            // Chimera++ does not expose an official Codex provider preset.
-            // Remove only the legacy fixed seed so upgrades get the same clean
-            // provider list as a fresh installation; user-created IDs remain intact.
-            if let Err(e) = app_state.db.delete_provider(
-                crate::app_config::AppType::Codex.as_str(),
-                crate::database::CODEX_OFFICIAL_PROVIDER_ID,
-            ) {
-                log::warn!("✗ Failed to remove legacy Codex official provider seed: {e}");
+            // Keep a stable, non-promotional official Codex entry available so
+            // users can return to their native ChatGPT account with one click.
+            // The entry owns no credentials; the native Codex auth.json remains
+            // the source of truth for the official login.
+            let has_official_codex_provider = app_state
+                .db
+                .get_all_providers(crate::app_config::AppType::Codex.as_str())
+                .map(|providers| {
+                    providers
+                        .values()
+                        .any(|provider| provider.category.as_deref() == Some("official"))
+                });
+            match has_official_codex_provider {
+                Ok(false) => {
+                    if let Err(e) = app_state.db.ensure_official_seed_by_id(
+                        crate::database::CODEX_OFFICIAL_PROVIDER_ID,
+                        crate::app_config::AppType::Codex,
+                    ) {
+                        log::warn!("✗ Failed to ensure Codex official provider seed: {e}");
+                    }
+                }
+                Ok(true) => {}
+                Err(e) => log::warn!("✗ Failed to inspect Codex official providers: {e}"),
+            }
+
+            // Existing Chimera++ profiles were created from the upstream opt-in
+            // default. Migrate them once so a third-party switch cannot destroy
+            // the native ChatGPT login cache before the user gets the new
+            // official-account shortcut.
+            const CODEX_OFFICIAL_SWITCH_MIGRATION: &str =
+                "chimera_codex_official_switch_v1";
+            let migration_done = app_state
+                .db
+                .get_setting(CODEX_OFFICIAL_SWITCH_MIGRATION)
+                .ok()
+                .flatten()
+                .is_some_and(|value| value == "true");
+            if !migration_done {
+                let mut settings = crate::settings::get_settings();
+                let mut migration_succeeded =
+                    settings.preserve_codex_official_auth_on_switch;
+                if !settings.preserve_codex_official_auth_on_switch {
+                    settings.preserve_codex_official_auth_on_switch = true;
+                    match crate::settings::update_settings(settings) {
+                        Ok(()) => migration_succeeded = true,
+                        Err(e) => {
+                            log::warn!(
+                                "✗ Failed to migrate Codex official login preservation: {e}"
+                            );
+                        }
+                    }
+                }
+                if migration_succeeded {
+                    if let Err(e) = app_state
+                        .db
+                        .set_setting(CODEX_OFFICIAL_SWITCH_MIGRATION, "true")
+                    {
+                        log::warn!("✗ Failed to record Codex official switch migration: {e}");
+                    }
+                }
             }
 
             {
@@ -1505,6 +1557,8 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::get_codex_runtime_status,
+            commands::get_codex_process_status,
+            commands::open_codex_runtime,
             commands::verify_codex_model_catalog,
             commands::restart_codex_for_model_catalog,
             commands::open_codex_runtime_directory,

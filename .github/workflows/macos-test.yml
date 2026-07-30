@@ -42,6 +42,14 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify renderer contracts
+        run: pnpm exec tsc --noEmit
+
+      - name: Verify Codex account and relay switching
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --test provider_service provider_service_switch_codex
+          cargo test --manifest-path src-tauri/Cargo.toml --test provider_commands codex_startup_import
+
       - name: Build universal macOS app
         run: pnpm tauri build --target universal-apple-darwin --bundles app
         env:
