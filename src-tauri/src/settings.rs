@@ -386,7 +386,9 @@ pub struct AppSettings {
     #[serde(default = "default_show_profile_switcher")]
     pub show_profile_switcher: bool,
     /// Keep Codex ChatGPT login material in auth.json when switching to third-party providers.
-    /// Opt-in: defaults to false so third-party switches cleanly overwrite auth.json.
+    /// Keep Codex ChatGPT login material in auth.json when switching to third-party providers.
+    /// Chimera++ migrates existing profiles to this safe mode at startup while
+    /// retaining the upstream opt-in setting for isolated library consumers.
     #[serde(default)]
     pub preserve_codex_official_auth_on_switch: bool,
     /// Run official Codex providers under the shared "custom" model_provider id

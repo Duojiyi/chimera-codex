@@ -4091,50 +4091,97 @@ select:focus-visible {
   object-position: center;
   user-select: none;
 }
-.route-globe-status {
+.route-codex-launch {
   position: absolute;
   z-index: 2;
   left: 50%;
   bottom: -3px;
-  min-width: 218px;
-  height: 36px;
+  width: 368px;
+  height: 58px;
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 0 13px;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px;
   border: 1px solid rgba(255, 255, 255, 0.94);
-  border-radius: 16px;
-  background: rgba(252, 253, 254, 0.88);
+  border-radius: 14px;
+  background: rgba(252, 253, 254, 0.94);
   box-shadow:
     inset 0 1px 0 #fff,
     inset 0 -1px 0 rgba(104, 122, 133, 0.12),
     0 5px 8px rgba(32, 40, 48, 0.1);
-  color: #293138;
-  font-size: 13px;
-  font-weight: 700;
-  white-space: nowrap;
 }
-.route-globe-status i {
-  width: 7px;
-  height: 7px;
+.route-codex-launch-status {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-left: 8px;
+}
+.route-codex-launch-status > i {
+  flex: 0 0 8px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--success);
 }
-.route-globe-status code {
-  color: #69737d;
+.route-codex-launch-status > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.route-codex-launch-status b {
+  color: #293138;
   font-size: 12px;
+  line-height: 1.25;
+  white-space: nowrap;
 }
-.route-globe-status.is-checking i {
-  background: #ffb84d;
-  animation: globe-status-pulse 1.2s var(--ease) infinite;
+.route-codex-launch-status code {
+  max-width: 174px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #69737d;
+  font-size: 10px;
+  line-height: 1.25;
+  white-space: nowrap;
 }
-.route-globe-status.is-error i {
-  background: #d94b37;
-}
-.route-globe-status.is-unknown i {
+.route-codex-launch.is-missing .route-codex-launch-status > i {
   background: #8d98a2;
+}
+.route-codex-launch > button {
+  flex: 0 0 144px;
+  width: 144px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 10px;
+  background: #ff5a36;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  transition:
+    background 160ms var(--ease),
+    transform 120ms var(--ease);
+}
+.route-codex-launch > button:hover:not(:disabled) {
+  background: #ed4d32;
+}
+.route-codex-launch > button:active:not(:disabled) {
+  transform: scale(0.975);
+}
+.route-codex-launch > button:disabled {
+  cursor: not-allowed;
+  background: #c5ccd1;
+  color: #f8fafb;
+}
+.route-codex-launch > button:focus-visible {
+  outline: 2px solid rgba(255, 90, 61, 0.72);
+  outline-offset: 2px;
 }
 @keyframes globe-status-pulse {
   50% {
@@ -4294,10 +4341,10 @@ select:focus-visible {
   align-items: center;
   justify-content: center;
   gap: 9px;
-  border: 0;
+  border: 1px solid #dde1e6;
   border-radius: 12px;
-  background: var(--accent);
-  color: #fff;
+  background: #fff;
+  color: #31383e;
   font-size: 12px;
   font-weight: 800;
   transition:
@@ -4310,10 +4357,12 @@ select:focus-visible {
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.16);
+  background: #fff0ec;
+  color: var(--accent);
 }
 .route-line-add:hover {
-  background: #ed4d32;
+  border-color: #ffc3b6;
+  background: #fff9f7;
 }
 .route-line-add:active {
   transform: scale(0.975);
@@ -4404,7 +4453,7 @@ select:focus-visible {
 }
 .route-line-manager-list article {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 36px;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   padding: 6px;
   border-radius: 11px;
@@ -4454,6 +4503,16 @@ select:focus-visible {
 }
 .route-line-manager-main > svg {
   color: var(--success);
+}
+.route-line-official-note {
+  align-self: center;
+  justify-self: end;
+  padding: 5px 8px;
+  border: 1px solid #d8e2e7;
+  border-radius: 999px;
+  color: #71808a;
+  font-size: 10px;
+  white-space: nowrap;
 }
 .route-line-empty {
   margin: 0;
@@ -4769,8 +4828,9 @@ select:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .route-globe-status.is-checking i {
-    animation: none;
+  .route-codex-launch > button,
+  .route-line-add {
+    transition-duration: 0ms;
   }
   .runtime-reference-progress u.is-indeterminate {
     width: 100% !important;

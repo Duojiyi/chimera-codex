@@ -4,7 +4,8 @@
 //! separate write domains. Every runtime mutation takes a cross-process lock
 //! and requires explicit confirmation from the renderer.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use chimera_platform::lock::{LockGuard, OperationLock};
 use chimera_runtime::manager::{
@@ -34,6 +35,7 @@ pub struct CodexRuntimeVersion {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexRuntimeStatus {
+    pub supported: bool,
     pub installed: bool,
     pub version: Option<String>,
     pub install_mode: Option<String>,
@@ -43,6 +45,23 @@ pub struct CodexRuntimeStatus {
     pub can_rollback: bool,
     pub can_uninstall: bool,
     pub history: Vec<CodexRuntimeVersion>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexProcessStatus {
+    pub supported: bool,
+    pub installed: bool,
+    pub running: bool,
+    pub install_mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexLaunchResult {
+    pub was_running: bool,
+    pub running: bool,
+    pub action: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -101,6 +120,40 @@ fn portable_root() -> PathBuf {
     dirs::data_local_dir()
         .map(|path| path.join("Programs").join("Codex"))
         .unwrap_or_else(|| runtime_root().join("portable"))
+}
+
+fn process_install_mode(source: &str) -> String {
+    if source == "portable" {
+        "portable"
+    } else {
+        "standard"
+    }
+    .to_string()
+}
+
+fn codex_is_running(installed: &codex_win_engine::InstalledWindowsCodex) -> Result<bool, String> {
+    codex_win_engine::codex_running_for_root(Path::new(&installed.path))
+        .map_err(|error| format!("无法读取 Codex 进程状态: {error}"))
+}
+
+fn launch_action(was_running: bool) -> &'static str {
+    if was_running {
+        "opened"
+    } else {
+        "launched"
+    }
+}
+
+fn wait_for_codex_running(
+    installed: &codex_win_engine::InstalledWindowsCodex,
+) -> Result<bool, String> {
+    for _ in 0..8 {
+        if codex_is_running(installed)? {
+            return Ok(true);
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    Ok(false)
 }
 
 /// Verify that the live Codex config points at Chimera's catalog and contains
@@ -178,6 +231,72 @@ pub async fn restart_codex_for_model_catalog(confirm: bool) -> Result<(), String
     .map_err(|e| format!("Codex 重启任务中断: {e}"))?
 }
 
+/// Read whether the exact detected Codex installation currently owns a process.
+/// Process discovery is path-pinned so an unrelated ChatGPT installation is not
+/// mistaken for, or affected as, the managed Codex instance.
+#[tauri::command]
+pub async fn get_codex_process_status() -> Result<CodexProcessStatus, String> {
+    if !cfg!(target_os = "windows") {
+        return Ok(CodexProcessStatus {
+            supported: false,
+            installed: false,
+            running: false,
+            install_mode: None,
+        });
+    }
+    let portable_root = portable_root();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(installed) = codex_win_engine::detect_installed_codex(&portable_root) else {
+            return Ok(CodexProcessStatus {
+                supported: true,
+                installed: false,
+                running: false,
+                install_mode: None,
+            });
+        };
+        Ok(CodexProcessStatus {
+            supported: true,
+            installed: true,
+            running: codex_is_running(&installed)?,
+            install_mode: Some(process_install_mode(&installed.source)),
+        })
+    })
+    .await
+    .map_err(|error| format!("读取 Codex 进程状态时任务中断: {error}"))?
+}
+
+/// Start Codex or ask its existing single-instance process to show its window.
+/// This command never closes a running process.
+#[tauri::command]
+pub async fn open_codex_runtime() -> Result<CodexLaunchResult, String> {
+    require_windows()?;
+    let portable_root = portable_root();
+    tauri::async_runtime::spawn_blocking(move || {
+        let installed = codex_win_engine::detect_installed_codex(&portable_root)
+            .ok_or_else(|| "未检测到 Codex 安装".to_string())?;
+        let was_running = codex_is_running(&installed)?;
+        if let Err(error) = codex_win_engine::launch_codex(&installed) {
+            // Portable Electron exits its second process after handing focus to
+            // the existing instance. The manager reports that short-lived child
+            // as an error, so accept it only when the same path remains active.
+            if !was_running || !codex_is_running(&installed)? {
+                return Err(format!("无法启动 Codex: {error}"));
+            }
+        }
+        let running = wait_for_codex_running(&installed)?;
+        if !running {
+            return Err("Codex 启动后未保持运行，请在更新页运行诊断".to_string());
+        }
+        Ok(CodexLaunchResult {
+            was_running,
+            running,
+            action: launch_action(was_running),
+        })
+    })
+    .await
+    .map_err(|error| format!("Codex 启动任务中断: {error}"))?
+}
+
 fn operation_lock() -> OperationLock {
     OperationLock::new(runtime_root().join("operation.lock"))
 }
@@ -251,8 +370,21 @@ fn require_confirmation(confirm: bool, action: &str) -> Result<(), String> {
 /// Read installed Codex state without making a network request.
 #[tauri::command]
 pub async fn get_codex_runtime_status() -> Result<CodexRuntimeStatus, String> {
-    require_windows()?;
     let portable_root = portable_root();
+    if !cfg!(target_os = "windows") {
+        return Ok(CodexRuntimeStatus {
+            supported: false,
+            installed: false,
+            version: None,
+            install_mode: None,
+            install_path: None,
+            portable_root: portable_root.to_string_lossy().to_string(),
+            can_repair: false,
+            can_rollback: false,
+            can_uninstall: false,
+            history: Vec::new(),
+        });
+    }
     tauri::async_runtime::spawn_blocking(move || {
         let installed = detect_windows_codex(&portable_root);
         let rollback = latest_portable_rollback(&portable_root).ok().flatten();
@@ -273,6 +405,7 @@ pub async fn get_codex_runtime_status() -> Result<CodexRuntimeStatus, String> {
             .as_ref()
             .is_some_and(|value| value.install_mode == "portable");
         Ok(CodexRuntimeStatus {
+            supported: true,
             installed: installed.is_some(),
             version: installed.as_ref().map(|value| value.version.clone()),
             install_mode: installed.as_ref().map(|value| value.install_mode.clone()),
@@ -466,4 +599,59 @@ pub async fn uninstall_codex_runtime(confirm: bool) -> Result<CodexRuntimeOperat
     })
     .await
     .map_err(|_| "Codex 卸载任务中断，请运行诊断".to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{launch_action, process_install_mode, CodexProcessStatus, CodexRuntimeStatus};
+
+    #[test]
+    fn launch_action_distinguishes_start_from_open() {
+        assert_eq!(launch_action(false), "launched");
+        assert_eq!(launch_action(true), "opened");
+    }
+
+    #[test]
+    fn process_install_mode_keeps_customer_labels_stable() {
+        assert_eq!(process_install_mode("portable"), "portable");
+        assert_eq!(process_install_mode("msix"), "standard");
+    }
+
+    #[test]
+    fn process_status_serializes_as_renderer_contract() {
+        let status = CodexProcessStatus {
+            supported: true,
+            installed: true,
+            running: false,
+            install_mode: Some("portable".to_string()),
+        };
+        let json = serde_json::to_value(status).expect("status serializes");
+        assert_eq!(json["installed"], true);
+        assert_eq!(json["supported"], true);
+        assert_eq!(json["running"], false);
+        assert_eq!(json["installMode"], "portable");
+        assert!(json.get("install_mode").is_none());
+    }
+
+    #[test]
+    fn unsupported_runtime_status_is_explicit_and_non_actionable() {
+        let status = CodexRuntimeStatus {
+            supported: false,
+            installed: false,
+            version: None,
+            install_mode: None,
+            install_path: None,
+            portable_root: String::new(),
+            can_repair: false,
+            can_rollback: false,
+            can_uninstall: false,
+            history: Vec::new(),
+        };
+        let json = serde_json::to_value(status).expect("status serializes");
+        assert_eq!(json["supported"], false);
+        assert_eq!(json["installed"], false);
+        assert_eq!(json["canRepair"], false);
+        assert_eq!(json["canRollback"], false);
+        assert_eq!(json["canUninstall"], false);
+    }
 }

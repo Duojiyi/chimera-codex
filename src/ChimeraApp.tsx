@@ -20,6 +20,7 @@ import {
   Package,
   Paintbrush,
   Pencil,
+  Play,
   Plus,
   RefreshCw,
   Route,
@@ -155,6 +156,7 @@ function useDialogFocus<T extends HTMLElement>(
 
 type View = "providers" | "runtime" | "usage" | "appearance" | "settings";
 type RuntimeStatus = {
+  supported: boolean;
   installed: boolean;
   version?: string | null;
   installMode?: string | null;
@@ -162,6 +164,17 @@ type RuntimeStatus = {
   canRepair: boolean;
   canRollback: boolean;
   canUninstall: boolean;
+};
+type CodexProcessStatus = {
+  supported: boolean;
+  installed: boolean;
+  running: boolean;
+  installMode?: string | null;
+};
+type CodexLaunchResult = {
+  wasRunning: boolean;
+  running: boolean;
+  action: "launched" | "opened";
 };
 type ReleaseStatus = {
   currentVersion?: string | null;
@@ -295,6 +308,10 @@ export default function ChimeraApp() {
   >("none");
   const [loading, setLoading] = useState(true);
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
+  const [codexProcess, setCodexProcess] = useState<CodexProcessStatus | null>(
+    null,
+  );
+  const [launchingCodex, setLaunchingCodex] = useState(false);
   const [release, setRelease] = useState<ReleaseStatus | null>(null);
   const [editor, setEditor] = useState<ReturnType<typeof providerDraft> | null>(
     null,
@@ -389,6 +406,7 @@ export default function ChimeraApp() {
   const loadRuntime = async () => {
     if (!runningInTauri) {
       setRuntime({
+        supported: true,
         installed: true,
         version: "26.721.41059",
         installMode: "standard",
@@ -411,11 +429,69 @@ export default function ChimeraApp() {
     }
   };
 
+  const loadCodexProcess = useCallback(async () => {
+    if (!runningInTauri) {
+      setCodexProcess({
+        supported: true,
+        installed: true,
+        running: false,
+        installMode: "standard",
+      });
+      return;
+    }
+    try {
+      setCodexProcess(
+        await invoke<CodexProcessStatus>("get_codex_process_status"),
+      );
+    } catch {
+      // Unsupported platforms return a structured status. A rejected probe
+      // therefore means a supported installation could not be detected.
+      setCodexProcess({
+        supported: true,
+        installed: false,
+        running: false,
+        installMode: null,
+      });
+    }
+  }, []);
+
+  const openCodex = async () => {
+    if (
+      launchingCodex ||
+      codexProcess?.supported === false ||
+      codexProcess?.installed === false
+    )
+      return;
+    setLaunchingCodex(true);
+    try {
+      if (!runningInTauri) {
+        await new Promise((resolve) => window.setTimeout(resolve, 500));
+        setCodexProcess((current) => ({
+          supported: true,
+          installed: true,
+          running: true,
+          installMode: current?.installMode ?? "standard",
+        }));
+        toast.success("Codex 已启动");
+        return;
+      }
+      const result = await invoke<CodexLaunchResult>("open_codex_runtime");
+      await loadCodexProcess();
+      toast.success(result.wasRunning ? "已打开 Codex" : "Codex 已启动");
+    } catch (error) {
+      toast.error("无法启动 Codex", { description: String(error) });
+      await loadCodexProcess();
+    } finally {
+      setLaunchingCodex(false);
+    }
+  };
+
   useEffect(() => {
     if (!runningInTauri) {
       setSkinEnabled(true);
       void loadProviders();
       void loadRuntime();
+      void loadCodexProcess();
       return;
     }
     let active = true;
@@ -433,6 +509,7 @@ export default function ChimeraApp() {
       });
     void loadProviders();
     void loadRuntime();
+    void loadCodexProcess();
     void invoke<ProductCapabilities>("get_product_capabilities")
       .then((value) =>
         setSkinEnabled(
@@ -472,6 +549,21 @@ export default function ChimeraApp() {
     };
   }, []);
 
+  useEffect(() => {
+    if (view !== "providers") return;
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void loadCodexProcess();
+    };
+    const interval = window.setInterval(refreshWhenVisible, 4000);
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [loadCodexProcess, view]);
+
   const note = (
     action: string,
     result: OperationRecord["result"] = "success",
@@ -501,24 +593,33 @@ export default function ChimeraApp() {
 
   const switchProvider = async (id: string) => {
     const started = performance.now();
+    const selectedProvider = providers.find((item) => item.id === id);
+    const isOfficial =
+      selectedProvider?.id === "codex-official" ||
+      selectedProvider?.category === "official";
     try {
       await providersApi.switch(id, "codex");
       await loadProviders();
-      const provider = providers.find((item) => item.id === id);
       note(
         "切换线路",
         "success",
-        "配置已写入 Codex",
-        provider?.name ?? id,
+        isOfficial
+          ? "已切回官方账户模式，保留 Codex 登录状态"
+          : "配置已写入 Codex",
+        selectedProvider?.name ?? id,
         performance.now() - started,
       );
-      toast.success("已应用到 Codex");
+      toast.success(isOfficial ? "已切回官方账户" : "已应用到 Codex", {
+        description: isOfficial
+          ? "打开 Codex 即可继续使用 ChatGPT 官方账户"
+          : undefined,
+      });
     } catch (error) {
       note(
         "切换线路",
         "error",
         String(error),
-        providers.find((item) => item.id === id)?.name ?? id,
+        selectedProvider?.name ?? id,
         performance.now() - started,
       );
       toast.error("切换失败", { description: String(error) });
@@ -948,6 +1049,9 @@ export default function ChimeraApp() {
               currentSource={currentSource}
               connection={connection}
               loading={loading}
+              codexProcess={codexProcess}
+              launchingCodex={launchingCodex}
+              onOpenCodex={openCodex}
               onSwitch={switchProvider}
               onEdit={(provider) => {
                 setModels(null);
@@ -1406,6 +1510,7 @@ function NewRuntimeView({
   );
   const [updateSource, setUpdateSource] = useState<"auto" | "mirror">("auto");
   const version = runtime?.version ?? "等待识别";
+  const runtimeSupported = runtime?.supported !== false;
   const percent = progress?.total
     ? Math.min(100, Math.round((progress.downloaded / progress.total) * 100))
     : 0;
@@ -1456,15 +1561,21 @@ function NewRuntimeView({
     <>
       <section className="runtime-reference-view">
         <span className="eyebrow">CODEX 更新</span>
-        <h1>本机 Codex 已准备就绪</h1>
+        <h1>
+          {runtimeSupported
+            ? "本机 Codex 已准备就绪"
+            : "Codex 更新管理仅支持 Windows"}
+        </h1>
         <div className="runtime-ring">
           <div>
             <CircleCheck size={28} />
             <code>{version}</code>
             <small>
-              {runtime?.installed
-                ? `${runtimeText(runtime.installMode)} · ${runtimeChannelText(release?.source)}`
-                : "未检测到安装"}
+              {!runtimeSupported
+                ? "macOS 可正常切换官方账户与中转线路"
+                : runtime?.installed
+                  ? `${runtimeText(runtime.installMode)} · ${runtimeChannelText(release?.source)}`
+                  : "未检测到安装"}
             </small>
           </div>
         </div>
@@ -1472,7 +1583,14 @@ function NewRuntimeView({
           <div>
             <FolderOpen size={16} />
             <span>
-              安装位置<b>{runtime?.installed ? "已识别" : "未检测到"}</b>
+              安装位置
+              <b>
+                {!runtimeSupported
+                  ? "不适用"
+                  : runtime?.installed
+                    ? "已识别"
+                    : "未检测到"}
+              </b>
             </span>
           </div>
           <div>
@@ -1493,7 +1611,7 @@ function NewRuntimeView({
           <button
             className="secondary"
             onClick={onCheck}
-            disabled={Boolean(operation)}
+            disabled={!runtimeSupported || Boolean(operation)}
           >
             <RefreshCw size={14} />
             检查更新
@@ -1501,7 +1619,9 @@ function NewRuntimeView({
           <button
             className="secondary"
             onClick={() => void openInstallDirectory()}
-            disabled={!runtime?.installed || Boolean(operation)}
+            disabled={
+              !runtimeSupported || !runtime?.installed || Boolean(operation)
+            }
           >
             <FolderOpen size={14} />
             打开安装目录
@@ -1509,7 +1629,7 @@ function NewRuntimeView({
           <button
             className="secondary"
             onClick={() => setMaintenanceOpen(true)}
-            disabled={Boolean(operation)}
+            disabled={!runtimeSupported || Boolean(operation)}
           >
             <Settings2 size={14} />
             管理更新源
@@ -1676,6 +1796,9 @@ function NewProvidersView({
   currentSource,
   connection,
   loading,
+  codexProcess,
+  launchingCodex,
+  onOpenCodex,
   onSwitch,
   onEdit,
   onAdd,
@@ -1685,6 +1808,9 @@ function NewProvidersView({
   currentSource: "live" | "stored" | "external" | "none";
   connection: ConnectionState;
   loading: boolean;
+  codexProcess: CodexProcessStatus | null;
+  launchingCodex: boolean;
+  onOpenCodex: () => Promise<void>;
   onSwitch: (id: string) => Promise<void>;
   onEdit: (provider: Provider) => void;
   onAdd: () => void;
@@ -1715,6 +1841,8 @@ function NewProvidersView({
           : currentSource === "live"
             ? "配置已识别"
             : "等待测试";
+  const isOfficialLine = (provider: Provider) =>
+    provider.id === "codex-official" || provider.category === "official";
   const isChimeraLine = (provider: Provider) => {
     const endpoint =
       extractCodexBaseUrl(String(provider.settingsConfig?.config ?? "")) ?? "";
@@ -1729,6 +1857,7 @@ function NewProvidersView({
     );
   };
   const lineName = (provider: Provider) => {
+    if (isOfficialLine(provider)) return "官方账户";
     const normalized = provider.name.trim().toLowerCase().replace(/\s+/g, "");
     const generic = ["chimerahub", "chimera中转站", "default"].includes(
       normalized,
@@ -1742,15 +1871,27 @@ function NewProvidersView({
     return `线路 ${index + 1}`;
   };
   const lineSource = (provider: Provider) =>
-    isChimeraLine(provider) ? "Chimera 中转站" : "自定义 API";
+    isOfficialLine(provider)
+      ? "ChatGPT 官方登录"
+      : isChimeraLine(provider)
+        ? "Chimera 中转站"
+        : "自定义线路";
   const lineMark = (provider: Provider) =>
-    isChimeraLine(provider)
-      ? "C"
-      : provider.name.trim().slice(0, 1).toUpperCase() || "线";
+    isOfficialLine(provider)
+      ? "O"
+      : isChimeraLine(provider)
+        ? "C"
+        : provider.name.trim().slice(0, 1).toUpperCase() || "线";
   const visibleLines = providers.filter((provider) => {
     const haystack =
       `${lineName(provider)} ${lineSource(provider)} ${provider.name} ${extractCodexModelName(String(provider.settingsConfig?.config ?? ""))}`.toLowerCase();
     return haystack.includes(query.trim().toLowerCase());
+  });
+  const railLines = [...providers].sort((a, b) => {
+    if (isOfficialLine(a) !== isOfficialLine(b)) {
+      return isOfficialLine(a) ? -1 : 1;
+    }
+    return 0;
   });
   const activateLine = async (provider: Provider) => {
     if (provider.id === current.id || switchingId) return;
@@ -1769,6 +1910,27 @@ function NewProvidersView({
         : connection.kind === "error"
           ? "连接异常"
           : "等待检测";
+  const codexStatusLabel =
+    codexProcess === null
+      ? "正在检测 Codex"
+      : !codexProcess.supported
+        ? "macOS 暂不支持快速启动"
+        : !codexProcess.installed
+          ? "未检测到 Codex"
+          : codexProcess.running
+            ? "Codex 正在运行"
+            : "Codex 已就绪";
+  const codexButtonLabel = launchingCodex
+    ? "正在启动…"
+    : codexProcess === null
+      ? "正在检测…"
+      : codexProcess?.supported === false
+        ? "仅 Windows 支持"
+        : codexProcess?.installed === false
+          ? "尚未安装"
+          : codexProcess?.running
+            ? "打开 Codex"
+            : "启动 Codex";
   return (
     <section className="route-gate-view route-gate-reference">
       <div className="route-map" aria-label="当前 Codex 连接状态">
@@ -1781,10 +1943,34 @@ function NewProvidersView({
             aria-hidden="true"
             draggable={false}
           />
-          <div className={`route-globe-status is-${connection.kind}`}>
-            <i aria-hidden="true" />
-            <span>{globeStageLabel}</span>
-            <code>{model}</code>
+          <div
+            className={`route-codex-launch${codexProcess?.running ? " is-running" : ""}${codexProcess?.supported === false || codexProcess?.installed === false ? " is-missing" : ""}`}
+            aria-live="polite"
+          >
+            <div className="route-codex-launch-status">
+              <i aria-hidden="true" />
+              <span>
+                <b>{codexStatusLabel}</b>
+                <code title={model}>当前模型 · {model}</code>
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void onOpenCodex()}
+              disabled={
+                launchingCodex ||
+                codexProcess === null ||
+                codexProcess?.supported === false ||
+                codexProcess?.installed === false
+              }
+            >
+              {launchingCodex ? (
+                <LoaderCircle className="spin" size={16} aria-hidden="true" />
+              ) : (
+                <Play size={16} fill="currentColor" aria-hidden="true" />
+              )}
+              <span>{codexButtonLabel}</span>
+            </button>
           </div>
         </div>
         <div className="route-line-switcher">
@@ -1804,7 +1990,7 @@ function NewProvidersView({
           </header>
           <div className="route-line-rail">
             <div className="route-line-scroll" role="list" aria-label="线路">
-              {providers.map((provider) => {
+              {railLines.map((provider) => {
                 const active = provider.id === current.id;
                 const switching = switchingId === provider.id;
                 return (
@@ -1912,17 +2098,23 @@ function NewProvidersView({
                         </span>
                         {active && <Check size={16} aria-label="当前线路" />}
                       </button>
-                      <button
-                        type="button"
-                        className="route-line-edit"
-                        aria-label={`编辑${lineName(provider)}`}
-                        onClick={() => {
-                          setManagerOpen(false);
-                          onEdit(provider);
-                        }}
-                      >
-                        <Pencil size={15} />
-                      </button>
+                      {isOfficialLine(provider) ? (
+                        <span className="route-line-official-note">
+                          由 Codex 管理
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="route-line-edit"
+                          aria-label={`编辑${lineName(provider)}`}
+                          onClick={() => {
+                            setManagerOpen(false);
+                            onEdit(provider);
+                          }}
+                        >
+                          <Pencil size={15} />
+                        </button>
+                      )}
                     </article>
                   );
                 })}
