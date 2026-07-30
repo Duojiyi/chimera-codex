@@ -77,6 +77,7 @@ import {
 import { generateUUID } from "@/utils/uuid";
 import {
   activityStorageKey,
+  buildCodexModelCatalog,
   formatDuration,
   formatVersion,
   loadOperationRecords,
@@ -326,6 +327,9 @@ export default function ChimeraApp() {
   const [installingAppUpdate, setInstallingAppUpdate] = useState(false);
   const [pendingProviderDelete, setPendingProviderDelete] =
     useState<Provider | null>(null);
+  const [pendingModelReload, setPendingModelReload] = useState<string | null>(
+    null,
+  );
   const [pendingSkinAction, setPendingSkinAction] = useState<{
     label: string;
     execute: () => void;
@@ -584,9 +588,10 @@ export default function ChimeraApp() {
     if (
       !editor.name.trim() ||
       !editor.baseUrl.trim() ||
-      !editor.apiKey.trim()
+      !editor.apiKey.trim() ||
+      !editor.model.trim()
     ) {
-      toast.error("请填写线路名称、API 请求地址和 API Key");
+      toast.error("请填写线路名称、API 请求地址、API Key 和默认模型");
       return;
     }
     let config = setCodexModelName(
@@ -600,8 +605,30 @@ export default function ChimeraApp() {
       editor.name.trim(),
     );
     const auth = setCodexProviderApiKey(editor.auth, editor.apiKey);
-    const catalogModels = editor.catalogModels.filter((item) =>
-      item.model.trim(),
+    let fetchedForSave = models ?? [];
+    let automaticFetchFailed = false;
+    if (models === null) {
+      setFetchingModels(true);
+      try {
+        fetchedForSave = await fetchModelsForConfig(
+          editor.baseUrl,
+          editor.apiKey,
+          editor.isFullUrl,
+          editor.modelsUrl.trim() || undefined,
+          editor.customUserAgent.trim() || undefined,
+        );
+        setModels(fetchedForSave);
+      } catch {
+        automaticFetchFailed = true;
+        fetchedForSave = [];
+      } finally {
+        setFetchingModels(false);
+      }
+    }
+    const catalogModels = buildCodexModelCatalog(
+      editor.model,
+      editor.catalogModels,
+      fetchedForSave,
     );
     const provider: Provider = {
       id: editor.id,
@@ -644,18 +671,7 @@ export default function ChimeraApp() {
         ...editor.original?.settingsConfig,
         auth,
         config,
-        ...(catalogModels.length
-          ? { modelCatalog: { models: catalogModels } }
-          : models
-            ? {
-                modelCatalog: {
-                  models: models.map((model) => ({
-                    id: model.id,
-                    name: model.id,
-                  })),
-                },
-              }
-            : { modelCatalog: undefined }),
+        modelCatalog: { models: catalogModels },
       },
     };
     try {
@@ -666,10 +682,28 @@ export default function ChimeraApp() {
         await configApi.setCommonConfigSnippet("codex", commonConfigSnippet);
       }
       await providersApi.switch(provider.id, "codex");
+      try {
+        await invoke("verify_codex_model_catalog", {
+          expectedModel: editor.model.trim(),
+        });
+      } catch (error) {
+        await loadProviders();
+        setEditor(null);
+        note("应用模型目录", "error", String(error), provider.name);
+        toast.error("线路已保存，但模型目录未正确应用", {
+          description: String(error),
+        });
+        return;
+      }
       await loadProviders();
       setEditor(null);
       note("保存并应用线路", "success", undefined, provider.name);
-      toast.success("线路已保存");
+      setPendingModelReload(editor.model.trim());
+      toast.success("线路与模型目录已保存", {
+        description: automaticFetchFailed
+          ? "供应商未返回模型列表，已确保默认模型可用。"
+          : `已写入 ${catalogModels.length} 个模型，重启 Codex 后生效。`,
+      });
     } catch (error) {
       toast.error("保存失败", { description: String(error) });
     }
@@ -1024,6 +1058,28 @@ export default function ChimeraApp() {
               toast.success("线路已删除");
             } catch (error) {
               toast.error("删除失败", { description: String(error) });
+            }
+          }}
+        />
+      )}
+      {pendingModelReload && (
+        <ConfirmModelReload
+          model={pendingModelReload}
+          onCancel={() => {
+            setPendingModelReload(null);
+            toast.info("请稍后彻底退出并重新打开 Codex");
+          }}
+          onConfirm={async () => {
+            try {
+              await invoke("restart_codex_for_model_catalog", {
+                confirm: true,
+              });
+              setPendingModelReload(null);
+              toast.success("Codex 已重新加载模型列表");
+            } catch (error) {
+              toast.error("无法自动重启 Codex", {
+                description: `${String(error)}。请彻底退出并重新打开 Codex。`,
+              });
             }
           }}
         />
@@ -3837,6 +3893,43 @@ function ConfirmProviderDelete({
           <button onClick={onCancel}>取消</button>
           <button className="danger" onClick={onConfirm}>
             删除线路
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function ConfirmModelReload({
+  model,
+  onCancel,
+  onConfirm,
+}: {
+  model: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const dialogRef = useDialogFocus<HTMLElement>(onCancel);
+  return (
+    <div className="modal-backdrop">
+      <section
+        ref={dialogRef}
+        className="confirm-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="model-reload-title"
+        tabIndex={-1}
+      >
+        <RefreshCw size={26} />
+        <h2 id="model-reload-title">重新加载模型列表？</h2>
+        <p>
+          默认模型“{model}”已写入。Codex
+          只在启动时读取模型目录，需要完整重启后才会显示。
+        </p>
+        <footer>
+          <button onClick={onCancel}>稍后重启</button>
+          <button className="primary" onClick={onConfirm}>
+            立即重启 Codex
           </button>
         </footer>
       </section>

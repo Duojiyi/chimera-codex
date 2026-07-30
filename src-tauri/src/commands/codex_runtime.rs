@@ -70,6 +70,15 @@ pub struct CodexRuntimeOperation {
     pub notes: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexModelCatalogStatus {
+    pub valid: bool,
+    pub default_model: String,
+    pub catalog_path: Option<String>,
+    pub model_count: usize,
+}
+
 fn runtime_root() -> PathBuf {
     crate::config::get_app_config_dir().join("codex-runtime")
 }
@@ -92,6 +101,81 @@ fn portable_root() -> PathBuf {
     dirs::data_local_dir()
         .map(|path| path.join("Programs").join("Codex"))
         .unwrap_or_else(|| runtime_root().join("portable"))
+}
+
+/// Verify that the live Codex config points at Chimera's catalog and contains
+/// the selected default model. This command is read-only.
+#[tauri::command]
+pub fn verify_codex_model_catalog(
+    expected_model: String,
+) -> Result<CodexModelCatalogStatus, String> {
+    let expected_model = expected_model.trim();
+    if expected_model.is_empty() {
+        return Err("默认模型不能为空".to_string());
+    }
+    let config_text = crate::codex_config::read_codex_config_text().map_err(|e| e.to_string())?;
+    let config = config_text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| format!("Codex 配置无法解析: {e}"))?;
+    let default_model = config
+        .get("model")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if default_model != expected_model {
+        return Err(format!(
+            "Codex 默认模型未正确写入（当前为 {default_model}）"
+        ));
+    }
+
+    let generated_path = crate::codex_config::get_codex_model_catalog_path();
+    let catalog_path =
+        crate::codex_config::resolve_cc_switch_catalog_path(&config_text, &generated_path)
+            .ok_or_else(|| "Codex 配置未引用 Chimera 模型目录".to_string())?;
+    let catalog_text = std::fs::read_to_string(&catalog_path)
+        .map_err(|_| "Chimera 模型目录文件不存在或无法读取".to_string())?;
+    let catalog: serde_json::Value = serde_json::from_str(&catalog_text)
+        .map_err(|e| format!("Chimera 模型目录无法解析: {e}"))?;
+    let models = catalog
+        .get("models")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "Chimera 模型目录缺少 models 列表".to_string())?;
+    let contains_default = models
+        .iter()
+        .any(|entry| entry.get("slug").and_then(serde_json::Value::as_str) == Some(expected_model));
+    if !contains_default {
+        return Err(format!("模型目录中没有默认模型 {expected_model}"));
+    }
+    Ok(CodexModelCatalogStatus {
+        valid: true,
+        default_model,
+        catalog_path: Some(catalog_path.to_string_lossy().to_string()),
+        model_count: models.len(),
+    })
+}
+
+/// Restart Codex after an explicit renderer confirmation so it reloads the
+/// startup-only model catalog. Reuses Codex App Manager's install detection.
+#[tauri::command]
+pub async fn restart_codex_for_model_catalog(confirm: bool) -> Result<(), String> {
+    require_confirmation(confirm, "重启 Codex 以刷新模型列表")?;
+    require_windows()?;
+    let portable_root = portable_root();
+    tauri::async_runtime::spawn_blocking(move || {
+        let installed = codex_win_engine::detect_installed_codex(&portable_root)
+            .ok_or_else(|| "未检测到 Codex 安装".to_string())?;
+        if installed.source == "msix" {
+            codex_win_engine::close_msix_codex_processes(30)
+                .map_err(|e| format!("无法关闭 Codex: {e}"))?;
+        } else {
+            codex_win_engine::close_codex_gracefully_for_root(30, &portable_root)
+                .map_err(|e| format!("无法关闭 Codex: {e}"))?;
+        }
+        codex_win_engine::launch_codex(&installed).map_err(|e| format!("无法重新启动 Codex: {e}"))
+    })
+    .await
+    .map_err(|e| format!("Codex 重启任务中断: {e}"))?
 }
 
 fn operation_lock() -> OperationLock {
