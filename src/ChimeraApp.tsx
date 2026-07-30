@@ -4,7 +4,6 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Activity,
-  ArrowRight,
   BarChart3,
   Check,
   ChevronDown,
@@ -16,11 +15,12 @@ import {
   EyeOff,
   LoaderCircle,
   FolderOpen,
+  Minus,
   MoreHorizontal,
   Package,
   Paintbrush,
+  Pencil,
   Plus,
-  Power,
   RefreshCw,
   Route,
   Search,
@@ -52,6 +52,7 @@ import { providersApi } from "@/lib/api/providers";
 import { settingsApi } from "@/lib/api/settings";
 import { vscodeApi } from "@/lib/api/vscode";
 import { usageApi } from "@/lib/api/usage";
+import { getCurrentVersion } from "@/lib/updater";
 import { useUpdate } from "@/contexts/UpdateContext";
 import type {
   DailyStats,
@@ -183,6 +184,7 @@ type CatalogSkin = {
   description?: string;
   version: string;
   author?: string;
+  appearance?: "dark" | "light" | "dual" | string | null;
   preview: string;
   installed: boolean;
   applied: boolean;
@@ -199,6 +201,12 @@ function skinToneClass(skin: CatalogSkin) {
   return "skin-tone-nerv";
 }
 
+function skinPreviewUrl(preview: string) {
+  return preview.startsWith("/")
+    ? preview
+    : `https://skins.agentsmirror.com/${preview.replace(/^\/+/, "")}`;
+}
+
 const nav: Array<[View, string, typeof Command]> = [
   ["providers", "供应商", Route],
   ["runtime", "更新", Package],
@@ -212,9 +220,12 @@ const viewLabels: Record<View, string> = Object.fromEntries(
 ) as Record<View, string>;
 
 const runtimeText = (mode?: string | null) =>
-  mode === "standard" ? "稳定版" : "免安装版";
+  mode === "standard" ? "标准安装" : "免安装版";
 
-function providerDraft(provider?: Provider | null) {
+const runtimeChannelText = (source?: string | null) =>
+  source === "mirror" ? "镜像通道" : "稳定通道";
+
+function providerDraft(provider?: Provider | null, suggestedName?: string) {
   const template = getChimeraHubTemplate();
   const config = String(provider?.settingsConfig?.config ?? template.config);
   const auth = (provider?.settingsConfig?.auth ?? template.auth) as Record<
@@ -237,7 +248,7 @@ function providerDraft(provider?: Provider | null) {
     : [];
   return {
     id: provider?.id ?? generateUUID(),
-    name: provider?.name ?? template.name,
+    name: provider?.name ?? suggestedName ?? template.name,
     websiteUrl: provider?.websiteUrl ?? template.websiteUrl,
     notes: provider?.notes ?? "",
     baseUrl: extractCodexBaseUrl(config) ?? "",
@@ -293,7 +304,6 @@ export default function ChimeraApp() {
   const [activity, setActivity] = useState<OperationRecord[]>([]);
   const activityKeyRef = useRef<string | null>(null);
   const startupProviderCheckRef = useRef(false);
-  const [requestLogs, setRequestLogs] = useState<RequestLog[]>([]);
   const [connection, setConnection] = useState<ConnectionState>({
     kind: "unknown",
     message: "尚未验证连接",
@@ -416,10 +426,6 @@ export default function ChimeraApp() {
         ),
       )
       .catch(() => setSkinEnabled(false));
-    void usageApi
-      .getRequestLogs({ appType: "codex" }, 0, 50)
-      .then((result) => setRequestLogs(result.data))
-      .catch(() => setRequestLogs([]));
     const unlisten = listen<DownloadProgress>(
       "codex-runtime-download-progress",
       (event) => {
@@ -484,7 +490,7 @@ export default function ChimeraApp() {
       await loadProviders();
       const provider = providers.find((item) => item.id === id);
       note(
-        "切换供应商",
+        "切换线路",
         "success",
         "配置已写入 Codex",
         provider?.name ?? id,
@@ -493,7 +499,7 @@ export default function ChimeraApp() {
       toast.success("已应用到 Codex");
     } catch (error) {
       note(
-        "切换供应商",
+        "切换线路",
         "error",
         String(error),
         providers.find((item) => item.id === id)?.name ?? id,
@@ -568,7 +574,7 @@ export default function ChimeraApp() {
       !editor.baseUrl.trim() ||
       !editor.apiKey.trim()
     ) {
-      toast.error("请填写供应商名称、API 请求地址和 API Key");
+      toast.error("请填写线路名称、API 请求地址和 API Key");
       return;
     }
     const config = setCodexModelName(
@@ -640,8 +646,8 @@ export default function ChimeraApp() {
       await providersApi.switch(provider.id, "codex");
       await loadProviders();
       setEditor(null);
-      note("保存并应用供应商", "success", undefined, provider.name);
-      toast.success("供应商已保存");
+      note("保存并应用线路", "success", undefined, provider.name);
+      toast.success("线路已保存");
     } catch (error) {
       toast.error("保存失败", { description: String(error) });
     }
@@ -795,7 +801,7 @@ export default function ChimeraApp() {
   if (!loading && !providers.length && !editor && !onboardingDeferred) {
     return (
       <StandaloneOnboarding
-        onAdd={() => setEditor(providerDraft())}
+        onAdd={() => setEditor(providerDraft(null, "默认线路"))}
         onSkip={() => setOnboardingDeferred(true)}
       />
     );
@@ -851,12 +857,14 @@ export default function ChimeraApp() {
           <h1 className="sr-only">
             {editor
               ? editor.original
-                ? "编辑供应商"
-                : "添加供应商"
+                ? "编辑线路"
+                : "添加线路"
               : viewLabels[view]}
           </h1>
         )}
-        <section className="chimera-content">
+        <section
+          className={`chimera-content${view === "providers" ? " is-provider-view" : ""}`}
+        >
           {view === "providers" && (
             <NewProvidersView
               providers={providers}
@@ -873,7 +881,9 @@ export default function ChimeraApp() {
               onAdd={() => {
                 setModels(null);
                 setModelFetchError(null);
-                setEditor(providerDraft());
+                setEditor(
+                  providerDraft(null, providers.length ? "新线路" : "默认线路"),
+                );
               }}
             />
           )}
@@ -889,7 +899,7 @@ export default function ChimeraApp() {
               onAction={setPendingAction}
             />
           )}
-          {view === "usage" && <UsageView requests={requestLogs} />}
+          {view === "usage" && <UsageView />}
           {view === "appearance" && (
             <AppearanceView
               enabled={skinEnabled}
@@ -962,7 +972,7 @@ export default function ChimeraApp() {
               await loadProviders();
               setPendingProviderDelete(null);
               setEditor(null);
-              toast.success("供应商已删除");
+              toast.success("线路已删除");
             } catch (error) {
               toast.error("删除失败", { description: String(error) });
             }
@@ -1348,7 +1358,7 @@ function NewRuntimeView({
             <code>{version}</code>
             <small>
               {runtime?.installed
-                ? `${runtimeText(runtime.installMode)} · 稳定版`
+                ? `${runtimeText(runtime.installMode)} · ${runtimeChannelText(release?.source)}`
                 : "未检测到安装"}
             </small>
           </div>
@@ -1364,7 +1374,7 @@ function NewRuntimeView({
             <Download size={16} />
             <span>
               更新通道
-              <b>{release?.source === "mirror" ? "镜像安装" : "稳定版"}</b>
+              <b>{runtimeChannelText(release?.source)}</b>
             </span>
           </div>
           <div>
@@ -1570,19 +1580,20 @@ function NewProvidersView({
   currentSource: "live" | "stored" | "external" | "none";
   connection: ConnectionState;
   loading: boolean;
-  onSwitch: (id: string) => void;
+  onSwitch: (id: string) => Promise<void>;
   onEdit: (provider: Provider) => void;
   onAdd: () => void;
 }) {
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const [managerOpen, setManagerOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const pickerTriggerRef = useRef<HTMLButtonElement>(null);
-  const pickerRef = useDialogFocus<HTMLDivElement>(
-    () => setPickerOpen(false),
-    pickerOpen,
-    pickerTriggerRef,
+  const [switchingId, setSwitchingId] = useState<string | null>(null);
+  const managerTriggerRef = useRef<HTMLButtonElement>(null);
+  const managerRef = useDialogFocus<HTMLElement>(
+    () => setManagerOpen(false),
+    managerOpen,
+    managerTriggerRef,
   );
-  if (loading) return <Empty label="正在读取供应商…" />;
+  if (loading) return <Empty label="正在读取线路…" />;
   if (!providers.length) return <Onboarding onAdd={onAdd} />;
   const current =
     providers.find((provider) => provider.id === currentId) ?? providers[0];
@@ -1599,11 +1610,52 @@ function NewProvidersView({
           : currentSource === "live"
             ? "配置已识别"
             : "等待测试";
-  const visibleProviders = providers.filter((provider) => {
+  const isChimeraLine = (provider: Provider) => {
+    const endpoint =
+      extractCodexBaseUrl(String(provider.settingsConfig?.config ?? "")) ?? "";
+    return /(^|\.)chimerahub\.org$/i.test(
+      (() => {
+        try {
+          return new URL(endpoint).hostname;
+        } catch {
+          return endpoint;
+        }
+      })(),
+    );
+  };
+  const lineName = (provider: Provider) => {
+    const normalized = provider.name.trim().toLowerCase().replace(/\s+/g, "");
+    const generic = ["chimerahub", "chimera中转站", "default"].includes(
+      normalized,
+    );
+    if (!generic) return provider.name || "未命名线路";
+    if (!isChimeraLine(provider)) return "默认线路";
+    const chimeraLines = providers.filter(isChimeraLine);
+    const index = chimeraLines.findIndex((item) => item.id === provider.id);
+    if (index <= 0) return "默认线路";
+    if (index === 1) return "备用线路";
+    return `线路 ${index + 1}`;
+  };
+  const lineSource = (provider: Provider) =>
+    isChimeraLine(provider) ? "Chimera 中转站" : "自定义 API";
+  const lineMark = (provider: Provider) =>
+    isChimeraLine(provider)
+      ? "C"
+      : provider.name.trim().slice(0, 1).toUpperCase() || "线";
+  const visibleLines = providers.filter((provider) => {
     const haystack =
-      `${provider.name} ${extractCodexModelName(String(provider.settingsConfig?.config ?? ""))}`.toLowerCase();
+      `${lineName(provider)} ${lineSource(provider)} ${provider.name} ${extractCodexModelName(String(provider.settingsConfig?.config ?? ""))}`.toLowerCase();
     return haystack.includes(query.trim().toLowerCase());
   });
+  const activateLine = async (provider: Provider) => {
+    if (provider.id === current.id || switchingId) return;
+    setSwitchingId(provider.id);
+    try {
+      await onSwitch(provider.id);
+    } finally {
+      setSwitchingId(null);
+    }
+  };
   const globeStageLabel =
     connection.kind === "connected"
       ? "连接稳定"
@@ -1630,105 +1682,162 @@ function NewProvidersView({
             <code>{model}</code>
           </div>
         </div>
-        {pickerOpen && (
-          <div
-            ref={pickerRef}
-            id="provider-picker"
-            className="route-picker"
-            role="dialog"
-            aria-modal="true"
-            aria-label="选择供应商"
-            tabIndex={-1}
-          >
-            <label>
-              <Search size={15} aria-hidden="true" />
-              <input
-                name="provider-search"
-                aria-label="搜索供应商或模型"
-                autoComplete="off"
-                spellCheck={false}
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索供应商或模型…"
-                autoFocus
-              />
-            </label>
+        <div className="route-line-switcher">
+          <header className="route-line-heading">
             <div>
-              {visibleProviders.map((provider) => {
+              <b>线路切换</b>
+              <span>{providers.length} 条可用</span>
+            </div>
+            <button
+              ref={managerTriggerRef}
+              type="button"
+              aria-label="管理线路"
+              onClick={() => setManagerOpen(true)}
+            >
+              管理线路 <span aria-hidden="true">→</span>
+            </button>
+          </header>
+          <div className="route-line-rail">
+            <div className="route-line-scroll" role="list" aria-label="线路">
+              {providers.map((provider) => {
                 const active = provider.id === current.id;
-                const providerModel =
-                  extractCodexModelName(
-                    String(provider.settingsConfig?.config ?? ""),
-                  ) || "未设置模型";
+                const switching = switchingId === provider.id;
                 return (
                   <button
                     key={provider.id}
-                    className={active ? "is-active" : ""}
-                    onClick={() => {
-                      if (!active) onSwitch(provider.id);
-                      setPickerOpen(false);
-                    }}
+                    type="button"
+                    className={`route-line-card${active ? " is-active" : ""}`}
+                    aria-pressed={active}
+                    aria-label={`${lineName(provider)}，${lineSource(provider)}${active ? "，当前线路" : ""}`}
+                    onClick={() => void activateLine(provider)}
                   >
-                    <span className="selector-mark">
-                      <Route size={16} />
+                    <span className="route-line-mark" aria-hidden="true">
+                      {switching ? (
+                        <LoaderCircle className="spin" size={16} />
+                      ) : (
+                        lineMark(provider)
+                      )}
                     </span>
-                    <span>
-                      <b>{provider.name}</b>
-                      <code>{providerModel}</code>
+                    <span className="route-line-copy">
+                      <b>
+                        {active && <i aria-hidden="true" />}
+                        {lineName(provider)}
+                      </b>
+                      <small>{lineSource(provider)}</small>
                     </span>
-                    {active && <Check size={16} />}
                   </button>
                 );
               })}
-              {!visibleProviders.length && (
-                <p className="route-picker-empty">没有匹配的供应商。</p>
-              )}
             </div>
-            <button
-              className="route-picker-add"
-              onClick={() => {
-                setPickerOpen(false);
-                onAdd();
-              }}
-            >
-              <Plus size={14} />
-              连接新供应商
+            <button type="button" className="route-line-add" onClick={onAdd}>
+              <span aria-hidden="true">
+                <Plus size={18} />
+              </span>
+              添加线路
             </button>
           </div>
-        )}
-        <div className="route-selector">
-          <button
-            className="selector-mark"
-            aria-label="编辑当前供应商"
-            onClick={() => onEdit(current)}
-          >
-            <Route size={18} />
-          </button>
-          <div>
-            <small>当前供应商</small>
-            <b>{current.name}</b>
-          </div>
-          <button
-            ref={pickerTriggerRef}
-            aria-label="选择供应商"
-            aria-expanded={pickerOpen}
-            aria-controls="provider-picker"
-            onClick={() => setPickerOpen((value) => !value)}
-          >
-            <ChevronDown
-              className={pickerOpen ? "is-open" : ""}
-              size={17}
-              aria-hidden="true"
-            />
-          </button>
-          <button
-            className="primary compact"
-            onClick={() => void onSwitch(current.id)}
-          >
-            <span>切换</span>
-            <ArrowRight size={15} />
-          </button>
         </div>
+        {managerOpen && (
+          <div
+            className="route-line-manager-backdrop"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setManagerOpen(false);
+            }}
+          >
+            <section
+              ref={managerRef}
+              className="route-line-manager"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="route-line-manager-title"
+              tabIndex={-1}
+            >
+              <header>
+                <div>
+                  <h2 id="route-line-manager-title">管理线路</h2>
+                  <p>切换、编辑或添加 Codex 线路</p>
+                </div>
+                <button
+                  type="button"
+                  aria-label="关闭线路管理"
+                  onClick={() => setManagerOpen(false)}
+                >
+                  <X size={18} />
+                </button>
+              </header>
+              <label className="route-line-search">
+                <Search size={15} aria-hidden="true" />
+                <input
+                  name="line-search"
+                  aria-label="搜索线路"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="搜索线路名称或来源…"
+                  autoFocus
+                />
+              </label>
+              <div className="route-line-manager-list">
+                {visibleLines.map((provider) => {
+                  const active = provider.id === current.id;
+                  const switching = switchingId === provider.id;
+                  return (
+                    <article
+                      key={provider.id}
+                      className={active ? "is-active" : ""}
+                    >
+                      <button
+                        type="button"
+                        className="route-line-manager-main"
+                        aria-label={`切换到${lineName(provider)}`}
+                        onClick={() => void activateLine(provider)}
+                      >
+                        <span className="route-line-mark" aria-hidden="true">
+                          {switching ? (
+                            <LoaderCircle className="spin" size={16} />
+                          ) : (
+                            lineMark(provider)
+                          )}
+                        </span>
+                        <span>
+                          <b>{lineName(provider)}</b>
+                          <small>{lineSource(provider)}</small>
+                        </span>
+                        {active && <Check size={16} aria-label="当前线路" />}
+                      </button>
+                      <button
+                        type="button"
+                        className="route-line-edit"
+                        aria-label={`编辑${lineName(provider)}`}
+                        onClick={() => {
+                          setManagerOpen(false);
+                          onEdit(provider);
+                        }}
+                      >
+                        <Pencil size={15} />
+                      </button>
+                    </article>
+                  );
+                })}
+                {!visibleLines.length && (
+                  <p className="route-line-empty">没有匹配的线路。</p>
+                )}
+              </div>
+              <button
+                type="button"
+                className="primary route-line-manager-add"
+                onClick={() => {
+                  setManagerOpen(false);
+                  onAdd();
+                }}
+              >
+                <Plus size={15} /> 添加线路
+              </button>
+            </section>
+          </div>
+        )}
       </div>
       <div className="route-meta">
         <span>
@@ -1791,33 +1900,35 @@ function ProviderEditor({
         </span>
         <div>
           <h2 id="provider-editor-title">
-            {editor.name || (editor.original ? "供应商" : "新供应商")}
+            {editor.name || (editor.original ? "线路" : "新线路")}
           </h2>
-          <p>保存后会写入 Codex 的当前供应商配置。</p>
+          <p>保存后会写入 Codex，并成为一条可快速切换的线路。</p>
         </div>
       </header>
       <div className="editor-form">
         {!editor.original && (
           <div className="provider-template" role="status">
             <div>
-              <b>ChimeraHub 默认模板</b>
+              <b>Chimera 中转站默认模板</b>
               <small>已填入 Responses 地址和默认模型；只需粘贴 API Key。</small>
             </div>
             <button
               type="button"
               className="secondary compact"
-              onClick={() => setEditor(providerDraft())}
+              onClick={() =>
+                setEditor(providerDraft(null, editor.name || "新线路"))
+              }
             >
               恢复模板
             </button>
           </div>
         )}
         <Field
-          label="供应商名称"
+          label="线路名称"
           name="provider-name"
           value={editor.name}
           onChange={(value) => patch("name", value)}
-          placeholder="例如 Chimera Hub"
+          placeholder="例如 默认线路或备用线路"
         />
         <Field
           label="官网链接"
@@ -1832,7 +1943,7 @@ function ProviderEditor({
           value={editor.baseUrl}
           onChange={(value) => patch("baseUrl", value)}
           placeholder="https://api.example.com/v1"
-          hint="预设和自定义供应商都可编辑 URL。"
+          hint="Chimera 中转站和自定义线路都可编辑 URL。"
         />
         <label>
           API Key
@@ -1879,7 +1990,7 @@ function ProviderEditor({
           <summary>高级选项</summary>
           <div className="advanced-options-body">
             <p className="advanced-intro">
-              仅在供应商不是标准 Responses API 时调整。保存后会应用到 Codex
+              仅在上游不是标准 Responses API 时调整。保存后会应用到 Codex
               的兼容路由与配置。
             </p>
             <label>
@@ -1930,7 +2041,7 @@ function ProviderEditor({
                   onChange={(event) => patch("modelsUrl", event.target.value)}
                   placeholder="https://api.example.com/v1/models"
                 />
-                <small>供应商的模型接口不同于主接口时填写。</small>
+                <small>上游的模型接口不同于主接口时填写。</small>
               </label>
               <label>
                 自定义 User-Agent（可选）
@@ -1983,9 +2094,7 @@ function ProviderEditor({
                 <label className="toggle-field">
                   <span>
                     <b>模拟 Claude Code 客户端</b>
-                    <small>
-                      仅当供应商明确要求 Claude Code 请求特征时开启。
-                    </small>
+                    <small>仅当上游明确要求 Claude Code 请求特征时开启。</small>
                   </span>
                   <input
                     name="provider-impersonate-claude-code"
@@ -2213,7 +2322,7 @@ function ModelPickerDialog({
         <header>
           <div>
             <h2 id="model-picker-title">选择默认模型</h2>
-            <p>列表来自当前供应商接口。</p>
+            <p>列表来自当前线路的模型接口。</p>
           </div>
           <button
             className="icon-button"
@@ -2479,67 +2588,36 @@ function ActivityView({
   );
 }
 
-function UsageView({ requests }: { requests: RequestLog[] }) {
+function UsageView() {
   const [summary, setSummary] = useState<UsageSummary | null>(null);
   const [trends, setTrends] = useState<DailyStats[]>([]);
   const [models, setModels] = useState<ModelStats[]>([]);
   const [range, setRange] = useState<"today" | "7d" | "30d">("30d");
   const [error, setError] = useState("");
   const [syncing, setSyncing] = useState(runningInTauri);
-  const [syncNote, setSyncNote] = useState("正在读取 Codex 本机会话记录");
+  const [rangeLoading, setRangeLoading] = useState(false);
+  const [syncNote, setSyncNote] = useState(
+    runningInTauri
+      ? "正在读取 Codex 本机会话记录"
+      : "浏览器预览不会读取本机会话数据",
+  );
+  const initialUsageLoadStarted = useRef(false);
+  const usageRequestId = useRef(0);
 
   const loadUsage = useCallback(
-    async (syncSessions: boolean) => {
+    async (selectedRange: "today" | "7d" | "30d", syncSessions: boolean) => {
+      const requestId = ++usageRequestId.current;
       if (!runningInTauri) {
-        setSummary({
-          totalRequests: 1842,
-          totalCost: "0",
-          totalInputTokens: 2491880,
-          totalOutputTokens: 792740,
-          totalCacheCreationTokens: 0,
-          totalCacheReadTokens: 0,
-          successRate: 0.992,
-          realTotalTokens: 3284620,
-          cacheHitRate: 0,
-        });
-        setTrends(
-          Array.from({ length: 24 }, (_, index) => ({
-            date: `2026-07-${String(index + 1).padStart(2, "0")}`,
-            requestCount: 60 + index * 4,
-            totalCost: "0",
-            totalTokens: 90000 + index * 7300,
-            totalInputTokens: 68000,
-            totalOutputTokens: 22000,
-            totalCacheCreationTokens: 0,
-            totalCacheReadTokens: 0,
-          })),
-        );
-        setModels([
-          {
-            model: "gpt-5.6-sol",
-            requestCount: 1200,
-            totalTokens: 2412800,
-            totalCost: "0",
-            avgCostPerRequest: "0",
-          },
-          {
-            model: "claude-sonnet-4",
-            requestCount: 420,
-            totalTokens: 642120,
-            totalCost: "0",
-            avgCostPerRequest: "0",
-          },
-          {
-            model: "其他模型",
-            requestCount: 222,
-            totalTokens: 229700,
-            totalCost: "0",
-            avgCostPerRequest: "0",
-          },
-        ]);
+        setSummary(null);
+        setTrends([]);
+        setModels([]);
+        setSyncing(false);
+        setRangeLoading(false);
+        setSyncNote("浏览器预览不会读取本机会话数据");
         return;
       }
-      setSyncing(true);
+      if (syncSessions) setSyncing(true);
+      else setRangeLoading(true);
       setError("");
       if (syncSessions) {
         try {
@@ -2554,41 +2632,68 @@ function UsageView({ requests }: { requests: RequestLog[] }) {
           setError(String(reason));
         }
       }
-      const end = Date.now();
-      const days = range === "today" ? 1 : range === "7d" ? 7 : 30;
-      const start = end - days * 24 * 60 * 60 * 1000;
+      const now = new Date();
+      const end = Math.floor(now.getTime() / 1000);
+      const days = selectedRange === "7d" ? 7 : 30;
+      const start =
+        selectedRange === "today"
+          ? Math.floor(
+              new Date(
+                now.getFullYear(),
+                now.getMonth(),
+                now.getDate(),
+              ).getTime() / 1000,
+            )
+          : end - days * 24 * 60 * 60;
       try {
         const [nextSummary, nextTrends, nextModels] = await Promise.all([
           usageApi.getUsageSummary(start, end, "codex"),
           usageApi.getUsageTrends(start, end, "codex"),
           usageApi.getModelStats(start, end, "codex"),
         ]);
+        if (requestId !== usageRequestId.current) return;
         setSummary(nextSummary);
         setTrends(nextTrends);
         setModels(nextModels.slice(0, 3));
       } catch (reason) {
+        if (requestId !== usageRequestId.current) return;
         setError(String(reason));
       } finally {
-        setSyncing(false);
+        if (requestId === usageRequestId.current) {
+          setSyncing(false);
+          setRangeLoading(false);
+        }
       }
     },
-    [range],
+    [],
   );
 
   useEffect(() => {
-    void loadUsage(true);
-  }, [loadUsage]);
+    const shouldSyncSessions = !initialUsageLoadStarted.current;
+    initialUsageLoadStarted.current = true;
+    void loadUsage(range, shouldSyncSessions);
+  }, [loadUsage, range]);
 
   const total = summary?.realTotalTokens ?? 0;
   const input = summary?.totalInputTokens ?? 0;
   const output = summary?.totalOutputTokens ?? 0;
-  const modelTotal = Math.max(...models.map((item) => item.totalTokens), 1);
-  const fallback = requests.reduce(
-    (sum, item) => sum + item.inputTokens + item.outputTokens,
-    0,
+  const cache =
+    (summary?.totalCacheCreationTokens ?? 0) +
+    (summary?.totalCacheReadTokens ?? 0);
+  const chartTrends = trends.map((item) => ({
+    ...item,
+    totalTokens:
+      item.totalInputTokens +
+      item.totalOutputTokens +
+      item.totalCacheCreationTokens +
+      item.totalCacheReadTokens,
+  }));
+  const modelTotal = Math.max(
+    models.reduce((sum, item) => sum + item.totalTokens, 0),
+    1,
   );
-  const displayTotal = total || fallback;
-  const peak = Math.max(...trends.map((item) => item.totalTokens), 0);
+  const displayTotal = total;
+  const peak = Math.max(...chartTrends.map((item) => item.totalTokens), 0);
   const spectrum = ["#36c5d9", "#53d7c2", "#ffb84d", "#ff7e57", "#e85d9e"];
   return (
     <section className="usage-surface usage-spectrum">
@@ -2605,8 +2710,8 @@ function UsageView({ requests }: { requests: RequestLog[] }) {
         <div className="usage-toolbar">
           <button
             className="usage-refresh"
-            onClick={() => void loadUsage(true)}
-            disabled={syncing}
+            onClick={() => void loadUsage(range, true)}
+            disabled={!runningInTauri || syncing}
             aria-label="同步词元记录"
           >
             <RefreshCw size={14} className={syncing ? "spin" : ""} />
@@ -2623,6 +2728,7 @@ function UsageView({ requests }: { requests: RequestLog[] }) {
                 key={id}
                 className={range === id ? "is-active" : ""}
                 onClick={() => setRange(id)}
+                aria-pressed={range === id}
               >
                 {label}
               </button>
@@ -2637,7 +2743,14 @@ function UsageView({ requests }: { requests: RequestLog[] }) {
       )}
       <article className="usage-spectrum-panel">
         <section className="usage-spectrum-summary">
-          <span>30 天累计</span>
+          <span>
+            {range === "today"
+              ? "今日累计"
+              : range === "7d"
+                ? "7 天累计"
+                : "30 天累计"}
+            {rangeLoading ? " · 正在更新" : ""}
+          </span>
           <strong>{displayTotal.toLocaleString("zh-CN")}</strong>
           <small>词元</small>
           <dl>
@@ -2650,12 +2763,8 @@ function UsageView({ requests }: { requests: RequestLog[] }) {
               <dd className="is-output">{output.toLocaleString("zh-CN")}</dd>
             </div>
             <div>
-              <dt>成功率</dt>
-              <dd className="is-success">
-                {summary
-                  ? `${Math.round(summary.successRate * 1000) / 10}%`
-                  : "--"}
-              </dd>
+              <dt>缓存词元</dt>
+              <dd className="is-success">{cache.toLocaleString("zh-CN")}</dd>
             </div>
           </dl>
         </section>
@@ -2664,7 +2773,10 @@ function UsageView({ requests }: { requests: RequestLog[] }) {
             <b>每日消耗光谱</b>
             <span>
               峰值 {peak.toLocaleString("zh-CN")} ·{" "}
-              {summary?.totalRequests ?? requests.length} 次请求
+              {summary?.totalRequests ?? 0} 次请求 ·{" "}
+              {summary
+                ? `${Math.round(summary.successRate * 10) / 10}% 成功`
+                : "--"}
             </span>
           </header>
           <div className="usage-spectrum-chart" aria-label="每日词元消耗光谱">
@@ -2675,7 +2787,7 @@ function UsageView({ requests }: { requests: RequestLog[] }) {
                 initialDimension={{ width: 760, height: 190 }}
               >
                 <BarChart
-                  data={trends}
+                  data={chartTrends}
                   margin={{ top: 12, right: 16, bottom: 0, left: 0 }}
                 >
                   <CartesianGrid vertical={false} stroke="#e8edf0" />
@@ -2685,7 +2797,7 @@ function UsageView({ requests }: { requests: RequestLog[] }) {
                     tickLine={false}
                     minTickGap={24}
                     tick={{ fill: "#69737d", fontSize: 9 }}
-                    tickFormatter={(value: string) => value.slice(5)}
+                    tickFormatter={(value: string) => value.slice(5, 10)}
                   />
                   <YAxis hide domain={[0, "dataMax"]} />
                   <Tooltip
@@ -2709,7 +2821,7 @@ function UsageView({ requests }: { requests: RequestLog[] }) {
                     radius={[4, 4, 1, 1]}
                     maxBarSize={18}
                   >
-                    {trends.map((item, index) => (
+                    {chartTrends.map((item, index) => (
                       <Cell
                         key={item.date}
                         fill={
@@ -2775,42 +2887,16 @@ function AppearanceView({
 }) {
   const [skins, setSkins] = useState<CatalogSkin[]>([]);
   const [selectedId, setSelectedId] = useState("");
+  const [filter, setFilter] = useState<
+    "featured" | "installed" | "dark" | "light"
+  >("featured");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   const load = async () => {
     if (!runningInTauri) {
-      const preview = routeGateIcon;
-      setSkins([
-        {
-          id: "preview-nerv",
-          name: "NERV EVA-02",
-          description: "Asuka Terminal",
-          version: "1.4.2",
-          author: "Chimera Market",
-          preview,
-          installed: true,
-          applied: true,
-        },
-        {
-          id: "preview-oled",
-          name: "OLED Mono",
-          description: "Pure Black",
-          version: "2.1.0",
-          preview,
-          installed: false,
-          applied: false,
-        },
-        {
-          id: "preview-sakura",
-          name: "Sakura Glass",
-          description: "Soft Pink",
-          version: "1.8.3",
-          preview,
-          installed: false,
-          applied: false,
-        },
-      ]);
-      setSelectedId("preview-nerv");
+      setSkins([]);
+      setSelectedId("");
+      setError("");
       return;
     }
     try {
@@ -2829,7 +2915,20 @@ function AppearanceView({
   useEffect(() => {
     if (enabled) void load();
   }, [enabled]);
-  const selected = skins.find((item) => item.id === selectedId) ?? null;
+  const visibleSkins = skins.filter((skin) => {
+    if (filter === "installed") return skin.installed;
+    if (filter === "dark") {
+      return skin.appearance === "dark" || skin.appearance === "dual";
+    }
+    if (filter === "light") {
+      return skin.appearance === "light" || skin.appearance === "dual";
+    }
+    return true;
+  });
+  const selected =
+    visibleSkins.find((item) => item.id === selectedId) ??
+    visibleSkins[0] ??
+    null;
   const run = async (
     label: string,
     command: string,
@@ -2855,15 +2954,28 @@ function AppearanceView({
     <section className="skin-market-reference">
       <header className="skin-market-heading">
         <div>
-          <span className="eyebrow">CHATGPT 外观</span>
+          <span className="eyebrow">CODEX 外观</span>
           <h1>皮肤市场</h1>
-          <p>浏览、预览并安装 ChatGPT 客户端皮肤。</p>
+          <p>浏览、预览并安装 Codex 客户端皮肤。</p>
         </div>
         <div className="skin-filter-tabs">
-          <button className="is-active">精选</button>
-          <button>已安装</button>
-          <button>深色</button>
-          <button>浅色</button>
+          {(
+            [
+              ["featured", "精选"],
+              ["installed", "已安装"],
+              ["dark", "深色"],
+              ["light", "浅色"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              className={filter === id ? "is-active" : ""}
+              aria-pressed={filter === id}
+              onClick={() => setFilter(id)}
+            >
+              {label}
+            </button>
+          ))}
           <button
             className="skin-import"
             onClick={() => void importLocal()}
@@ -2875,10 +2987,10 @@ function AppearanceView({
       </header>
       <div className="skin-layout">
         <aside className="skin-list">
-          {skins.map((skin) => (
+          {visibleSkins.map((skin) => (
             <button
               key={skin.id}
-              className={skin.id === selectedId ? "active" : ""}
+              className={skin.id === selected?.id ? "active" : ""}
               onClick={() => setSelectedId(skin.id)}
             >
               <span
@@ -2894,12 +3006,10 @@ function AppearanceView({
                   </span>
                 ) : (
                   <img
-                    src={
-                      skin.preview.startsWith("/")
-                        ? skin.preview
-                        : `https://skins.agentsmirror.com/${skin.preview.replace(/^\/+/, "")}`
-                    }
+                    src={skinPreviewUrl(skin.preview)}
                     alt=""
+                    loading="lazy"
+                    decoding="async"
                   />
                 )}
               </span>
@@ -2913,7 +3023,18 @@ function AppearanceView({
               </span>
             </button>
           ))}
-          {!skins.length && !error && <Empty label="正在读取皮肤目录…" />}
+          {!skins.length && !error && (
+            <Empty
+              label={
+                runningInTauri
+                  ? "正在读取皮肤目录…"
+                  : "浏览器预览不读取皮肤目录，请在桌面应用中查看真实皮肤。"
+              }
+            />
+          )}
+          {Boolean(skins.length) && !visibleSkins.length && (
+            <Empty label="当前分类暂无皮肤。" />
+          )}
           {error && (
             <Empty
               label={`皮肤目录读取失败：${error}`}
@@ -2926,6 +3047,7 @@ function AppearanceView({
           {selected ? (
             <>
               <div
+                key={selected.id}
                 className={`skin-preview skin-preview-image ${skinToneClass(selected)} ${
                   selected.preview === routeGateIcon
                     ? "is-fallback"
@@ -2935,7 +3057,7 @@ function AppearanceView({
                 {selected.preview === routeGateIcon ? (
                   <div className="skin-preview-fallback">
                     <aside>
-                      <b>CHATGPT</b>
+                      <b>CODEX</b>
                       <span>新对话</span>
                       <span>Codex</span>
                       <span>设置</span>
@@ -2947,18 +3069,16 @@ function AppearanceView({
                         <small>gpt-5.6-sol · 420 ms</small>
                       </div>
                       <footer>
-                        给 ChatGPT 发送消息 <i>↑</i>
+                        给 Codex 发送消息 <i>↑</i>
                       </footer>
                     </main>
                   </div>
                 ) : (
                   <img
-                    src={
-                      selected.preview.startsWith("/")
-                        ? selected.preview
-                        : `https://skins.agentsmirror.com/${selected.preview.replace(/^\/+/, "")}`
-                    }
+                    className="skin-catalog-preview-art"
+                    src={skinPreviewUrl(selected.preview)}
                     alt={`${selected.name} 预览`}
+                    decoding="async"
                   />
                 )}
               </div>
@@ -2969,14 +3089,14 @@ function AppearanceView({
                   </h2>
                   <p>
                     {selected.installed
-                      ? `已安装 · v${selected.version} · 适配当前 ChatGPT`
+                      ? `已安装 · v${selected.version} · 适配当前 Codex`
                       : `v${selected.version} · 可下载安装`}
                   </p>
                 </div>
                 <div className="skin-actions">
                   {!selected.installed && (
                     <button
-                      className="dark"
+                      className="primary skin-install-action"
                       onClick={() =>
                         void run("下载安装", "install_catalog_skin", {
                           skinId: selected.id,
@@ -2984,7 +3104,8 @@ function AppearanceView({
                       }
                       disabled={Boolean(busy)}
                     >
-                      {busy === "下载安装" ? "正在下载…" : "下载安装"}
+                      <Download size={14} aria-hidden="true" />
+                      {busy === "下载安装" ? "正在下载…" : "下载并安装"}
                     </button>
                   )}
                   {selected.installed && (
@@ -3055,14 +3176,19 @@ function AppearanceView({
 
 function NewSettingsView() {
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [appVersion, setAppVersion] = useState("正在读取版本");
   useEffect(() => {
     if (!runningInTauri) {
       setSettings({
         codexUpdateSource: "auto",
         codexInstallMode: "standard",
       } as Settings);
+      setAppVersion("开发预览");
       return;
     }
+    void getCurrentVersion().then((version) =>
+      setAppVersion(version || "未知版本"),
+    );
     void settingsApi
       .get()
       .then(setSettings)
@@ -3183,7 +3309,7 @@ function NewSettingsView() {
         </button>
       </div>
       <footer className="settings-reference-footer">
-        <code>Chimera++ 2.0.4</code>
+        <code>Chimera++ {appVersion}</code>
         <button
           className="secondary"
           onClick={() =>
@@ -3549,11 +3675,11 @@ function ConfirmProviderDelete({
       >
         <CircleAlert size={26} />
         <h2 id="provider-delete-title">确认删除“{provider.name}”？</h2>
-        <p>该供应商会从 Chimera++ 中移除。当前 Codex 用户数据不会被删除。</p>
+        <p>该线路会从 Chimera++ 中移除。当前 Codex 用户数据不会被删除。</p>
         <footer>
           <button onClick={onCancel}>取消</button>
           <button className="danger" onClick={onConfirm}>
-            删除供应商
+            删除线路
           </button>
         </footer>
       </section>
@@ -3667,28 +3793,28 @@ function Onboarding({ onAdd }: { onAdd: () => void }) {
       </div>
       <h2>开始配置你的 Codex</h2>
       <p>
-        粘贴供应商地址和 API Key，Chimera++ 会获取模型列表并写入 Codex 配置。
+        粘贴 Chimera 中转站密钥，Chimera++ 会获取模型列表并写入 Codex 配置。
       </p>
       <ol>
         <li>
           <b>1</b>
           <div>
-            <strong>连接供应商</strong>
-            <span>添加可编辑的 API 请求地址和密钥</span>
+            <strong>添加线路</strong>
+            <span>默认使用 Chimera 中转站，也支持自定义上游</span>
           </div>
         </li>
         <li>
           <b>2</b>
           <div>
             <strong>获取模型</strong>
-            <span>从供应商接口读取模型，也可手动填写</span>
+            <span>从当前线路读取模型，也可手动填写</span>
           </div>
         </li>
         <li>
           <b>3</b>
           <div>
             <strong>保存并应用</strong>
-            <span>立即切换到新的 Codex 供应商</span>
+            <span>立即切换到新的 Codex 线路</span>
           </div>
         </li>
       </ol>
@@ -3714,15 +3840,15 @@ function StandaloneOnboarding({
         </div>
         <h1>开始配置你的 Codex</h1>
         <p>
-          只需填写一次供应商地址和密钥，之后可在控制台快速切换。Chimera++
+          只需填写一次 Chimera 中转站密钥，之后可在首页快速切换线路。Chimera++
           会自动识别本机 Codex 安装方式并同步模型列表。
         </p>
         <ol>
           <li>
             <b>1</b>
             <div>
-              <strong>连接供应商</strong>
-              <span>粘贴接口地址和 API 密钥</span>
+              <strong>添加线路</strong>
+              <span>默认使用 Chimera 中转站模板</span>
             </div>
           </li>
           <li>
@@ -3830,10 +3956,19 @@ function WindowControls() {
   return (
     <div className="window-dots">
       <button
+        aria-label="最小化 Chimera++"
+        title="最小化"
+        onClick={() => void getCurrentWindow().minimize()}
+      >
+        <Minus size={17} strokeWidth={2} />
+      </button>
+      <button
+        className="is-close"
         aria-label="关闭 Chimera++"
+        title="关闭"
         onClick={() => void getCurrentWindow().close()}
       >
-        <Power size={16} />
+        <X size={16} strokeWidth={2} />
       </button>
     </div>
   );

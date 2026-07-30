@@ -23,6 +23,8 @@ jobs:
           - os: windows-2022
           - os: windows-11-arm
             arch: arm64
+          - os: macos-15
+            arch: universal
 
     steps:
       - name: Checkout
@@ -185,11 +187,31 @@ jobs:
       - name: Import Apple signing certificate
         if: runner.os == 'macOS'
         shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
+          for required in \
+            APPLE_CERTIFICATE \
+            APPLE_CERTIFICATE_PASSWORD \
+            KEYCHAIN_PASSWORD \
+            APPLE_ID \
+            APPLE_PASSWORD \
+            APPLE_TEAM_ID; do
+            if [ -z "${!required:-}" ]; then
+              echo "Missing required macOS release secret: $required" >&2
+              exit 1
+            fi
+          done
+
           # Decode .p12 certificate from base64
           CERT_PATH="$RUNNER_TEMP/certificate.p12"
-          printf '%s' "${{ secrets.APPLE_CERTIFICATE }}" | (base64 --decode 2>/dev/null || base64 -D) > "$CERT_PATH"
+          printf '%s' "$APPLE_CERTIFICATE" | (base64 --decode 2>/dev/null || base64 -D) > "$CERT_PATH"
 
           # Save original default keychain for cleanup
           ORIGINAL_DEFAULT_KEYCHAIN=$(security default-keychain -d user | tr -d '"' | xargs)
@@ -197,18 +219,18 @@ jobs:
 
           # Create temporary keychain
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
-          security create-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" "$KEYCHAIN_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security default-keychain -s "$KEYCHAIN_PATH"
-          security unlock-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
           # Import certificate
           security import "$CERT_PATH" \
             -k "$KEYCHAIN_PATH" \
-            -P "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
             -T /usr/bin/codesign \
             -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${{ secrets.KEYCHAIN_PASSWORD }}" "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
           # Dynamically resolve signing identity (must be "Developer ID Application")
           IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
@@ -307,7 +329,11 @@ jobs:
           # 1) Collect .tar.gz (updater artifact)
           NEW_TAR_GZ="Chimera++-${VERSION}-macOS.tar.gz"
           cp "$TAR_GZ" "release-assets/$NEW_TAR_GZ"
-          [ -f "$TAR_GZ.sig" ] && cp "$TAR_GZ.sig" "release-assets/$NEW_TAR_GZ.sig" || echo ".sig for macOS not found yet"
+          if [ ! -s "$TAR_GZ.sig" ]; then
+            echo "❌ Signed macOS updater artifact is required: $TAR_GZ.sig" >&2
+            exit 1
+          fi
+          cp "$TAR_GZ.sig" "release-assets/$NEW_TAR_GZ.sig"
           echo "macOS updater artifact copied: $NEW_TAR_GZ"
 
           # 2) Collect .app as zip
@@ -654,8 +680,9 @@ jobs:
 
             - **Windows (x86_64)**: `Chimera++-${{ github.ref_name }}-Windows.msi`（安装版）或 `Chimera++-${{ github.ref_name }}-Windows-Portable.zip`（绿色版）
             - **Windows (ARM64)**: `Chimera++-${{ github.ref_name }}-Windows-arm64.msi`（安装版）或 `Chimera++-${{ github.ref_name }}-Windows-arm64-Portable.zip`（绿色版）
+            - **macOS (Universal)**: `Chimera++-${{ github.ref_name }}-macOS.dmg`（推荐）或 `Chimera++-${{ github.ref_name }}-macOS.zip`，同时支持 Intel 与 Apple Silicon
 
-            绿色版已内置经 SHA-256 校验的 Codex 桌面本体；`.sig` 和 `latest.json` 供应用内自动更新验证使用。`ChimeraPlusPlus-*-windows-x64-setup.exe` 是供 Chimera++ 1.x 自动升级到 2.0 使用的兼容安装器。
+            Windows 绿色版已内置经 SHA-256 校验的 Codex 桌面本体；macOS 版本已进行 Developer ID 签名和 Apple 公证。`.sig` 和 `latest.json` 供应用内自动更新验证使用。`ChimeraPlusPlus-*-windows-x64-setup.exe` 是供 Chimera++ 1.x 自动升级到 2.0 使用的兼容安装器。
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -706,9 +733,11 @@ jobs:
 
           add_platform windows-x86_64 "Chimera++-$TAG-Windows.msi"
           add_platform windows-aarch64 "Chimera++-$TAG-Windows-arm64.msi"
+          add_platform darwin-x86_64 "Chimera++-$TAG-macOS.tar.gz"
+          add_platform darwin-aarch64 "Chimera++-$TAG-macOS.tar.gz"
 
-          if [ "$(jq 'length' <<< "$platform_json")" -lt 2 ]; then
-            echo 'Both signed Windows updater platforms are required' >&2
+          if [ "$(jq 'length' <<< "$platform_json")" -lt 4 ]; then
+            echo 'Signed Windows and macOS updater platforms are required' >&2
             exit 1
           fi
 
@@ -752,6 +781,8 @@ jobs:
           jq -e \
             '.platforms["windows-x86_64"].signature != "" and
              .platforms["windows-aarch64"].signature != "" and
+             .platforms["darwin-x86_64"].signature != "" and
+             .platforms["darwin-aarch64"].signature != "" and
              (.assets | length == 1) and
              (.assets[0].sha256 | test("^[0-9a-f]{64}$")) and
              (.assets[0].size > 0)' \

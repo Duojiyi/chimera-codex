@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import App from "@/App";
 
@@ -48,5 +48,42 @@ describe("Chimera++ application shell", () => {
     expect(
       screen.getByRole("button", { name: "恢复默认设置" }),
     ).toBeInTheDocument();
+  });
+
+  it("exposes direct line switching and the complete line management flow", async () => {
+    render(<App />);
+
+    expect(await screen.findByText("线路切换")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "默认线路，Chimera 中转站，当前线路",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "添加线路" }),
+    ).toBeInTheDocument();
+
+    const managerTrigger = screen.getByRole("button", { name: "管理线路" });
+    fireEvent.click(managerTrigger);
+    expect(
+      screen.getByRole("dialog", { name: "管理线路" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("textbox", { name: "搜索线路" }),
+    ).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "管理线路" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(managerTrigger).toHaveFocus();
+
+    fireEvent.click(screen.getByRole("button", { name: "添加线路" }));
+    expect(
+      screen.getByRole("heading", { name: "添加线路" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("线路名称")).toHaveValue("新线路");
   });
 });

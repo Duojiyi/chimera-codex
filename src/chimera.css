@@ -1999,11 +1999,22 @@ select:focus-visible {
 
 /* V2 reference window: a quiet native surface with one dominant task. */
 .chimera-shell {
+  position: relative;
   grid-template-columns: 1fr;
   overflow: hidden;
   border-radius: 16px;
   clip-path: inset(0 round 16px);
   background: #f7f8fa;
+  box-shadow: none;
+}
+.chimera-shell:after {
+  content: "";
+  position: absolute;
+  z-index: 20;
+  inset: 0;
+  border: 1px solid #b9c2c9;
+  border-radius: 16px;
+  pointer-events: none;
 }
 .chimera-main {
   position: relative;
@@ -2086,11 +2097,31 @@ select:focus-visible {
 .route-window-tools .window-dots button {
   color: var(--muted);
 }
+.route-window-tools > button:hover,
+.route-window-tools .window-dots button:hover {
+  background: #e8ecef;
+  color: var(--ink);
+}
+.route-window-tools .window-dots button.is-close:hover {
+  background: #fce8e5;
+  color: #b9372d;
+}
 .chimera-content {
   min-height: 0;
   overflow: auto;
   padding: 28px 36px 22px;
   background: #fafbfc;
+}
+.chimera-content.is-provider-view {
+  overflow: hidden;
+  padding: 0;
+}
+.chimera-content.is-provider-view .route-gate-reference {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-width: none;
+  margin: 0;
 }
 .route-bottom-nav {
   position: relative;
@@ -3629,7 +3660,7 @@ select:focus-visible {
 }
 .skin-market-reference .skin-layout {
   min-height: 0;
-  height: auto;
+  height: 100%;
   display: grid;
   grid-template-columns: 338px minmax(0, 1fr);
   gap: 22px;
@@ -3780,7 +3811,7 @@ select:focus-visible {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) max-content;
   padding: 0;
   overflow: hidden;
 }
@@ -3791,6 +3822,7 @@ select:focus-visible {
   margin: 0;
   overflow: hidden;
   border-radius: 10px;
+  contain: layout paint;
 }
 .skin-market-reference .skin-preview > .skin-preview-fallback {
   position: static;
@@ -3802,12 +3834,12 @@ select:focus-visible {
   background: #171719;
 }
 .skin-detail-footer {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 16px;
-  min-height: 66px;
-  padding-top: 8px;
+  min-height: 72px;
+  padding: 10px 0 2px;
 }
 .skin-detail-footer h2 {
   margin: 0;
@@ -3823,7 +3855,7 @@ select:focus-visible {
   margin: 0;
   flex: none;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
   gap: 8px;
 }
@@ -3831,8 +3863,8 @@ select:focus-visible {
   min-width: 84px;
   white-space: nowrap;
 }
-.skin-detail-footer .skin-actions .secondary {
-  order: -1;
+.skin-detail-footer .skin-actions .skin-install-action {
+  min-width: 116px;
 }
 .skin-market-reference .integrity {
   display: none;
@@ -3976,7 +4008,7 @@ select:focus-visible {
 
 /* Approved static-art provider home. */
 .route-gate-reference .route-map {
-  background: #ecf1f2;
+  background: #fafbfc;
 }
 .route-globe-stage {
   position: absolute;
@@ -4047,6 +4079,331 @@ select:focus-visible {
     opacity: 0.62;
   }
 }
+
+/* Direct line switching keeps the Chimera relay path primary while allowing
+   additional endpoints to scale without changing the home composition. */
+.route-line-switcher {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  bottom: 0;
+  width: min(760px, calc(100% - 48px));
+  transform: translateX(-50%);
+}
+.route-line-heading {
+  height: 20px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.route-line-heading > div {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.route-line-heading b {
+  color: #252b31;
+  font-size: 13px;
+}
+.route-line-heading > div span {
+  color: #7b8790;
+  font-size: 11px;
+}
+.route-line-heading > button {
+  min-height: 32px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: #6b7780;
+  font-size: 12px;
+  font-weight: 700;
+}
+.route-line-heading > button:hover {
+  color: var(--accent);
+}
+.route-line-rail {
+  height: 80px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 140px;
+  gap: 8px;
+  padding: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(147, 161, 170, 0.58);
+  border-radius: 18px;
+  background: rgba(252, 253, 254, 0.92);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    0 5px 8px rgba(39, 51, 59, 0.12);
+  -webkit-backdrop-filter: saturate(1.2) contrast(1.03);
+  backdrop-filter: saturate(1.2) contrast(1.03);
+}
+.route-line-scroll {
+  min-width: 0;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  scrollbar-color: #c6d0d6 transparent;
+}
+.route-line-card {
+  flex: 1 0 260px;
+  min-width: 0;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  scroll-snap-align: start;
+  border: 1px solid #dee5e9;
+  border-radius: 12px;
+  background: #fff;
+  color: #252b31;
+  text-align: left;
+  transition:
+    border-color 160ms var(--ease),
+    background 160ms var(--ease),
+    transform 120ms var(--ease);
+}
+.route-line-card:hover {
+  border-color: #c8d2d8;
+  background: #fbfcfd;
+}
+.route-line-card:active {
+  transform: scale(0.985);
+}
+.route-line-card.is-active {
+  border-color: #ffb5a6;
+  background: #fff0ec;
+}
+.route-line-mark {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: #f0f3f5;
+  color: #6a7680;
+  font-size: 13px;
+  font-weight: 800;
+}
+.route-line-card.is-active .route-line-mark,
+.route-line-manager article.is-active .route-line-mark {
+  background: #ffe0d8;
+  color: var(--accent);
+}
+.route-line-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.route-line-copy b,
+.route-line-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.route-line-copy b {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+}
+.route-line-copy b i {
+  flex: 0 0 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+}
+.route-line-copy small {
+  color: #7a8790;
+  font-size: 11px;
+}
+.route-line-add {
+  height: 64px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  transition:
+    background 160ms var(--ease),
+    transform 120ms var(--ease);
+}
+.route-line-add > span {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16);
+}
+.route-line-add:hover {
+  background: #ed4d32;
+}
+.route-line-add:active {
+  transform: scale(0.975);
+}
+.route-line-heading button:focus-visible,
+.route-line-card:focus-visible,
+.route-line-add:focus-visible,
+.route-line-manager button:focus-visible,
+.route-line-search:focus-within {
+  outline: 2px solid rgba(255, 90, 61, 0.72);
+  outline-offset: 2px;
+}
+.route-line-manager-backdrop {
+  position: fixed;
+  z-index: 19;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  border-radius: 16px;
+  background: rgba(247, 249, 250, 0.84);
+}
+.route-line-manager {
+  width: min(560px, 100%);
+  max-height: 100%;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 14px;
+  padding: 20px;
+  overflow: hidden;
+  border: 1px solid #cad4da;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 8px 14px rgba(39, 51, 59, 0.14);
+}
+.route-line-manager > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.route-line-manager h2,
+.route-line-manager p {
+  margin: 0;
+}
+.route-line-manager h2 {
+  color: #252b31;
+  font-size: 18px;
+}
+.route-line-manager header p {
+  margin-top: 4px;
+  color: #7a8790;
+  font-size: 12px;
+}
+.route-line-manager header > button,
+.route-line-edit {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: #f1f4f5;
+  color: #69757e;
+}
+.route-line-search {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-radius: 9px;
+  background: #f1f4f5;
+  color: #7a8790;
+}
+.route-line-search input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #252b31;
+  font: inherit;
+}
+.route-line-manager-list {
+  min-height: 76px;
+  overflow-y: auto;
+}
+.route-line-manager-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 11px;
+}
+.route-line-manager-list article + article {
+  margin-top: 4px;
+}
+.route-line-manager-list article.is-active {
+  background: #fff3ef;
+}
+.route-line-manager-main {
+  min-width: 0;
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #252b31;
+  text-align: left;
+}
+.route-line-manager-main:hover,
+.route-line-edit:hover,
+.route-line-manager header > button:hover {
+  background: #e9eef0;
+}
+.route-line-manager-main > span:nth-child(2) {
+  min-width: 0;
+}
+.route-line-manager-main b,
+.route-line-manager-main small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.route-line-manager-main b {
+  font-size: 13px;
+}
+.route-line-manager-main small {
+  margin-top: 3px;
+  color: #7a8790;
+  font-size: 11px;
+}
+.route-line-manager-main > svg {
+  color: var(--success);
+}
+.route-line-empty {
+  margin: 0;
+  padding: 24px;
+  color: #7a8790;
+  font-size: 13px;
+  text-align: center;
+}
+.route-line-manager-add {
+  min-height: 42px;
+  justify-self: stretch;
+}
+
 /* Approved light-spectrum usage surface. */
 .usage-spectrum {
   width: min(1000px, calc(100% - 8px));
@@ -4239,22 +4596,22 @@ select:focus-visible {
   text-decoration: none;
 }
 
-/* The catalog preview always shows the complete source image. */
+/* Catalog art keeps its native 8:5 canvas; the workspace never fabricates bars. */
 .skin-market-reference .skin-preview-image.has-catalog-image {
-  box-sizing: border-box;
+  position: relative;
   display: grid;
   place-items: center;
-  padding: 12px 14px 16px;
-  background: #15181b;
+  background: transparent;
 }
-.skin-market-reference .skin-preview-image.has-catalog-image > img {
+.skin-market-reference .skin-catalog-preview-art {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
-  max-width: 100%;
-  max-height: 100%;
   object-fit: contain;
   object-position: center;
+  border-radius: 10px;
 }
 .skin-detail-footer > div:first-child {
   min-width: 0;

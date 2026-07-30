@@ -81,9 +81,15 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 #[cfg(target_os = "windows")]
 fn apply_windows_rounded_corners(window: &tauri::WebviewWindow) {
     use windows_sys::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+        DwmSetWindowAttribute, DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
+        DWMWA_NCRENDERING_POLICY, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
     };
     use windows_sys::Win32::Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_BORDER, WS_CAPTION, WS_DLGFRAME,
+        WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+    };
 
     let Ok(hwnd) = window.hwnd() else {
         log::warn!("无法取得主窗口句柄，未应用 Windows 圆角");
@@ -100,6 +106,76 @@ fn apply_windows_rounded_corners(window: &tauri::WebviewWindow) {
     };
     if result < 0 {
         log::warn!("Windows DWM 圆角设置失败: HRESULT={result}");
+    }
+
+    // A transparent borderless window otherwise keeps DWM's non-client drop
+    // shadow even when Tauri's `shadow` option is disabled. The window region
+    // below owns the visible rounded outline, so non-client rendering is not
+    // needed and would only add a dark halo outside the app surface.
+    let nc_rendering_policy = DWMNCRP_DISABLED;
+    let result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd.0 as _,
+            DWMWA_NCRENDERING_POLICY as u32,
+            (&nc_rendering_policy as *const i32).cast(),
+            std::mem::size_of_val(&nc_rendering_policy) as u32,
+        )
+    };
+    if result < 0 {
+        log::warn!("关闭 Windows DWM 非客户区渲染失败: HRESULT={result}");
+    }
+
+    let border_color = DWMWA_COLOR_NONE;
+    let result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd.0 as _,
+            DWMWA_BORDER_COLOR as u32,
+            (&border_color as *const u32).cast(),
+            std::mem::size_of_val(&border_color) as u32,
+        )
+    };
+    if result < 0 {
+        log::warn!("关闭 Windows DWM 强调边框失败: HRESULT={result}");
+    }
+
+    // Tauri/WebView2 can retain a resize frame on a borderless fixed-size
+    // window. That frame consumes several physical pixels on every edge and
+    // looks like an extra shadow around the transparent shell.
+    let desired_client_size = window.inner_size().ok();
+    let style = unsafe { GetWindowLongPtrW(hwnd.0 as _, GWL_STYLE) };
+    let non_client_frame = (WS_CAPTION
+        | WS_THICKFRAME
+        | WS_BORDER
+        | WS_DLGFRAME
+        | WS_SYSMENU
+        | WS_MINIMIZEBOX
+        | WS_MAXIMIZEBOX) as isize;
+    let borderless_style = (style & !non_client_frame) | WS_POPUP as isize;
+    if borderless_style != style {
+        unsafe {
+            SetWindowLongPtrW(hwnd.0 as _, GWL_STYLE, borderless_style);
+            if let Some(size) = desired_client_size {
+                SetWindowPos(
+                    hwnd.0 as _,
+                    std::ptr::null_mut(),
+                    0,
+                    0,
+                    size.width as i32,
+                    size.height as i32,
+                    SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER,
+                );
+            } else {
+                SetWindowPos(
+                    hwnd.0 as _,
+                    std::ptr::null_mut(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+                );
+            }
+        }
     }
 
     // Windows 10 and some borderless/transparent window configurations ignore
@@ -150,23 +226,10 @@ fn set_windows_app_user_model_id(app: &tauri::AppHandle) {
 }
 
 #[cfg(target_os = "windows")]
-fn migrate_legacy_main_window_size(window: &tauri::WebviewWindow) {
-    if window.is_maximized().unwrap_or(false) {
-        return;
-    }
-    let Ok(physical) = window.inner_size() else {
-        return;
-    };
-    let Ok(scale_factor) = window.scale_factor() else {
-        return;
-    };
-    let logical = physical.to_logical::<f64>(scale_factor);
-    let is_legacy_default =
-        (1350.0..=1500.0).contains(&logical.width) && (880.0..=1020.0).contains(&logical.height);
-    if is_legacy_default {
-        if let Err(error) = window.set_size(tauri::LogicalSize::new(1140.0, 816.0)) {
-            log::warn!("迁移旧版窗口尺寸失败: {error}");
-        }
+fn enforce_fixed_main_window_size(window: &tauri::WebviewWindow) {
+    let _ = window.unmaximize();
+    if let Err(error) = window.set_size(tauri::LogicalSize::new(1140.0, 816.0)) {
+        log::warn!("设置固定主窗口尺寸失败: {error}");
     }
 }
 
@@ -1364,7 +1427,7 @@ pub fn run() {
             let settings = crate::settings::get_settings();
             if let Some(window) = app.get_webview_window("main") {
                 #[cfg(target_os = "windows")]
-                migrate_legacy_main_window_size(&window);
+                enforce_fixed_main_window_size(&window);
                 // 在窗口首次显示前同步装饰状态，避免前端加载后再切换导致标题栏闪烁
                 // 仅 Linux 生效：解决 Wayland 下系统窗口按钮不可用的问题
                 #[cfg(target_os = "linux")]
@@ -1389,6 +1452,16 @@ pub fn run() {
                     {
                         linux_fix::nudge_main_window(window.clone());
                     }
+                }
+
+                // Tauri's size/show operations can restore the standard
+                // overlapped frame. Apply the fixed borderless region last so
+                // the visible window has no transparent frame or accent edge.
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = window.set_decorations(false);
+                    let _ = window.set_shadow(false);
+                    apply_windows_rounded_corners(&window);
                 }
             }
 
@@ -2309,7 +2382,7 @@ fn classify_exit_request(code: Option<i32>) -> ExitRequestAction {
 // ============================================================
 
 fn window_state_flags() -> StateFlags {
-    StateFlags::POSITION | StateFlags::SIZE | StateFlags::MAXIMIZED
+    StateFlags::POSITION
 }
 
 /// 当前应用的退出路径会拦截 `ExitRequested` 并最终直接 `std::process::exit(0)`，
