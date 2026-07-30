@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Provider } from "@/types";
 import {
   activityStorageKey,
+  buildCodexModelCatalog,
   formatDuration,
   loadOperationRecords,
   resolveCurrentProvider,
@@ -120,5 +121,39 @@ describe("setCodexProviderApiKey", () => {
         "  sk-current  ",
       ),
     ).toEqual({ OPENAI_API_KEY: "sk-current", unrelated: true });
+  });
+});
+
+describe("buildCodexModelCatalog", () => {
+  it("adds the default model when the provider did not return a catalog", () => {
+    expect(buildCodexModelCatalog(" claude-sonnet-5 ", [])).toEqual([
+      { model: "claude-sonnet-5", displayName: "claude-sonnet-5" },
+    ]);
+  });
+
+  it("merges fetched models and preserves a manual display name", () => {
+    expect(
+      buildCodexModelCatalog(
+        "claude-sonnet-5",
+        [
+          {
+            model: "claude-sonnet-5",
+            displayName: "Sonnet 5",
+            contextWindow: "200000",
+          },
+        ],
+        [
+          { id: "claude-opus-5", ownedBy: null },
+          { id: "claude-sonnet-5", ownedBy: null },
+        ],
+      ),
+    ).toEqual([
+      { model: "claude-opus-5", displayName: "claude-opus-5" },
+      {
+        model: "claude-sonnet-5",
+        displayName: "Sonnet 5",
+        contextWindow: "200000",
+      },
+    ]);
   });
 });

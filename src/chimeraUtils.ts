@@ -1,4 +1,5 @@
-import type { Provider } from "@/types";
+import type { CodexCatalogModel, Provider } from "@/types";
+import type { FetchedModel } from "@/lib/api/model-fetch";
 import {
   extractCodexBaseUrl,
   extractCodexModelName,
@@ -155,4 +156,35 @@ export function setCodexProviderApiKey(
   delete auth.ANTHROPIC_API_KEY;
   auth.OPENAI_API_KEY = apiKey.trim();
   return auth;
+}
+
+/** Build a stable Codex catalog from fetched, manually mapped, and default models. */
+export function buildCodexModelCatalog(
+  defaultModel: string,
+  mappedModels: CodexCatalogModel[],
+  fetchedModels: FetchedModel[] = [],
+): CodexCatalogModel[] {
+  const bySlug = new Map<string, CodexCatalogModel>();
+  const add = (entry: CodexCatalogModel, replace: boolean) => {
+    const model = entry.model.trim();
+    if (!model) return;
+    const key = model.toLocaleLowerCase("en-US");
+    if (!replace && bySlug.has(key)) return;
+    bySlug.set(key, {
+      ...entry,
+      model,
+      displayName: entry.displayName?.trim() || model,
+    });
+  };
+
+  fetchedModels.forEach((entry) =>
+    add({ model: entry.id, displayName: entry.id }, false),
+  );
+  mappedModels.forEach((entry) => add(entry, true));
+
+  const normalizedDefault = defaultModel.trim();
+  if (normalizedDefault) {
+    add({ model: normalizedDefault, displayName: normalizedDefault }, false);
+  }
+  return Array.from(bySlug.values());
 }

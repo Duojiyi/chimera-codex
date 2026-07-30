@@ -1505,6 +1505,8 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::get_codex_runtime_status,
+            commands::verify_codex_model_catalog,
+            commands::restart_codex_for_model_catalog,
             commands::open_codex_runtime_directory,
             commands::check_codex_runtime_update,
             commands::diagnose_codex_runtime,
