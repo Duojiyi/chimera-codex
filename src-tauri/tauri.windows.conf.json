@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "",
+        "titleBarStyle": "Overlay",
+        "width": 1440,
+        "height": 960,
+        "visible": false,
+        "minWidth": 1180,
+        "minHeight": 760,
+        "decorations": false,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,70 @@
+name: macOS Test Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - chimera/v2-backend
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chimera-macos-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Universal macOS Test Package
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.12.3
+          run_install: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add macOS targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build universal macOS app
+        run: pnpm tauri build --target universal-apple-darwin --bundles app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Prepare test artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH=$(find src-tauri/target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo 'No universal macOS .app bundle was produced' >&2
+            exit 1
+          fi
+          mkdir -p release-assets
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" \
+            "release-assets/Chimera++-macOS-Universal-Test-${GITHUB_SHA}.zip"
+
+      - name: Upload macOS test package
+        uses: actions/upload-artifact@v7
+        with:
+          name: Chimera++-macOS-Universal-Test-${{ github.sha }}
+          path: release-assets/*.zip
+          if-no-files-found: error
+          retention-days: 7

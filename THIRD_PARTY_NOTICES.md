@@ -1,36 +1,31 @@
-# Third Party Notices
+# Third-Party Notices
 
-## Codex-Dream-Skin
+Chimera++ 2.0 reuses selected components from the following MIT-licensed projects.
+The original license terms and copyright notices are retained below.
 
-Codex++ includes adapted CSS and renderer injection logic from:
+## CC Switch
 
-https://github.com/Fei-Away/Codex-Dream-Skin
+Source: https://github.com/farion1231/cc-switch
 
-Original license:
+Copyright (c) 2025 Jason Young
 
-MIT License
+Licensed under the MIT License. The full license text is in [LICENSE](LICENSE).
 
-Copyright (c) 2026 Codex Dream Skin Studio contributors
+## Codex App Manager
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Source: https://github.com/Wangnov/Codex-App-Manager
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+Copyright (c) 2026 Wangnov
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Licensed under the MIT License. The Windows runtime detection and installation engine is
+used through pinned source dependencies. The full license text is available from the
+upstream repository.
 
-The bundled demo and reference images retain the source project's asset
-notices. The MIT license above does not grant rights to third-party artwork,
-character likenesses, franchise art, or celebrity imagery. Replace those
-images before redistribution when you do not hold the required rights.
+## Codex App Mirror
+
+Source: https://github.com/Wangnov/codex-app-mirror
+
+Copyright (c) 2026 Wangnov
+
+Licensed under the MIT License. Chimera++ maintains an independent fork at
+https://github.com/Duojiyi/codex-app-mirror for release distribution.
