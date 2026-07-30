@@ -8,8 +8,8 @@ use chimera_plus_plus_lib::{
 #[path = "support.rs"]
 mod support;
 use support::{
-    create_test_state, create_test_state_with_config, enable_codex_official_auth_preservation,
-    ensure_test_home, reset_test_fs, test_mutex,
+    create_test_state, create_test_state_with_config, disable_codex_official_auth_preservation,
+    enable_codex_official_auth_preservation, ensure_test_home, reset_test_fs, test_mutex,
 };
 
 fn sanitize_provider_name(name: &str) -> String {
@@ -710,13 +710,13 @@ wire_api = "responses"
 }
 
 #[test]
-fn provider_service_switch_codex_default_overwrites_official_auth_when_preservation_off() {
+fn provider_service_switch_codex_explicit_opt_out_overwrites_official_auth() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
-    // Intentionally do NOT enable preservation: this locks the default opt-out
-    // behavior where switching to a third-party provider rewrites auth.json,
-    // discarding the user's ChatGPT OAuth login. It is the dual of
+    // Explicit opt-out retains the compatibility behavior where switching to
+    // a third-party provider rewrites auth.json. It is the dual of
     // `provider_service_switch_codex_preserves_oauth_and_backfills_api_key_from_live_token`.
+    disable_codex_official_auth_preservation();
     let _home = ensure_test_home();
 
     let live_auth = json!({
@@ -789,11 +789,11 @@ requires_openai_auth = true
     assert_eq!(
         auth_value.get("OPENAI_API_KEY").and_then(|v| v.as_str()),
         Some("third-party-key"),
-        "default (preservation off) should overwrite auth.json with the third-party API key"
+        "explicit opt-out should overwrite auth.json with the third-party API key"
     );
     assert!(
         auth_value.pointer("/tokens/access_token").is_none(),
-        "default switch must clear the official ChatGPT OAuth token from live auth.json"
+        "explicit opt-out must clear the official ChatGPT OAuth token from live auth.json"
     );
 }
 
@@ -865,10 +865,8 @@ requires_openai_auth = true
         Some("chatgpt")
     );
     assert!(
-        auth_value
-            .get("OPENAI_API_KEY")
-            .is_some_and(|v| v.is_null()),
-        "official provider switching should keep OPENAI_API_KEY null"
+        auth_value.get("OPENAI_API_KEY").is_none(),
+        "official provider switching should remove API-key login state"
     );
     assert_eq!(
         auth_value

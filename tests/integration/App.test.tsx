@@ -39,9 +39,7 @@ describe("Chimera++ application shell", () => {
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    expect(
-      screen.getByRole("heading", { name: "保持简单，也保留控制权" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "设置" })).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /^数据与日志/ }),
     ).toBeInTheDocument();

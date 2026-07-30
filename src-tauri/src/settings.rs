@@ -389,7 +389,7 @@ pub struct AppSettings {
     /// Keep Codex ChatGPT login material in auth.json when switching to third-party providers.
     /// Chimera++ migrates existing profiles to this safe mode at startup while
     /// retaining the upstream opt-in setting for isolated library consumers.
-    #[serde(default)]
+    #[serde(default = "default_preserve_codex_official_auth_on_switch")]
     pub preserve_codex_official_auth_on_switch: bool,
     /// Run official Codex providers under the shared "custom" model_provider id
     /// so official sessions share one resume-history bucket with third-party
@@ -528,6 +528,10 @@ fn default_show_profile_switcher() -> bool {
     true
 }
 
+fn default_preserve_codex_official_auth_on_switch() -> bool {
+    true
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -544,7 +548,7 @@ impl Default for AppSettings {
             usage_dashboard_refresh_interval_ms: None,
             enable_failover_toggle: false,
             show_profile_switcher: true,
-            preserve_codex_official_auth_on_switch: false,
+            preserve_codex_official_auth_on_switch: true,
             unify_codex_session_history: false,
             unify_codex_migrate_existing: None,
             failover_confirmed: None,

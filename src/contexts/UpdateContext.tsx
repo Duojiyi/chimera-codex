@@ -16,6 +16,7 @@ interface UpdateContextValue {
   updateInfo: UpdateInfo | null;
   isChecking: boolean;
   error: string | null;
+  lastCheckedAt: number | null;
 
   // 提示状态
   isDismissed: boolean;
@@ -31,6 +32,7 @@ const DEFAULT_UPDATE_CONTEXT: UpdateContextValue = {
   updateInfo: null,
   isChecking: false,
   error: null,
+  lastCheckedAt: null,
   isDismissed: false,
   dismissUpdate: () => undefined,
   checkUpdate: async () => false,
@@ -39,14 +41,21 @@ const DEFAULT_UPDATE_CONTEXT: UpdateContextValue = {
 
 const UpdateContext = createContext<UpdateContextValue>(DEFAULT_UPDATE_CONTEXT);
 
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
 export function UpdateProvider({ children }: { children: React.ReactNode }) {
   const DISMISSED_VERSION_KEY = "ccswitch:update:dismissedVersion";
   const LEGACY_DISMISSED_KEY = "dismissedUpdateVersion"; // 兼容旧键
+  const LAST_CHECKED_KEY = "ccswitch:update:lastCheckedAt";
 
   const [hasUpdate, setHasUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [isChecking, setIsChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastCheckedAt, setLastCheckedAt] = useState<number | null>(() => {
+    const stored = Number(localStorage.getItem(LAST_CHECKED_KEY));
+    return Number.isFinite(stored) && stored > 0 ? stored : null;
+  });
   const [isDismissed, setIsDismissed] = useState(false);
 
   // 从 localStorage 读取已关闭的版本
@@ -95,11 +104,17 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
           }
         }
         setIsDismissed(dismissedVersion === result.info.availableVersion);
+        const checkedAt = Date.now();
+        setLastCheckedAt(checkedAt);
+        localStorage.setItem(LAST_CHECKED_KEY, String(checkedAt));
         return true; // 有更新
       } else {
         setHasUpdate(false);
         setUpdateInfo(null);
         setIsDismissed(false);
+        const checkedAt = Date.now();
+        setLastCheckedAt(checkedAt);
+        localStorage.setItem(LAST_CHECKED_KEY, String(checkedAt));
         return false; // 已是最新
       }
     } catch (err) {
@@ -128,15 +143,31 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     localStorage.removeItem(LEGACY_DISMISSED_KEY);
   }, []);
 
-  // 应用启动时自动检查更新
+  // Check shortly after launch and periodically while the app remains open.
   useEffect(() => {
     if (!isTauri()) return;
-    // 延迟1秒后检查，避免影响启动体验
+    const checkIfDue = () => {
+      if (document.visibilityState !== "visible") return;
+      const stored = Number(localStorage.getItem(LAST_CHECKED_KEY));
+      const lastSuccessfulCheck =
+        Number.isFinite(stored) && stored > 0 ? stored : 0;
+      if (Date.now() - lastSuccessfulCheck >= UPDATE_CHECK_INTERVAL_MS) {
+        checkUpdate().catch(console.error);
+      }
+    };
     const timer = setTimeout(() => {
       checkUpdate().catch(console.error);
     }, 1000);
+    const interval = window.setInterval(checkIfDue, UPDATE_CHECK_INTERVAL_MS);
+    window.addEventListener("focus", checkIfDue);
+    document.addEventListener("visibilitychange", checkIfDue);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      window.clearInterval(interval);
+      window.removeEventListener("focus", checkIfDue);
+      document.removeEventListener("visibilitychange", checkIfDue);
+    };
   }, [checkUpdate]);
 
   const value: UpdateContextValue = {
@@ -144,6 +175,7 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     updateInfo,
     isChecking,
     error,
+    lastCheckedAt,
     isDismissed,
     dismissUpdate,
     checkUpdate,

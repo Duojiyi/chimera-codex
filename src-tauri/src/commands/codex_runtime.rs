@@ -54,6 +54,7 @@ pub struct CodexProcessStatus {
     pub installed: bool,
     pub running: bool,
     pub install_mode: Option<String>,
+    pub official_login_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -136,12 +137,25 @@ fn codex_is_running(installed: &codex_win_engine::InstalledWindowsCodex) -> Resu
         .map_err(|error| format!("无法读取 Codex 进程状态: {error}"))
 }
 
-fn launch_action(was_running: bool) -> &'static str {
-    if was_running {
+fn launch_action(was_running: bool, restarted: bool) -> &'static str {
+    if restarted {
+        "restarted"
+    } else if was_running {
         "opened"
     } else {
         "launched"
     }
+}
+
+fn official_login_available() -> bool {
+    let path = crate::codex_config::get_codex_auth_path();
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(auth) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return false;
+    };
+    crate::codex_config::codex_auth_has_oauth_login_material(&auth)
 }
 
 fn wait_for_codex_running(
@@ -154,6 +168,23 @@ fn wait_for_codex_running(
         std::thread::sleep(Duration::from_millis(250));
     }
     Ok(false)
+}
+
+fn close_codex_for_restart(
+    installed: &codex_win_engine::InstalledWindowsCodex,
+    portable_root: &Path,
+) -> Result<(), String> {
+    if installed.source == "msix" {
+        codex_win_engine::close_msix_codex_processes(30)
+            .map_err(|error| format!("无法关闭 Codex: {error}"))?;
+    } else {
+        codex_win_engine::close_codex_gracefully_for_root(30, portable_root)
+            .map_err(|error| format!("无法关闭 Codex: {error}"))?;
+    }
+    if codex_is_running(installed)? {
+        return Err("Codex 未能完全退出，已取消重启".to_string());
+    }
+    Ok(())
 }
 
 /// Verify that the live Codex config points at Chimera's catalog and contains
@@ -216,15 +247,10 @@ pub async fn restart_codex_for_model_catalog(confirm: bool) -> Result<(), String
     require_windows()?;
     let portable_root = portable_root();
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = acquire_operation_lock("codex_runtime_restart_catalog")?;
         let installed = codex_win_engine::detect_installed_codex(&portable_root)
             .ok_or_else(|| "未检测到 Codex 安装".to_string())?;
-        if installed.source == "msix" {
-            codex_win_engine::close_msix_codex_processes(30)
-                .map_err(|e| format!("无法关闭 Codex: {e}"))?;
-        } else {
-            codex_win_engine::close_codex_gracefully_for_root(30, &portable_root)
-                .map_err(|e| format!("无法关闭 Codex: {e}"))?;
-        }
+        close_codex_for_restart(&installed, &portable_root)?;
         codex_win_engine::launch_codex(&installed).map_err(|e| format!("无法重新启动 Codex: {e}"))
     })
     .await
@@ -242,6 +268,7 @@ pub async fn get_codex_process_status() -> Result<CodexProcessStatus, String> {
             installed: false,
             running: false,
             install_mode: None,
+            official_login_available: official_login_available(),
         });
     }
     let portable_root = portable_root();
@@ -252,6 +279,7 @@ pub async fn get_codex_process_status() -> Result<CodexProcessStatus, String> {
                 installed: false,
                 running: false,
                 install_mode: None,
+                official_login_available: official_login_available(),
             });
         };
         Ok(CodexProcessStatus {
@@ -259,27 +287,34 @@ pub async fn get_codex_process_status() -> Result<CodexProcessStatus, String> {
             installed: true,
             running: codex_is_running(&installed)?,
             install_mode: Some(process_install_mode(&installed.source)),
+            official_login_available: official_login_available(),
         })
     })
     .await
     .map_err(|error| format!("读取 Codex 进程状态时任务中断: {error}"))?
 }
 
-/// Start Codex or ask its existing single-instance process to show its window.
-/// This command never closes a running process.
+/// Start Codex, focus it, or restart the managed installation after a provider
+/// change. Restart is explicit and path-pinned so unrelated installations are
+/// never terminated.
 #[tauri::command]
-pub async fn open_codex_runtime() -> Result<CodexLaunchResult, String> {
+pub async fn open_codex_runtime(restart_if_running: bool) -> Result<CodexLaunchResult, String> {
     require_windows()?;
     let portable_root = portable_root();
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = acquire_operation_lock("codex_runtime_launch")?;
         let installed = codex_win_engine::detect_installed_codex(&portable_root)
             .ok_or_else(|| "未检测到 Codex 安装".to_string())?;
         let was_running = codex_is_running(&installed)?;
+        let restarted = was_running && restart_if_running;
+        if restarted {
+            close_codex_for_restart(&installed, &portable_root)?;
+        }
         if let Err(error) = codex_win_engine::launch_codex(&installed) {
             // Portable Electron exits its second process after handing focus to
             // the existing instance. The manager reports that short-lived child
             // as an error, so accept it only when the same path remains active.
-            if !was_running || !codex_is_running(&installed)? {
+            if !was_running || restarted || !codex_is_running(&installed)? {
                 return Err(format!("无法启动 Codex: {error}"));
             }
         }
@@ -290,7 +325,7 @@ pub async fn open_codex_runtime() -> Result<CodexLaunchResult, String> {
         Ok(CodexLaunchResult {
             was_running,
             running,
-            action: launch_action(was_running),
+            action: launch_action(was_running, restarted),
         })
     })
     .await
@@ -607,8 +642,9 @@ mod tests {
 
     #[test]
     fn launch_action_distinguishes_start_from_open() {
-        assert_eq!(launch_action(false), "launched");
-        assert_eq!(launch_action(true), "opened");
+        assert_eq!(launch_action(false, false), "launched");
+        assert_eq!(launch_action(true, false), "opened");
+        assert_eq!(launch_action(true, true), "restarted");
     }
 
     #[test]
@@ -624,12 +660,14 @@ mod tests {
             installed: true,
             running: false,
             install_mode: Some("portable".to_string()),
+            official_login_available: true,
         };
         let json = serde_json::to_value(status).expect("status serializes");
         assert_eq!(json["installed"], true);
         assert_eq!(json["supported"], true);
         assert_eq!(json["running"], false);
         assert_eq!(json["installMode"], "portable");
+        assert_eq!(json["officialLoginAvailable"], true);
         assert!(json.get("install_mode").is_none());
     }
 

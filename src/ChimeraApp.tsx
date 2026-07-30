@@ -170,11 +170,12 @@ type CodexProcessStatus = {
   installed: boolean;
   running: boolean;
   installMode?: string | null;
+  officialLoginAvailable: boolean;
 };
 type CodexLaunchResult = {
   wasRunning: boolean;
   running: boolean;
-  action: "launched" | "opened";
+  action: "launched" | "opened" | "restarted";
 };
 type ReleaseStatus = {
   currentVersion?: string | null;
@@ -299,7 +300,6 @@ function providerDraft(provider?: Provider | null, suggestedName?: string) {
 }
 
 export default function ChimeraApp() {
-  const { hasUpdate, updateInfo, isDismissed, dismissUpdate } = useUpdate();
   const [view, setView] = useState<View>("providers");
   const [providers, setProviders] = useState<Provider[]>([]);
   const [currentId, setCurrentId] = useState("");
@@ -312,6 +312,7 @@ export default function ChimeraApp() {
     null,
   );
   const [launchingCodex, setLaunchingCodex] = useState(false);
+  const [codexRestartRequired, setCodexRestartRequired] = useState(false);
   const [release, setRelease] = useState<ReleaseStatus | null>(null);
   const [editor, setEditor] = useState<ReturnType<typeof providerDraft> | null>(
     null,
@@ -341,7 +342,6 @@ export default function ChimeraApp() {
   const [diagnostics, setDiagnostics] = useState<Diagnostic[] | null>(null);
   const [downloadProgress, setDownloadProgress] =
     useState<DownloadProgress | null>(null);
-  const [installingAppUpdate, setInstallingAppUpdate] = useState(false);
   const [pendingProviderDelete, setPendingProviderDelete] =
     useState<Provider | null>(null);
   const [pendingModelReload, setPendingModelReload] = useState<string | null>(
@@ -431,27 +431,34 @@ export default function ChimeraApp() {
 
   const loadCodexProcess = useCallback(async () => {
     if (!runningInTauri) {
-      setCodexProcess({
+      const status: CodexProcessStatus = {
         supported: true,
         installed: true,
         running: false,
         installMode: "standard",
-      });
-      return;
+        officialLoginAvailable: false,
+      };
+      setCodexProcess(status);
+      return status;
     }
     try {
-      setCodexProcess(
-        await invoke<CodexProcessStatus>("get_codex_process_status"),
+      const status = await invoke<CodexProcessStatus>(
+        "get_codex_process_status",
       );
+      setCodexProcess(status);
+      return status;
     } catch {
       // Unsupported platforms return a structured status. A rejected probe
       // therefore means a supported installation could not be detected.
-      setCodexProcess({
+      const status: CodexProcessStatus = {
         supported: true,
         installed: false,
         running: false,
         installMode: null,
-      });
+        officialLoginAvailable: false,
+      };
+      setCodexProcess(status);
+      return status;
     }
   }, []);
 
@@ -471,13 +478,24 @@ export default function ChimeraApp() {
           installed: true,
           running: true,
           installMode: current?.installMode ?? "standard",
+          officialLoginAvailable: current?.officialLoginAvailable ?? false,
         }));
+        setCodexRestartRequired(false);
         toast.success("Codex 已启动");
         return;
       }
-      const result = await invoke<CodexLaunchResult>("open_codex_runtime");
+      const result = await invoke<CodexLaunchResult>("open_codex_runtime", {
+        restartIfRunning: codexRestartRequired,
+      });
       await loadCodexProcess();
-      toast.success(result.wasRunning ? "已打开 Codex" : "Codex 已启动");
+      setCodexRestartRequired(false);
+      toast.success(
+        result.action === "restarted"
+          ? "Codex 已重启"
+          : result.wasRunning
+            ? "已打开 Codex"
+            : "Codex 已启动",
+      );
     } catch (error) {
       toast.error("无法启动 Codex", { description: String(error) });
       await loadCodexProcess();
@@ -599,7 +617,11 @@ export default function ChimeraApp() {
       selectedProvider?.category === "official";
     try {
       await providersApi.switch(id, "codex");
-      await loadProviders();
+      const [, latestProcess] = await Promise.all([
+        loadProviders(),
+        loadCodexProcess(),
+      ]);
+      setCodexRestartRequired(true);
       note(
         "切换线路",
         "success",
@@ -611,8 +633,12 @@ export default function ChimeraApp() {
       );
       toast.success(isOfficial ? "已切回官方账户" : "已应用到 Codex", {
         description: isOfficial
-          ? "打开 Codex 即可继续使用 ChatGPT 官方账户"
-          : undefined,
+          ? latestProcess.running
+            ? "请重启 Codex 以载入官方登录配置"
+            : "启动 Codex 即可继续使用 ChatGPT 官方账户"
+          : latestProcess.running
+            ? "请重启 Codex 以载入新线路"
+            : undefined,
       });
     } catch (error) {
       note(
@@ -1005,31 +1031,6 @@ export default function ChimeraApp() {
             <WindowControls />
           </div>
         </header>
-        {hasUpdate && updateInfo && !isDismissed && (
-          <div className="app-update-notice" role="status">
-            <RefreshCw size={16} />
-            <div>
-              <b>Chimera++ {updateInfo.availableVersion} 可用</b>
-              <span>已通过签名验证，安装后将自动重启。</span>
-            </div>
-            <button onClick={dismissUpdate} disabled={installingAppUpdate}>
-              稍后
-            </button>
-            <button
-              className="primary"
-              disabled={installingAppUpdate}
-              onClick={() => {
-                setInstallingAppUpdate(true);
-                void settingsApi.installUpdateAndRestart().catch((reason) => {
-                  setInstallingAppUpdate(false);
-                  toast.error("应用更新失败", { description: String(reason) });
-                });
-              }}
-            >
-              {installingAppUpdate ? "正在更新…" : "立即更新"}
-            </button>
-          </div>
-        )}
         {view === "providers" && (
           <h1 className="sr-only">
             {editor
@@ -1051,6 +1052,7 @@ export default function ChimeraApp() {
               loading={loading}
               codexProcess={codexProcess}
               launchingCodex={launchingCodex}
+              restartRequired={codexRestartRequired}
               onOpenCodex={openCodex}
               onSwitch={switchProvider}
               onEdit={(provider) => {
@@ -1798,6 +1800,7 @@ function NewProvidersView({
   loading,
   codexProcess,
   launchingCodex,
+  restartRequired,
   onOpenCodex,
   onSwitch,
   onEdit,
@@ -1810,6 +1813,7 @@ function NewProvidersView({
   loading: boolean;
   codexProcess: CodexProcessStatus | null;
   launchingCodex: boolean;
+  restartRequired: boolean;
   onOpenCodex: () => Promise<void>;
   onSwitch: (id: string) => Promise<void>;
   onEdit: (provider: Provider) => void;
@@ -1828,6 +1832,10 @@ function NewProvidersView({
   if (!providers.length) return <Onboarding onAdd={onAdd} />;
   const current =
     providers.find((provider) => provider.id === currentId) ?? providers[0];
+  const currentIsOfficial =
+    current.id === "codex-official" || current.category === "official";
+  const officialLoginRequired =
+    currentIsOfficial && codexProcess?.officialLoginAvailable === false;
   const model =
     extractCodexModelName(String(current.settingsConfig?.config ?? "")) ||
     "未设置";
@@ -1917,9 +1925,11 @@ function NewProvidersView({
         ? "macOS 暂不支持快速启动"
         : !codexProcess.installed
           ? "未检测到 Codex"
-          : codexProcess.running
-            ? "Codex 正在运行"
-            : "Codex 已就绪";
+          : officialLoginRequired
+            ? "官方账户需要登录"
+            : codexProcess.running
+              ? "Codex 正在运行"
+              : "Codex 已就绪";
   const codexButtonLabel = launchingCodex
     ? "正在启动…"
     : codexProcess === null
@@ -1928,9 +1938,15 @@ function NewProvidersView({
         ? "仅 Windows 支持"
         : codexProcess?.installed === false
           ? "尚未安装"
-          : codexProcess?.running
-            ? "打开 Codex"
-            : "启动 Codex";
+          : restartRequired && codexProcess?.running
+            ? officialLoginRequired
+              ? "重启并登录"
+              : "重启 Codex"
+            : officialLoginRequired
+              ? "启动并登录"
+              : codexProcess?.running
+                ? "打开 Codex"
+                : "启动 Codex";
   return (
     <section className="route-gate-view route-gate-reference">
       <div className="route-map" aria-label="当前 Codex 连接状态">
@@ -3579,9 +3595,19 @@ function AppearanceView({
   );
 }
 
-function NewSettingsView() {
+export function NewSettingsView() {
+  const {
+    hasUpdate,
+    updateInfo,
+    isChecking,
+    error: updateError,
+    lastCheckedAt,
+    checkUpdate,
+  } = useUpdate();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [appVersion, setAppVersion] = useState("正在读取版本");
+  const [updateDetailsOpen, setUpdateDetailsOpen] = useState(false);
+  const [installingAppUpdate, setInstallingAppUpdate] = useState(false);
   useEffect(() => {
     if (!runningInTauri) {
       setSettings({
@@ -3627,10 +3653,56 @@ function NewSettingsView() {
       toast.error("无法打开数据目录", { description: String(reason) });
     }
   };
+  const checkAppUpdate = async () => {
+    try {
+      const available = await checkUpdate();
+      setUpdateDetailsOpen(available);
+    } catch (reason) {
+      toast.error("检查应用更新失败", { description: String(reason) });
+    }
+  };
+  const installAppUpdate = async () => {
+    setInstallingAppUpdate(true);
+    try {
+      const installed = await settingsApi.installUpdateAndRestart();
+      if (!installed) {
+        setUpdateDetailsOpen(false);
+        toast.info("该更新已不可用", { description: "正在重新检查更新" });
+        await checkUpdate();
+      }
+    } catch (reason) {
+      toast.error("应用更新失败", { description: String(reason) });
+    } finally {
+      setInstallingAppUpdate(false);
+    }
+  };
+  const lastCheckedLabel = lastCheckedAt
+    ? new Intl.DateTimeFormat("zh-CN", {
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(lastCheckedAt)
+    : null;
+  const appUpdateTitle = isChecking
+    ? "正在检查更新"
+    : hasUpdate && updateInfo
+      ? `发现 Chimera++ ${updateInfo.availableVersion}`
+      : updateError
+        ? "检查更新失败"
+        : lastCheckedAt
+          ? "已是最新版本"
+          : `Chimera++ ${appVersion}`;
+  const appUpdateDescription = isChecking
+    ? "正在连接稳定版更新源"
+    : hasUpdate
+      ? "已检测到新版本，安装时将验证签名"
+      : updateError
+        ? updateError
+        : lastCheckedLabel
+          ? `Chimera++ ${appVersion} · 上次检查 ${lastCheckedLabel}`
+          : "自动检测已开启，也可以随时手动检查";
   return (
     <section className="new-settings-view">
-      <span className="eyebrow">设置</span>
-      <h1>保持简单，也保留控制权</h1>
+      <h1>设置</h1>
       <div className="settings-reference-list">
         <button
           className="settings-reference-row"
@@ -3712,6 +3784,88 @@ function NewSettingsView() {
           </span>
           <FolderOpen size={16} aria-hidden="true" />
         </button>
+        <div
+          className={`settings-app-update${hasUpdate ? " is-available" : ""}${updateError ? " is-error" : ""}`}
+          aria-live="polite"
+        >
+          <div className="settings-app-update-row">
+            <span className="settings-app-update-icon" aria-hidden="true">
+              {isChecking ? (
+                <LoaderCircle className="spin" size={15} />
+              ) : hasUpdate ? (
+                <Download size={15} />
+              ) : lastCheckedAt && !updateError ? (
+                <CircleCheck size={15} />
+              ) : updateError ? (
+                <CircleAlert size={15} />
+              ) : (
+                <RefreshCw size={15} />
+              )}
+            </span>
+            <span className="settings-app-update-copy">
+              <b>{appUpdateTitle}</b>
+              <small>{appUpdateDescription}</small>
+            </span>
+            <button
+              className={hasUpdate ? "primary" : "secondary"}
+              disabled={isChecking}
+              aria-expanded={hasUpdate ? updateDetailsOpen : undefined}
+              aria-controls={
+                hasUpdate ? "settings-app-update-details" : undefined
+              }
+              onClick={() => {
+                if (hasUpdate) {
+                  setUpdateDetailsOpen((open) => !open);
+                } else {
+                  void checkAppUpdate();
+                }
+              }}
+            >
+              {isChecking ? (
+                <LoaderCircle className="spin" size={14} />
+              ) : hasUpdate ? (
+                <Download size={14} />
+              ) : (
+                <RefreshCw size={14} />
+              )}
+              {isChecking
+                ? "正在检查…"
+                : hasUpdate
+                  ? "查看更新"
+                  : lastCheckedAt
+                    ? "重新检查"
+                    : "检查更新"}
+            </button>
+          </div>
+          {hasUpdate && updateInfo && updateDetailsOpen && (
+            <div
+              id="settings-app-update-details"
+              className="settings-app-update-details"
+            >
+              <span>
+                <b>
+                  {updateInfo.currentVersion} → {updateInfo.availableVersion}
+                </b>
+                <small>
+                  {updateInfo.notes?.trim() ||
+                    "安装期间 Chimera++ 将重新启动，正在运行的 Codex 任务不会被关闭。"}
+                </small>
+              </span>
+              <button
+                className="primary"
+                disabled={installingAppUpdate}
+                onClick={() => void installAppUpdate()}
+              >
+                {installingAppUpdate ? (
+                  <LoaderCircle className="spin" size={14} />
+                ) : (
+                  <Download size={14} />
+                )}
+                {installingAppUpdate ? "正在更新…" : "立即更新"}
+              </button>
+            </div>
+          )}
+        </div>
       </div>
       <footer className="settings-reference-footer">
         <code>Chimera++ {appVersion}</code>

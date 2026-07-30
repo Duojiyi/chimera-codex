@@ -397,24 +397,36 @@ pub fn codex_auth_has_login_material(auth: &Value) -> bool {
     })
 }
 
-pub fn codex_auth_has_oauth_login_material(auth: &Value) -> bool {
-    let Some(obj) = auth.as_object() else {
-        return false;
+fn prepare_codex_official_auth(stored_auth: &Value, live_auth: &Value) -> Value {
+    let mut official_auth = if codex_auth_has_oauth_login_material(stored_auth) {
+        stored_auth.clone()
+    } else {
+        live_auth.clone()
     };
+    if !official_auth.is_object() {
+        official_auth = json!({});
+    }
+    if let Some(object) = official_auth.as_object_mut() {
+        object.remove("OPENAI_API_KEY");
+        object.insert(
+            "auth_mode".to_string(),
+            Value::String("chatgpt".to_string()),
+        );
+    }
+    official_auth
+}
 
-    obj.iter().any(|(key, value)| {
-        if key == "auth_mode" || key == "OPENAI_API_KEY" {
-            return false;
-        }
-
-        match value {
-            Value::Null => false,
-            Value::String(text) => !text.trim().is_empty(),
-            Value::Array(items) => !items.is_empty(),
-            Value::Object(map) => !map.is_empty(),
-            _ => true,
-        }
-    })
+pub fn codex_auth_has_oauth_login_material(auth: &Value) -> bool {
+    let is_chatgpt = auth
+        .get("auth_mode")
+        .and_then(Value::as_str)
+        .is_some_and(|mode| mode == "chatgpt");
+    is_chatgpt
+        && auth
+            .pointer("/tokens/access_token")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|token| !token.is_empty())
 }
 
 pub fn should_restore_codex_provider_token_for_backfill(
@@ -1798,9 +1810,18 @@ pub fn write_codex_live_for_provider(
         };
     let config_text = unified_official_config.as_deref().or(config_text);
 
-    let should_write_auth = (category == Some("official") && codex_auth_has_login_material(auth))
-        || (category != Some("official")
-            && !crate::settings::preserve_codex_official_auth_on_switch());
+    if category == Some("official") {
+        let auth_path = get_codex_auth_path();
+        let live_auth = if auth_path.exists() {
+            read_json_file(&auth_path)?
+        } else {
+            json!({})
+        };
+        let official_auth = prepare_codex_official_auth(auth, &live_auth);
+        return write_codex_live_atomic(&official_auth, config_text);
+    }
+
+    let should_write_auth = !crate::settings::preserve_codex_official_auth_on_switch();
 
     if should_write_auth {
         write_codex_live_atomic(auth, config_text)
@@ -2001,6 +2022,57 @@ pub fn remove_codex_toml_base_url_if(toml_str: &str, predicate: impl Fn(&str) ->
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn official_auth_keeps_oauth_and_removes_api_login_mode() {
+        let stored = json!({});
+        let live = json!({
+            "auth_mode": "apikey",
+            "OPENAI_API_KEY": "third-party-key",
+            "tokens": {
+                "access_token": "oauth-access",
+                "refresh_token": "oauth-refresh"
+            }
+        });
+
+        let prepared = prepare_codex_official_auth(&stored, &live);
+        assert_eq!(prepared["auth_mode"], "chatgpt");
+        assert_eq!(prepared["tokens"]["access_token"], "oauth-access");
+        assert!(prepared.get("OPENAI_API_KEY").is_none());
+    }
+
+    #[test]
+    fn official_auth_without_oauth_forces_login_instead_of_reusing_api_key() {
+        let prepared = prepare_codex_official_auth(
+            &json!({}),
+            &json!({ "auth_mode": "apikey", "OPENAI_API_KEY": "stale-key" }),
+        );
+
+        assert_eq!(prepared, json!({ "auth_mode": "chatgpt" }));
+        assert!(!codex_auth_has_oauth_login_material(&prepared));
+    }
+
+    #[test]
+    fn official_auth_ignores_incomplete_stored_metadata_and_keeps_live_oauth() {
+        let stored = json!({
+            "auth_mode": "chatgpt",
+            "last_refresh": "2026-07-01T00:00:00Z",
+            "tokens": { "account_id": "stale-account" }
+        });
+        let live = json!({
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "access_token": "live-access",
+                "refresh_token": "live-refresh"
+            }
+        });
+
+        let prepared = prepare_codex_official_auth(&stored, &live);
+
+        assert_eq!(prepared["tokens"]["access_token"], "live-access");
+        assert_eq!(prepared["tokens"]["refresh_token"], "live-refresh");
+        assert!(!codex_auth_has_oauth_login_material(&stored));
+    }
 
     #[test]
     fn catalog_tool_profile_from_api_format() {
