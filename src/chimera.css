@@ -1744,39 +1744,6 @@ button:disabled {
   background: #fff3e6;
   color: #a04d00;
 }
-.app-update-notice {
-  min-height: 56px;
-  margin-bottom: 16px;
-  padding: 9px 12px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border: 1px solid #c9e6da;
-  border-radius: 8px;
-  background: #edf8f3;
-  color: var(--success);
-}
-.app-update-notice > div {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-  flex: 1;
-  color: var(--ink);
-}
-.app-update-notice b {
-  font-size: 12px;
-}
-.app-update-notice span {
-  font-size: 10px;
-  color: var(--muted);
-}
-.app-update-notice > button:not(.primary) {
-  height: 34px;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font-size: 11px;
-}
 .connection-banner.is-warning em {
   color: #a04d00;
 }
@@ -2563,9 +2530,6 @@ select:focus-visible {
   padding: 14px 26px 26px;
   background: #fff;
 }
-.app-update-notice {
-  margin: 0 0 12px;
-}
 .runtime-reference-view {
   max-width: 920px;
   min-height: 100%;
@@ -2784,7 +2748,7 @@ select:focus-visible {
   margin: 0 auto;
 }
 .new-settings-view > h1 {
-  margin: 8px 0 20px;
+  margin: 4px 0 20px;
   font-size: 23px;
 }
 .settings-reference-list {
@@ -2864,6 +2828,81 @@ select:focus-visible {
 }
 .settings-link-row {
   cursor: pointer;
+}
+.settings-app-update {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+}
+.settings-app-update-row,
+.settings-app-update-details {
+  min-height: 68px;
+  padding: 11px 16px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+.settings-app-update-icon {
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #eef8f4;
+  color: var(--success);
+}
+.settings-app-update.is-available .settings-app-update-icon {
+  background: #fff0ec;
+  color: var(--accent);
+}
+.settings-app-update.is-error .settings-app-update-icon {
+  background: #fff1ef;
+  color: #c53d2d;
+}
+.settings-app-update-copy,
+.settings-app-update-details > span {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 4px;
+}
+.settings-app-update-copy b,
+.settings-app-update-details b {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-app-update-copy small,
+.settings-app-update-details small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.settings-app-update-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-app-update-details small {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.settings-app-update-row > button,
+.settings-app-update-details > button {
+  flex: 0 0 118px;
+  width: 118px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+.settings-app-update-details {
+  border-top: 1px solid #edf0f2;
+  background: #fbfcfd;
 }
 .settings-reference-footer {
   display: flex;
