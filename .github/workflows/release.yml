@@ -184,94 +184,27 @@ jobs:
           fi
           echo "✅ Tauri signing key prepared"
 
-      - name: Import Apple signing certificate
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          for required in \
-            APPLE_CERTIFICATE \
-            APPLE_CERTIFICATE_PASSWORD \
-            KEYCHAIN_PASSWORD \
-            APPLE_ID \
-            APPLE_PASSWORD \
-            APPLE_TEAM_ID; do
-            if [ -z "${!required:-}" ]; then
-              echo "Missing required macOS release secret: $required" >&2
-              exit 1
-            fi
-          done
-
-          # Decode .p12 certificate from base64
-          CERT_PATH="$RUNNER_TEMP/certificate.p12"
-          printf '%s' "$APPLE_CERTIFICATE" | (base64 --decode 2>/dev/null || base64 -D) > "$CERT_PATH"
-
-          # Save original default keychain for cleanup
-          ORIGINAL_DEFAULT_KEYCHAIN=$(security default-keychain -d user | tr -d '"' | xargs)
-          echo "ORIGINAL_DEFAULT_KEYCHAIN=$ORIGINAL_DEFAULT_KEYCHAIN" >> "$GITHUB_ENV"
-
-          # Create temporary keychain
-          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security default-keychain -s "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Import certificate
-          security import "$CERT_PATH" \
-            -k "$KEYCHAIN_PATH" \
-            -P "$APPLE_CERTIFICATE_PASSWORD" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Dynamically resolve signing identity (must be "Developer ID Application")
-          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
-            | grep "Developer ID Application" | grep -oE '"[^"]+"' | head -1 | tr -d '"')
-          if [ -z "$IDENTITY" ]; then
-            echo "❌ No 'Developer ID Application' identity found — listing all identities:" >&2
-            security find-identity -v -p codesigning "$KEYCHAIN_PATH"
-            exit 1
-          fi
-          echo "✅ Signing identity: $IDENTITY"
-          echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
-
-          # Cleanup certificate file
-          rm -f "$CERT_PATH"
-
       - name: Build Tauri App (macOS)
         if: runner.os == 'macOS'
         shell: bash
         timeout-minutes: 60
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           max_attempts=3
           for attempt in $(seq 1 "$max_attempts"); do
-            echo "=== macOS build/notarization attempt ${attempt}/${max_attempts} ==="
+            echo "=== unsigned macOS build attempt ${attempt}/${max_attempts} ==="
             if pnpm tauri build --target universal-apple-darwin; then
-              echo "✅ macOS build/notarization succeeded"
+              echo "✅ unsigned macOS build succeeded"
               exit 0
             fi
 
             if [ "$attempt" -eq "$max_attempts" ]; then
-              echo "❌ macOS build/notarization failed after ${max_attempts} attempts" >&2
+              echo "❌ unsigned macOS build failed after ${max_attempts} attempts" >&2
               exit 1
             fi
 
             sleep_seconds=$((attempt * 60))
-            echo "⚠️ macOS build/notarization failed, retrying in ${sleep_seconds}s..."
+            echo "⚠️ unsigned macOS build failed, retrying in ${sleep_seconds}s..."
             sleep "$sleep_seconds"
           done
 
@@ -322,10 +255,6 @@ jobs:
             exit 1
           fi
 
-          # Staple notarization ticket to .app (Tauri already notarized it)
-          xcrun stapler staple "$APP_PATH"
-          echo "✅ .app stapled"
-
           # 1) Collect .tar.gz (updater artifact)
           NEW_TAR_GZ="Chimera++-${VERSION}-macOS.tar.gz"
           cp "$TAR_GZ" "release-assets/$NEW_TAR_GZ"
@@ -341,12 +270,7 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "release-assets/$NEW_ZIP"
           echo "macOS zip ready: $NEW_ZIP"
 
-          # 3) Create styled DMG with create-dmg (Tauri's built-in DMG styling doesn't work on CI)
-          if [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
-            echo "❌ APPLE_SIGNING_IDENTITY is missing before DMG creation" >&2
-            exit 1
-          fi
-
+          # 3) Create an unsigned styled DMG for manual installation.
           HOMEBREW_NO_AUTO_UPDATE=1 brew install create-dmg
           NEW_DMG="Chimera++-${VERSION}-macOS.dmg"
           DMG_STAGE_DIR="$RUNNER_TEMP/dmg-stage"
@@ -363,100 +287,24 @@ jobs:
             --icon "Chimera++.app" 180 220 \
             --hide-extension "Chimera++.app" \
             --app-drop-link 480 220 \
-            --codesign "$APPLE_SIGNING_IDENTITY" \
             --no-internet-enable \
             "release-assets/$NEW_DMG" \
             "$DMG_STAGE_DIR"
 
           rm -rf "$DMG_STAGE_DIR"
-          echo "✅ Styled DMG created: $NEW_DMG"
+          echo "✅ Unsigned styled DMG created: $NEW_DMG"
 
-      - name: Notarize macOS DMG
-        if: runner.os == 'macOS'
-        shell: bash
-        timeout-minutes: 30
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-
-          DMG_PATH=$(find release-assets -maxdepth 1 -name "*.dmg" -type f | head -1 || true)
-          if [ -z "$DMG_PATH" ]; then
-            echo "❌ No .dmg found in release-assets/ to notarize" >&2
-            exit 1
-          fi
-
-          echo "=== Notarizing DMG: $DMG_PATH ==="
-          max_attempts=3
-          for attempt in $(seq 1 "$max_attempts"); do
-            echo "=== DMG notarization attempt ${attempt}/${max_attempts} ==="
-            if xcrun notarytool submit "$DMG_PATH" \
-              --apple-id "$APPLE_ID" \
-              --password "$APPLE_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID" \
-              --wait; then
-              echo "✅ DMG notarization succeeded"
-              xcrun stapler staple "$DMG_PATH"
-              echo "✅ DMG stapled"
-              break
-            fi
-
-            if [ "$attempt" -eq "$max_attempts" ]; then
-              echo "❌ DMG notarization failed after ${max_attempts} attempts" >&2
-              exit 1
-            fi
-
-            sleep_seconds=$((attempt * 60))
-            echo "⚠️ DMG notarization failed, retrying in ${sleep_seconds}s..."
-            sleep "$sleep_seconds"
-          done
-
-      - name: Verify macOS code signing and notarization
+      - name: Verify unsigned macOS assets
         if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
-
-          # Verify .app (from Tauri bundle)
-          APP_PATH=""
-          for path in \
-            "src-tauri/target/universal-apple-darwin/release/bundle/macos" \
-            "src-tauri/target/aarch64-apple-darwin/release/bundle/macos" \
-            "src-tauri/target/x86_64-apple-darwin/release/bundle/macos" \
-            "src-tauri/target/release/bundle/macos"; do
-            if [ -d "$path" ]; then
-              [ -z "$APP_PATH" ] && APP_PATH=$(find "$path" -maxdepth 1 -name "*.app" -type d | head -1 || true)
-            fi
-          done
-
-          if [ -z "$APP_PATH" ]; then
-            echo "❌ No .app found for verification" >&2
-            exit 1
-          fi
-          echo "=== Verifying .app: $APP_PATH ==="
-          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-          echo "✅ codesign verification passed"
-          spctl -a -t exec -vv "$APP_PATH"
-          echo "✅ spctl assessment passed"
-          xcrun stapler validate "$APP_PATH"
-          echo "✅ .app stapler validation passed"
-
-          # Verify .dmg (from release-assets/, created by create-dmg + notarized)
-          DMG_PATH=$(find release-assets -maxdepth 1 -name "*.dmg" -type f | head -1 || true)
-          if [ -n "$DMG_PATH" ]; then
-            echo "=== Verifying .dmg: $DMG_PATH ==="
-            codesign --verify --verbose=2 "$DMG_PATH"
-            echo "✅ .dmg codesign verification passed"
-            spctl -a -t open --context context:primary-signature -vv "$DMG_PATH"
-            echo "✅ .dmg spctl assessment passed"
-            xcrun stapler validate "$DMG_PATH"
-            echo "✅ .dmg stapler validation passed"
-          else
-            echo "❌ No .dmg found for verification — release would ship without verified DMG" >&2
-            exit 1
-          fi
+          test -s release-assets/Chimera++-${GITHUB_REF_NAME}-macOS.tar.gz
+          test -s release-assets/Chimera++-${GITHUB_REF_NAME}-macOS.tar.gz.sig
+          test -s release-assets/Chimera++-${GITHUB_REF_NAME}-macOS.zip
+          test -s release-assets/Chimera++-${GITHUB_REF_NAME}-macOS.dmg
+          hdiutil verify release-assets/Chimera++-${GITHUB_REF_NAME}-macOS.dmg
+          echo "✅ Unsigned macOS assets and updater signature are present"
 
       - name: Prepare Windows Assets
         if: runner.os == 'Windows'
@@ -633,17 +481,6 @@ jobs:
           echo "Listing bundles in src-tauri/target..."
           find src-tauri/target -maxdepth 4 -type f -name "*.*" 2>/dev/null || true
 
-      - name: Clean up Apple signing keychain
-        if: runner.os == 'macOS' && always()
-        shell: bash
-        run: |
-          if [ -n "${ORIGINAL_DEFAULT_KEYCHAIN:-}" ]; then
-            security default-keychain -s "$ORIGINAL_DEFAULT_KEYCHAIN" || true
-          fi
-          if [ -f "$RUNNER_TEMP/build.keychain-db" ]; then
-            security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
-          fi
-
   publish-release:
     name: Publish GitHub Release
     runs-on: ubuntu-22.04
@@ -682,7 +519,7 @@ jobs:
             - **Windows (ARM64)**: `Chimera++-${{ github.ref_name }}-Windows-arm64.msi`（安装版）或 `Chimera++-${{ github.ref_name }}-Windows-arm64-Portable.zip`（绿色版）
             - **macOS (Universal)**: `Chimera++-${{ github.ref_name }}-macOS.dmg`（推荐）或 `Chimera++-${{ github.ref_name }}-macOS.zip`，同时支持 Intel 与 Apple Silicon
 
-            Windows 绿色版已内置经 SHA-256 校验的 Codex 桌面本体；macOS 版本已进行 Developer ID 签名和 Apple 公证。`.sig` 和 `latest.json` 供应用内自动更新验证使用。`ChimeraPlusPlus-*-windows-x64-setup.exe` 是供 Chimera++ 1.x 自动升级到 2.0 使用的兼容安装器。
+            Windows 绿色版已内置经 SHA-256 校验的 Codex 桌面本体。macOS 版本未进行 Apple Developer ID 签名和公证；首次打开如被 Gatekeeper 阻止，请在 Finder 中右键应用并选择“打开”，或自行完成签名。`.sig` 是独立的 Tauri 应用内更新签名，`latest.json` 供自动更新使用。`ChimeraPlusPlus-*-windows-x64-setup.exe` 是供 Chimera++ 1.x 自动升级到 2.0 使用的兼容安装器。
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

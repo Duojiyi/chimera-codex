@@ -859,6 +859,20 @@ button:disabled {
 .advanced-section-heading b {
   font-size: 12px;
 }
+.experimental-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  margin-left: 8px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #fff3db;
+  color: #805314;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 650;
+  vertical-align: 1px;
+}
 .toggle-field input[type="checkbox"] {
   width: 34px;
   height: 18px;
@@ -3956,6 +3970,55 @@ select:focus-visible {
 .advanced-options .toggle-field input[type="checkbox"]:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+.advanced-options .toggle-field input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.codex-feature-options {
+  gap: 0;
+}
+.codex-feature-options .advanced-section-heading {
+  margin-bottom: 4px;
+}
+.codex-feature-options .toggle-field + .toggle-field {
+  border-top: 1px solid #e6eaed;
+}
+.common-config-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  border-top: 1px solid #e6eaed;
+  color: var(--muted);
+  font-size: 11px;
+}
+.common-config-actions .link-button:disabled {
+  cursor: not-allowed;
+  color: var(--muted);
+  opacity: 0.55;
+}
+.common-config-editor {
+  margin-top: 8px;
+}
+.common-config-editor textarea {
+  width: 100%;
+  min-height: 132px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 10px;
+  background: #fff;
+  color: var(--ink);
+  font:
+    11px/1.55 "Cascadia Mono",
+    Consolas,
+    monospace;
+}
+.common-config-editor textarea:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
 }
 .advanced-group.model-mapping {
   gap: 10px;

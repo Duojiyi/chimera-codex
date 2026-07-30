@@ -50,6 +50,7 @@ import type {
 } from "@/types";
 import { providersApi } from "@/lib/api/providers";
 import { settingsApi } from "@/lib/api/settings";
+import { configApi } from "@/lib/api";
 import { vscodeApi } from "@/lib/api/vscode";
 import { usageApi } from "@/lib/api/usage";
 import { getCurrentVersion } from "@/lib/updater";
@@ -66,8 +67,12 @@ import { getChimeraHubTemplate } from "@/config/codexTemplates";
 import {
   extractCodexBaseUrl,
   extractCodexModelName,
+  isCodexGoalModeEnabled,
+  isCodexRemoteCompactionEnabled,
   setCodexBaseUrl,
+  setCodexGoalMode,
   setCodexModelName,
+  setCodexRemoteCompaction,
 } from "@/utils/providerConfigUtils";
 import { generateUUID } from "@/utils/uuid";
 import {
@@ -271,6 +276,9 @@ function providerDraft(provider?: Provider | null, suggestedName?: string) {
       typeof meta.customUserAgent === "string" ? meta.customUserAgent : "",
     promptCacheRouting: meta.promptCacheRouting ?? "auto",
     codexChatReasoning: meta.codexChatReasoning ?? {},
+    goalModeEnabled: isCodexGoalModeEnabled(config),
+    remoteCompactionEnabled: isCodexRemoteCompactionEnabled(config),
+    commonConfigEnabled: meta.commonConfigEnabled === true,
     catalogModels: catalogModels as CodexCatalogModel[],
     original: provider ?? null,
   };
@@ -292,6 +300,10 @@ export default function ChimeraApp() {
   );
   const [models, setModels] = useState<FetchedModel[] | null>(null);
   const [modelFetchError, setModelFetchError] = useState<string | null>(null);
+  const [commonConfigSnippet, setCommonConfigSnippet] = useState("");
+  const [commonConfigLoading, setCommonConfigLoading] = useState(false);
+  const [commonConfigLoaded, setCommonConfigLoaded] = useState(false);
+  const [commonConfigDirty, setCommonConfigDirty] = useState(false);
   const [fetchingModels, setFetchingModels] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [pendingAction, setPendingAction] = useState<RuntimeAction | null>(
@@ -577,9 +589,15 @@ export default function ChimeraApp() {
       toast.error("请填写线路名称、API 请求地址和 API Key");
       return;
     }
-    const config = setCodexModelName(
+    let config = setCodexModelName(
       setCodexBaseUrl(editor.config, editor.baseUrl),
       editor.model,
+    );
+    config = setCodexGoalMode(config, editor.goalModeEnabled);
+    config = setCodexRemoteCompaction(
+      config,
+      editor.remoteCompactionEnabled,
+      editor.name.trim(),
     );
     const auth = setCodexProviderApiKey(editor.auth, editor.apiKey);
     const catalogModels = editor.catalogModels.filter((item) =>
@@ -620,6 +638,7 @@ export default function ChimeraApp() {
             editor.codexChatReasoning.supportsEffort)
             ? editor.codexChatReasoning
             : undefined,
+        commonConfigEnabled: editor.commonConfigEnabled,
       },
       settingsConfig: {
         ...editor.original?.settingsConfig,
@@ -643,6 +662,9 @@ export default function ChimeraApp() {
       if (editor.original)
         await providersApi.update(provider, "codex", editor.original.id);
       else await providersApi.add(provider, "codex", false);
+      if (commonConfigLoaded && commonConfigDirty) {
+        await configApi.setCommonConfigSnippet("codex", commonConfigSnippet);
+      }
       await providersApi.switch(provider.id, "codex");
       await loadProviders();
       setEditor(null);
@@ -652,6 +674,26 @@ export default function ChimeraApp() {
       toast.error("保存失败", { description: String(error) });
     }
   };
+
+  useEffect(() => {
+    if (!editor) {
+      setCommonConfigSnippet("");
+      setCommonConfigLoaded(false);
+      setCommonConfigDirty(false);
+      return;
+    }
+    setCommonConfigLoading(true);
+    setCommonConfigLoaded(false);
+    setCommonConfigDirty(false);
+    void configApi
+      .getCommonConfigSnippet("codex")
+      .then((snippet) => {
+        setCommonConfigSnippet(snippet ?? "");
+        setCommonConfigLoaded(true);
+      })
+      .catch(() => setCommonConfigSnippet(""))
+      .finally(() => setCommonConfigLoading(false));
+  }, [editor?.id]);
 
   const fetchModels = async () => {
     if (!editor?.baseUrl.trim() || !editor.apiKey.trim()) {
@@ -938,6 +980,13 @@ export default function ChimeraApp() {
               setShowKey={setShowKey}
               fetchingModels={fetchingModels}
               modelFetchError={modelFetchError}
+              commonConfigSnippet={commonConfigSnippet}
+              commonConfigLoading={commonConfigLoading}
+              commonConfigLoaded={commonConfigLoaded}
+              onCommonConfigChange={(value) => {
+                setCommonConfigSnippet(value);
+                setCommonConfigDirty(true);
+              }}
               onFetchModels={fetchModels}
               onTest={() =>
                 void testConnection(editor.baseUrl, editor.name || "Codex")
@@ -1861,6 +1910,10 @@ function ProviderEditor({
   setShowKey,
   fetchingModels,
   modelFetchError,
+  commonConfigSnippet,
+  commonConfigLoading,
+  commonConfigLoaded,
+  onCommonConfigChange,
   onFetchModels,
   onTest,
   onSave,
@@ -1873,12 +1926,17 @@ function ProviderEditor({
   setShowKey: (value: boolean) => void;
   fetchingModels: boolean;
   modelFetchError: string | null;
+  commonConfigSnippet: string;
+  commonConfigLoading: boolean;
+  commonConfigLoaded: boolean;
+  onCommonConfigChange: (value: string) => void;
   onFetchModels: () => void;
   onTest: () => void;
   onSave: () => void;
   onDelete: () => void;
   escapeDisabled: boolean;
 }) {
+  const [commonConfigOpen, setCommonConfigOpen] = useState(false);
   const dialogRef = useDialogFocus<HTMLElement>(
     () => setEditor(null),
     !escapeDisabled,
@@ -1990,9 +2048,108 @@ function ProviderEditor({
           <summary>高级选项</summary>
           <div className="advanced-options-body">
             <p className="advanced-intro">
-              仅在上游不是标准 Responses API 时调整。保存后会应用到 Codex
-              的兼容路由与配置。
+              按需开启 Codex 功能或调整兼容参数。保存后只对这条线路生效。
             </p>
+            <div className="advanced-group codex-feature-options">
+              <div className="advanced-section-heading">
+                <div>
+                  <b>Codex 功能</b>
+                  <small>每条线路独立保存，未开启的功能不会写入配置。</small>
+                </div>
+              </div>
+              <label className="toggle-field">
+                <span>
+                  <b>目标模式</b>
+                  <small>在 Codex 中开启目标规划能力。</small>
+                </span>
+                <input
+                  name="provider-goal-mode"
+                  type="checkbox"
+                  checked={editor.goalModeEnabled}
+                  onChange={(event) =>
+                    setEditor({
+                      ...editor,
+                      goalModeEnabled: event.target.checked,
+                    })
+                  }
+                />
+              </label>
+              <label className="toggle-field">
+                <span>
+                  <b>
+                    远程上下文压缩
+                    <em className="experimental-tag">实验性</em>
+                  </b>
+                  <small>让兼容线路尝试由上游压缩长对话，默认关闭。</small>
+                </span>
+                <input
+                  name="provider-remote-compaction"
+                  type="checkbox"
+                  checked={editor.remoteCompactionEnabled}
+                  onChange={(event) =>
+                    setEditor({
+                      ...editor,
+                      remoteCompactionEnabled: event.target.checked,
+                    })
+                  }
+                />
+              </label>
+              <label className="toggle-field">
+                <span>
+                  <b>应用通用配置</b>
+                  <small>切换到这条线路时合并共享的 Codex 配置。</small>
+                </span>
+                <input
+                  name="provider-common-config"
+                  type="checkbox"
+                  checked={editor.commonConfigEnabled}
+                  disabled={commonConfigLoading || !commonConfigLoaded}
+                  onChange={(event) =>
+                    setEditor({
+                      ...editor,
+                      commonConfigEnabled: event.target.checked,
+                    })
+                  }
+                />
+              </label>
+              <div className="common-config-actions">
+                <span>
+                  {commonConfigLoading
+                    ? "正在读取通用配置…"
+                    : commonConfigLoaded
+                      ? commonConfigSnippet.trim()
+                        ? "已设置通用配置"
+                        : "尚未设置通用配置"
+                      : "通用配置暂时不可用"}
+                </span>
+                <button
+                  type="button"
+                  className="link-button"
+                  aria-expanded={commonConfigOpen}
+                  disabled={!commonConfigLoaded}
+                  onClick={() => setCommonConfigOpen(!commonConfigOpen)}
+                >
+                  {commonConfigOpen ? "收起编辑器" : "编辑通用配置"}
+                </button>
+              </div>
+              {commonConfigOpen && (
+                <label className="common-config-editor">
+                  通用 config.toml
+                  <textarea
+                    name="provider-common-config-snippet"
+                    spellCheck={false}
+                    value={commonConfigSnippet}
+                    onChange={(event) =>
+                      onCommonConfigChange(event.target.value)
+                    }
+                    placeholder="例如 [features] 下需要在多条线路间共享的配置"
+                  />
+                  <small>
+                    供应商地址、密钥、模型和模型目录不会作为通用配置共享。
+                  </small>
+                </label>
+              )}
+            </div>
             <label>
               上游格式
               <select

@@ -85,5 +85,19 @@ describe("Chimera++ application shell", () => {
       screen.getByRole("heading", { name: "添加线路" }),
     ).toBeInTheDocument();
     expect(screen.getByLabelText("线路名称")).toHaveValue("新线路");
+
+    fireEvent.click(screen.getByText("高级选项"));
+    expect(
+      screen.getByRole("checkbox", { name: /目标模式/ }),
+    ).not.toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: /远程上下文压缩/ }),
+    ).not.toBeChecked();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("checkbox", { name: /应用通用配置/ }),
+      ).toBeEnabled(),
+    );
+    expect(screen.getByRole("button", { name: "编辑通用配置" })).toBeEnabled();
   });
 });

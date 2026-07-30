@@ -54,6 +54,9 @@ export const handlers = [
     return success(getCurrentProviderId(app));
   }),
 
+  http.post(`${TAURI_ENDPOINT}/get_common_config_snippet`, () => success(null)),
+  http.post(`${TAURI_ENDPOINT}/set_common_config_snippet`, () => success(true)),
+
   http.post(
     `${TAURI_ENDPOINT}/update_providers_sort_order`,
     async ({ request }) => {
