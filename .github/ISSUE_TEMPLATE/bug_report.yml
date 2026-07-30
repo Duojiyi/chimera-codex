@@ -1,83 +1,97 @@
-name: Bug 报告
-description: 程序崩溃、报错、配置写入异常、功能行为不符合预期。
-title: "[Bug]: "
+name: "🐛 Bug Report / Bug 报告"
+description: |
+  Report errors or unexpected behavior.
+  报告错误或异常行为。
+labels:
+  - bug
 body:
-  - type: markdown
+  - type: checkboxes
     attributes:
-      value: |
-        请尽量填写可复现的信息。涉及 API Key、Token、账号、Base URL 时请先脱敏。
-  - type: dropdown
-    id: area
-    attributes:
-      label: 影响范围
+      label: Self Checks / 自检
       options:
-        - 启动 / 重启 Chimera++
-        - 供应商切换 / 配置写入
-        - 协议转换 / 代理
-        - MCP / skills / plugins
-        - 模型列表 / model_catalog_json
-        - 界面 / 交互
-        - 构建 / 安装
-        - 其他
-    validations:
-      required: true
-  - type: textarea
-    id: current_behavior
-    attributes:
-      label: 当前行为
-      description: 实际发生了什么？如果有报错，请贴完整错误文本。
-      placeholder: 点击重启 Chimera++ 后没有启动，latest-status.json 显示...
-    validations:
-      required: true
-  - type: textarea
-    id: expected_behavior
-    attributes:
-      label: 预期行为
-      placeholder: 应该同步当前供应商配置并启动 Codex。
-    validations:
-      required: true
-  - type: textarea
-    id: reproduce
-    attributes:
-      label: 复现步骤
-      placeholder: |
-        1. 打开...
-        2. 选择...
-        3. 点击...
-        4. 看到...
-    validations:
-      required: true
-  - type: textarea
-    id: logs
-    attributes:
-      label: 日志 / 配置片段
-      description: 请删除或替换 API Key、Token、账号等敏感信息。
-      render: shell
+        - label: |
+            I have read the [FAQ](https://github.com/farion1231/cc-switch#faq) section in README.
+            我已阅读 README 中的[常见问题](https://github.com/farion1231/cc-switch#常见问题)。
+          required: true
+        - label: |
+            I have searched for [existing issues](https://github.com/farion1231/cc-switch/issues), including closed ones.
+            我已搜索过[已有的 Issue](https://github.com/farion1231/cc-switch/issues)，包括已关闭的。
+          required: true
+
   - type: input
-    id: version
     attributes:
-      label: Chimera++ 版本
-      placeholder: 例如 1.1.8
+      label: CC Switch Version / 版本号
+      description: |
+        See the Settings page in the app.
+        查看应用设置页面中的版本号。
+      placeholder: "e.g. 3.11.1"
     validations:
       required: true
+
   - type: dropdown
-    id: os
     attributes:
-      label: 系统
+      label: Operating System / 操作系统
+      multiple: false
       options:
         - Windows
         - macOS
         - Linux
-        - 其他
     validations:
       required: true
-  - type: checkboxes
-    id: checklist
-    attributes:
-      label: 提交前确认
-      options:
-        - label: 我已经脱敏了 API Key、Token、账号等敏感信息。
-          required: true
-        - label: 我已经确认这是当前最新版仍然存在的问题。
-          required: false
 
+  - type: dropdown
+    attributes:
+      label: Related App / 涉及应用
+      description: |
+        Which app is affected?
+        涉及哪个应用？
+      multiple: true
+      options:
+        - Claude Code
+        - Codex
+        - Gemini CLI
+        - OpenCode
+        - OpenClaw
+        - Other / 其他
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Steps to Reproduce / 重现步骤
+      description: |
+        Please describe the steps to reproduce the bug. Screenshots and logs are helpful.
+        请描述重现步骤。截图和日志会很有帮助。
+      placeholder: |
+        1. Go to ...
+        2. Click on ...
+        3. See error ...
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Expected Behavior / 期望行为
+      description: |
+        What did you expect to happen?
+        你期望发生什么？
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Actual Behavior / 实际行为
+      description: |
+        What actually happened?
+        实际发生了什么？
+    validations:
+      required: false
+
+  - type: textarea
+    attributes:
+      label: Additional Context / 补充信息
+      description: |
+        Any other information, screenshots, or logs.
+        其他信息、截图或日志。
+    validations:
+      required: false

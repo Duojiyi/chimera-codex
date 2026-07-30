@@ -1,6 +1,12 @@
 blank_issues_enabled: false
 contact_links:
-  - name: 使用问题 / 讨论
-    url: https://github.com/Duojiyi/chimera-codex/discussions
-    about: 不确定是不是 Bug 时，优先在这里讨论。
-
+  - name: "Security Vulnerabilities / 安全漏洞"
+    url: "https://github.com/farion1231/cc-switch/security/advisories/new"
+    about: |
+      Report security vulnerabilities through GitHub Security Advisories.
+      请通过 GitHub 安全公告报告安全漏洞。
+  - name: "Discussions / 讨论区"
+    url: "https://github.com/farion1231/cc-switch/discussions"
+    about: |
+      General discussions and community help.
+      一般讨论和社区帮助。
