@@ -579,10 +579,17 @@ jobs:
           if ($assetFiles.Count -eq 0) {
             throw "No release assets found for checksum generation: $platform"
           }
-          $assetFiles | ForEach-Object {
+          # sha256sum -c runs later on Linux, so generate the canonical
+          # checksum format with LF line endings (not PowerShell's CRLF).
+          $checksumContent = $assetFiles | ForEach-Object {
             $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "{0}  {1}" -f $hash, $_.Name
-          } | Set-Content -Path (Join-Path 'release-assets' $checksumName) -Encoding UTF8
+          }
+          [System.IO.File]::WriteAllText(
+            (Join-Path 'release-assets' $checksumName),
+            (($checksumContent -join "`n") + "`n"),
+            [System.Text.UTF8Encoding]::new($false)
+          )
           if (-not (Test-Path -LiteralPath (Join-Path 'release-assets' $checksumName))) {
             throw "Checksum file was not generated: $checksumName"
           }
