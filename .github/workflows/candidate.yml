@@ -1,0 +1,170 @@
+name: Candidate Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit SHA, branch, or tag to build"
+        required: true
+        default: main
+        type: string
+      candidate_version:
+        description: "Expected semantic version (without v)"
+        required: true
+        default: "2.1.0"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chimera-candidate-${{ inputs.ref }}-${{ inputs.candidate_version }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Candidate Windows package
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - name: Checkout requested ref
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.12.3
+          run_install: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify candidate gates
+        shell: pwsh
+        run: |
+          node scripts/verify-release-version.mjs --expect ${{ inputs.candidate_version }}
+          pnpm format:check
+          pnpm typecheck
+          pnpm test:unit
+          cargo fmt --check --manifest-path src-tauri/Cargo.toml
+          cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+          cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build Windows candidate
+        run: pnpm tauri build --bundles msi
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Collect candidate evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path candidate-assets | Out-Null
+          $msi = Get-ChildItem src-tauri/target/release/bundle/msi/*.msi | Select-Object -First 1
+          if ($null -eq $msi) { throw 'Windows MSI was not produced' }
+          Copy-Item $msi.FullName candidate-assets/
+          Get-FileHash candidate-assets/* -Algorithm SHA256 | ForEach-Object {
+            "$($_.Hash.ToLowerInvariant())  $($_.Path | Split-Path -Leaf)"
+          } | Set-Content candidate-assets/SHA256SUMS.txt
+          pnpm list --prod --json | Set-Content candidate-assets/frontend-sbom.json
+          cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 | Set-Content candidate-assets/rust-sbom.json
+          @{
+            candidateVersion = '${{ inputs.candidate_version }}'
+            requestedRef = '${{ inputs.ref }}'
+            commit = '${{ github.sha }}'
+            platform = 'windows-x86_64'
+          } | ConvertTo-Json | Set-Content candidate-assets/build-provenance.json
+
+      - name: Upload Windows candidate
+        uses: actions/upload-artifact@v7
+        with:
+          name: Chimera++-candidate-${{ inputs.candidate_version }}-windows-${{ github.sha }}
+          path: candidate-assets/
+          if-no-files-found: error
+
+  macos:
+    name: Candidate macOS package
+    runs-on: macos-15
+    timeout-minutes: 75
+    steps:
+      - name: Checkout requested ref
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.12.3
+          run_install: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Add macOS targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify candidate gates
+        run: |
+          node scripts/verify-release-version.mjs --expect "${{ inputs.candidate_version }}"
+          pnpm format:check
+          pnpm typecheck
+          pnpm test:unit
+          cargo fmt --check --manifest-path src-tauri/Cargo.toml
+          cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+          cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build universal macOS candidate
+        run: pnpm tauri build --target universal-apple-darwin --bundles app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Collect candidate evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p candidate-assets
+          app_path=$(find src-tauri/target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' -type d | head -1)
+          test -n "$app_path"
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "candidate-assets/Chimera++-${{ inputs.candidate_version }}-macOS-universal.zip"
+          shasum -a 256 candidate-assets/* > candidate-assets/SHA256SUMS.txt
+          pnpm list --prod --json > candidate-assets/frontend-sbom.json
+          cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 > candidate-assets/rust-sbom.json
+          jq -n \
+            --arg candidate_version "${{ inputs.candidate_version }}" \
+            --arg requested_ref "${{ inputs.ref }}" \
+            --arg commit "${{ github.sha }}" \
+            --arg platform "darwin-universal" \
+            '{candidateVersion: $candidate_version, requestedRef: $requested_ref, commit: $commit, platform: $platform}' \
+            > candidate-assets/build-provenance.json
+
+      - name: Upload macOS candidate
+        uses: actions/upload-artifact@v7
+        with:
+          name: Chimera++-candidate-${{ inputs.candidate_version }}-macos-${{ github.sha }}
+          path: candidate-assets/
+          if-no-files-found: error

@@ -484,9 +484,9 @@ export default function ChimeraApp() {
         toast.success("Codex 已启动");
         return;
       }
-      const result = await invoke<CodexLaunchResult>("open_codex_runtime", {
-        restartIfRunning: codexRestartRequired,
-      });
+      // Runtime policy belongs to the backend: it detects and safely replaces
+      // an existing path-pinned Codex instance before launching a new one.
+      const result = await invoke<CodexLaunchResult>("open_codex_runtime");
       await loadCodexProcess();
       setCodexRestartRequired(false);
       toast.success(
