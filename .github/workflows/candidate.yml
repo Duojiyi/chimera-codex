@@ -150,8 +150,12 @@ jobs:
           mkdir -p candidate-assets
           app_path=$(find src-tauri/target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' -type d | head -1)
           test -n "$app_path"
-          ditto -c -k --sequesterRsrc --keepParent "$app_path" "candidate-assets/Chimera++-${{ inputs.candidate_version }}-macOS-universal.zip"
-          shasum -a 256 candidate-assets/* > candidate-assets/SHA256SUMS.txt
+          artifact_name="Chimera++-${{ inputs.candidate_version }}-macOS-universal.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "candidate-assets/$artifact_name"
+          (
+            cd candidate-assets
+            shasum -a 256 "$artifact_name" > SHA256SUMS.txt
+          )
           pnpm list --prod --json > candidate-assets/frontend-sbom.json
           cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 > candidate-assets/rust-sbom.json
           jq -n \
