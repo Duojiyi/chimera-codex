@@ -73,7 +73,7 @@ model = ${tomlString(model)}
 name = ${tomlString(providerName)}
 base_url = ${tomlString(baseUrl)}
 wire_api = "responses"
-requires_openai_auth = true`;
+requires_openai_auth = false`;
 }
 
 export const grokBuildProviderPresets: GrokBuildProviderPreset[] = [

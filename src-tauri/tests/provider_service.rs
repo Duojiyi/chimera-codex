@@ -479,13 +479,13 @@ requires_openai_auth = true
         Some("bridge-key"),
         "third-party key should be injected into the selected live provider table"
     );
-    assert_eq!(
+    assert!(
         parsed_live
             .get("model_providers")
             .and_then(|v| v.get("aihubmix"))
             .and_then(|v| v.get("requires_openai_auth"))
-            .and_then(|v| v.as_bool()),
-        Some(true)
+            .is_none(),
+        "third-party routes must not request native ChatGPT authentication"
     );
 
     ProviderService::switch(&state, AppType::Codex, "plain-provider")

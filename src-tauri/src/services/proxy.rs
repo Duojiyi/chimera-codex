@@ -2926,6 +2926,9 @@ impl ProxyService {
             let live_config = if official_passthrough {
                 prepared_config
             } else {
+                let prepared_config =
+                    crate::codex_config::normalize_codex_third_party_auth_config(&prepared_config)
+                        .map_err(|e| format!("写入 Codex 配置失败: {e}"))?;
                 crate::codex_config::prepare_codex_provider_live_config(
                     config.get("auth").unwrap_or(&Value::Null),
                     &prepared_config,
@@ -4098,10 +4101,12 @@ wire_api = "responses"
             json!({
                 "auth": { "OPENAI_API_KEY": "rightcode-key" },
                 "config": r#"model_provider = "rightcode"
+requires_openai_auth = true
 
 [model_providers.rightcode]
 name = "RightCode"
 base_url = "https://rightcode.example/v1"
+requires_openai_auth = true
 wire_api = "responses"
 "#
             }),
@@ -4149,6 +4154,12 @@ wire_api = "responses"
         assert!(!crate::codex_config::codex_config_has_official_proxy_route(
             &third_party_live
         ));
+        let third_party_doc: toml::Value =
+            toml::from_str(&third_party_live).expect("parse third-party takeover config");
+        assert!(third_party_doc.get("requires_openai_auth").is_none());
+        assert!(third_party_doc["model_providers"]["rightcode"]
+            .get("requires_openai_auth")
+            .is_none());
 
         service
             .hot_switch_provider("codex", "codex-official")
