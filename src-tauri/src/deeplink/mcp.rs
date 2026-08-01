@@ -6,6 +6,7 @@ use super::utils::decode_base64_param;
 use super::DeepLinkImportRequest;
 use crate::app_config::{McpApps, McpServer};
 use crate::error::AppError;
+use crate::mcp::validation::{validate_server_id, validate_server_spec, MAX_MCP_SERVERS};
 use crate::services::McpService;
 use crate::store::AppState;
 use serde::{Deserialize, Serialize};
@@ -87,34 +88,50 @@ pub fn import_mcp_from_deeplink(
             "No MCP servers found in config".to_string(),
         ));
     }
+    if mcp_servers.len() > MAX_MCP_SERVERS {
+        return Err(AppError::InvalidInput(format!(
+            "Too many MCP servers (maximum {MAX_MCP_SERVERS})"
+        )));
+    }
 
-    // Get existing servers to check for duplicates
+    // Get existing servers to check for duplicates and preserve the historical
+    // deep-link semantics: an existing server keeps its connection definition;
+    // only the target apps are merged.
     let existing_servers = state.db.get_all_mcp_servers()?;
-
-    // Import each MCP server
-    let mut imported_ids = Vec::new();
+    let mut planned_servers = Vec::with_capacity(mcp_servers.len());
     let mut failed = Vec::new();
 
+    // Preflight every entry before touching the database. A malformed server
+    // must not allow the valid entries in the same deep link to be committed.
     for (id, server_spec) in mcp_servers.iter() {
-        // Check if server already exists
+        let mut validation_errors = Vec::new();
+        if let Err(error) = validate_server_id(id) {
+            validation_errors.push(error.to_string());
+        }
+        if let Err(error) = validate_server_spec(server_spec) {
+            validation_errors.push(error.to_string());
+        }
+        if !validation_errors.is_empty() {
+            failed.push(McpImportError {
+                id: id.clone(),
+                error: validation_errors.join("; "),
+            });
+            continue;
+        }
+
         let server = if let Some(existing) = existing_servers.get(id) {
-            // Server exists - merge apps only, keep other fields unchanged
             log::info!("MCP server '{id}' already exists, merging apps only");
-
-            let merged_apps = merge_mcp_apps(&existing.apps, &target_apps);
-
             McpServer {
                 id: existing.id.clone(),
                 name: existing.name.clone(),
-                server: existing.server.clone(), // Keep existing server config
-                apps: merged_apps,               // Merged apps
+                server: existing.server.clone(),
+                apps: merge_mcp_apps(&existing.apps, &target_apps),
                 description: existing.description.clone(),
                 homepage: existing.homepage.clone(),
                 docs: existing.docs.clone(),
                 tags: existing.tags.clone(),
             }
         } else {
-            // New server - create with provided config
             log::info!("Creating new MCP server: {id}");
             McpServer {
                 id: id.clone(),
@@ -127,21 +144,24 @@ pub fn import_mcp_from_deeplink(
                 tags: vec!["imported".to_string()],
             }
         };
-
-        match McpService::upsert_server(state, server) {
-            Ok(_) => {
-                imported_ids.push(id.clone());
-                log::info!("Successfully imported/updated MCP server: {id}");
-            }
-            Err(e) => {
-                failed.push(McpImportError {
-                    id: id.clone(),
-                    error: format!("{e}"),
-                });
-                log::warn!("Failed to import MCP server '{id}': {e}");
-            }
-        }
+        planned_servers.push(server);
     }
+
+    if !failed.is_empty() {
+        return Ok(McpImportResult {
+            imported_count: 0,
+            imported_ids: Vec::new(),
+            failed,
+        });
+    }
+
+    // Commit the whole batch with compensating rollback for both the database
+    // and affected live projections.
+    McpService::upsert_servers_atomic(state, &planned_servers)?;
+    let imported_ids = planned_servers
+        .iter()
+        .map(|server| server.id.clone())
+        .collect::<Vec<_>>();
 
     Ok(McpImportResult {
         imported_count: imported_ids.len(),

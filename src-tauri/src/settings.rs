@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 
 use crate::app_config::AppType;
@@ -27,6 +27,251 @@ fn default_codex_update_source() -> String {
 
 fn default_codex_install_mode() -> String {
     "standard".to_string()
+}
+
+const MAX_CODEX_PORTABLE_ROOT_BYTES: usize = 4096;
+
+fn lexical_normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            Component::Normal(part) => normalized.push(part),
+            Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
+fn comparable_path(path: &Path) -> String {
+    let mut value = lexical_normalize_path(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    while value.len() > 1 && value.ends_with('/') {
+        value.pop();
+    }
+    #[cfg(windows)]
+    value.make_ascii_lowercase();
+    value
+}
+
+fn path_within(path: &Path, root: &Path) -> bool {
+    let path = comparable_path(path);
+    let root = comparable_path(root);
+    if path == root {
+        return true;
+    }
+
+    // `str::strip_prefix("/")` returns `"child"` rather than `"/child"`.
+    // Handle the POSIX root explicitly so `/tmp/...` cannot evade a root
+    // overlap check by failing the separator test.
+    if root == "/" {
+        return path.starts_with('/');
+    }
+
+    path.strip_prefix(&root)
+        .is_some_and(|remainder| remainder.starts_with('/'))
+}
+
+fn paths_overlap(left: &Path, right: &Path) -> bool {
+    path_within(left, right) || path_within(right, left)
+}
+
+fn is_filesystem_root(path: &Path) -> bool {
+    !path
+        .components()
+        .any(|component| matches!(component, Component::Normal(_)))
+}
+
+#[cfg(windows)]
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+fn validate_existing_portable_root_components(path: &Path) -> Result<(), String> {
+    let mut current = Some(path);
+    while let Some(candidate) = current {
+        match fs::symlink_metadata(candidate) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
+                    return Err(format!(
+                        "Codex portable root 或其父目录不能是符号链接/junction/reparse point: {}",
+                        candidate.display()
+                    ));
+                }
+                if !metadata.is_dir() {
+                    if candidate == path {
+                        return Err(format!(
+                            "Codex portable root 必须是目录: {}",
+                            path.display()
+                        ));
+                    }
+                    return Err(format!(
+                        "Codex portable root 的父路径必须是目录: {}",
+                        candidate.display()
+                    ));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "无法检查 Codex portable root: {}: {error}",
+                    candidate.display()
+                ));
+            }
+        }
+        current = candidate.parent();
+    }
+    Ok(())
+}
+
+fn protected_windows_roots() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        [
+            "WINDIR",
+            "SystemRoot",
+            "ProgramFiles",
+            "ProgramFiles(x86)",
+            "ProgramW6432",
+            "CommonProgramFiles",
+            "CommonProgramW6432",
+            "CommonProgramFiles(x86)",
+        ]
+        .into_iter()
+        .filter_map(|name| std::env::var_os(name).map(PathBuf::from))
+        .collect()
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+}
+
+fn validate_portable_root_path(path: &Path, strict: bool) -> Result<PathBuf, String> {
+    if path.as_os_str().is_empty() {
+        return Err("Codex portable root 不能为空".to_string());
+    }
+    if !path.is_absolute() {
+        return Err(format!(
+            "Codex portable root 必须是绝对路径: {}",
+            path.display()
+        ));
+    }
+    if path.to_string_lossy().len() > MAX_CODEX_PORTABLE_ROOT_BYTES {
+        return Err(format!(
+            "Codex portable root 路径过长（最多 {} bytes）",
+            MAX_CODEX_PORTABLE_ROOT_BYTES
+        ));
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(format!(
+            "Codex portable root 不得包含 .. 路径段: {}",
+            path.display()
+        ));
+    }
+
+    let normalized = lexical_normalize_path(path);
+    if is_filesystem_root(&normalized) {
+        return Err(format!(
+            "Codex portable root 不能是文件系统根目录: {}",
+            normalized.display()
+        ));
+    }
+
+    let home = crate::config::get_home_dir();
+    if comparable_path(&normalized) == comparable_path(&home) {
+        return Err("Codex portable root 不能是用户主目录".to_string());
+    }
+
+    if strict {
+        let config_dir = crate::config::get_app_config_dir();
+        if paths_overlap(&normalized, &config_dir) {
+            return Err(format!(
+                "Codex portable root 不能与 Chimera++ 配置目录重叠: {}",
+                config_dir.display()
+            ));
+        }
+        let executable = std::env::current_exe().map_err(|error| {
+            format!("无法确定 Chimera++ 应用目录，拒绝验证 portable root: {error}")
+        })?;
+        let app_dir = executable
+            .parent()
+            .ok_or_else(|| "无法确定 Chimera++ 应用目录，拒绝验证 portable root".to_string())?;
+        if paths_overlap(&normalized, app_dir) {
+            return Err(format!(
+                "Codex portable root 不能与 Chimera++ 应用目录重叠: {}",
+                app_dir.display()
+            ));
+        }
+        for protected in protected_windows_roots() {
+            if paths_overlap(&normalized, &protected) {
+                return Err(format!(
+                    "Codex portable root 不能位于 Windows 系统/Program Files 目录: {}",
+                    protected.display()
+                ));
+            }
+        }
+    }
+
+    validate_existing_portable_root_components(&normalized)?;
+    Ok(normalized)
+}
+
+/// Validate a user-configured portable Codex root before it is persisted.
+pub fn validate_codex_portable_root(raw: &str) -> Result<PathBuf, AppError> {
+    validate_portable_root_path(Path::new(raw.trim()), true).map_err(AppError::Config)
+}
+
+/// Resolve the effective managed portable root. A configured path is never
+/// silently replaced: invalid settings are returned to the caller as an error.
+pub fn resolve_codex_portable_root() -> Result<PathBuf, String> {
+    if let Some(configured) = get_settings().codex_portable_root {
+        return validate_codex_portable_root(&configured).map_err(|error| error.to_string());
+    }
+
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(parent) = executable.parent() {
+            let bundled = parent.join("Codex");
+            match fs::symlink_metadata(&bundled) {
+                Ok(_) => return validate_portable_root_path(&bundled, false),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!(
+                        "无法检查 bundled Codex portable root: {}: {error}",
+                        bundled.display()
+                    ));
+                }
+            }
+        }
+    }
+
+    if let Some(local_data) = dirs::data_local_dir() {
+        return validate_portable_root_path(&local_data.join("Programs").join("Codex"), false);
+    }
+
+    validate_portable_root_path(
+        &crate::config::get_app_config_dir()
+            .join("codex-runtime")
+            .join("portable"),
+        false,
+    )
 }
 
 /// 主页面显示的应用配置
@@ -709,37 +954,16 @@ impl AppSettings {
 fn save_settings_file(settings: &AppSettings) -> Result<(), AppError> {
     let mut normalized = settings.clone();
     normalized.normalize_paths();
+    if let Some(root) = normalized.codex_portable_root.as_deref() {
+        validate_codex_portable_root(root)?;
+    }
     let Some(path) = AppSettings::settings_path() else {
         return Err(AppError::Config("无法获取用户主目录".to_string()));
     };
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
-    }
-
     let json = serde_json::to_string_pretty(&normalized)
         .map_err(|e| AppError::JsonSerialize { source: e })?;
-    #[cfg(unix)]
-    {
-        use std::fs::OpenOptions;
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-
-        let mut file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .map_err(|e| AppError::io(&path, e))?;
-        file.write_all(json.as_bytes())
-            .map_err(|e| AppError::io(&path, e))?;
-    }
-
-    #[cfg(not(unix))]
-    {
-        fs::write(&path, json).map_err(|e| AppError::io(&path, e))?;
-    }
+    crate::config::atomic_write(&path, json.as_bytes())?;
 
     Ok(())
 }

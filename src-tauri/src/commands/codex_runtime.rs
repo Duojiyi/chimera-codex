@@ -103,24 +103,8 @@ fn runtime_root() -> PathBuf {
     crate::config::get_app_config_dir().join("codex-runtime")
 }
 
-fn portable_root() -> PathBuf {
-    if let Some(configured) = crate::settings::get_settings().codex_portable_root {
-        return PathBuf::from(configured);
-    }
-    if let Ok(executable) = std::env::current_exe() {
-        if let Some(parent) = executable.parent() {
-            let bundled = parent.join("Codex");
-            if bundled.exists() {
-                return bundled;
-            }
-        }
-    }
-    // Codex App Manager's portable installer uses the Windows per-user Programs
-    // directory. Reuse that location so Chimera++ adopts an existing manager
-    // installation instead of incorrectly reporting it as missing.
-    dirs::data_local_dir()
-        .map(|path| path.join("Programs").join("Codex"))
-        .unwrap_or_else(|| runtime_root().join("portable"))
+fn portable_root() -> Result<PathBuf, String> {
+    crate::settings::resolve_codex_portable_root()
 }
 
 fn process_install_mode(source: &str) -> String {
@@ -243,7 +227,7 @@ pub fn verify_codex_model_catalog(
 pub async fn restart_codex_for_model_catalog(confirm: bool) -> Result<(), String> {
     require_confirmation(confirm, "重启 Codex 以刷新模型列表")?;
     require_windows()?;
-    let portable_root = portable_root();
+    let portable_root = portable_root()?;
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = acquire_operation_lock("codex_runtime_restart_catalog")?;
         let installed = codex_win_engine::detect_installed_codex(&portable_root)
@@ -269,7 +253,7 @@ pub async fn get_codex_process_status() -> Result<CodexProcessStatus, String> {
             official_login_available: official_login_available(),
         });
     }
-    let portable_root = portable_root();
+    let portable_root = portable_root()?;
     tauri::async_runtime::spawn_blocking(move || {
         let Some(installed) = codex_win_engine::detect_installed_codex(&portable_root) else {
             return Ok(CodexProcessStatus {
@@ -308,7 +292,7 @@ pub async fn open_codex_runtime(
     // the safe restart policy. The renderer submits launch intent only.
     let _legacy_restart_preference = restart_if_running;
     require_windows()?;
-    let portable_root = portable_root();
+    let portable_root = portable_root()?;
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = acquire_operation_lock("codex_runtime_launch")?;
         let installed = codex_win_engine::detect_installed_codex(&portable_root)
@@ -411,7 +395,7 @@ fn require_confirmation(confirm: bool, action: &str) -> Result<(), String> {
 /// Read installed Codex state without making a network request.
 #[tauri::command]
 pub async fn get_codex_runtime_status() -> Result<CodexRuntimeStatus, String> {
-    let portable_root = portable_root();
+    let portable_root = portable_root()?;
     if !cfg!(target_os = "windows") {
         return Ok(CodexRuntimeStatus {
             supported: false,
@@ -466,7 +450,7 @@ pub async fn get_codex_runtime_status() -> Result<CodexRuntimeStatus, String> {
 pub async fn open_codex_runtime_directory(handle: AppHandle) -> Result<bool, String> {
     require_windows()?;
     let installed =
-        detect_windows_codex(&portable_root()).ok_or_else(|| "未检测到 Codex 安装".to_string())?;
+        detect_windows_codex(&portable_root()?).ok_or_else(|| "未检测到 Codex 安装".to_string())?;
     let path = PathBuf::from(installed.path);
     let directory = if path.is_file() {
         path.parent().map(PathBuf::from).unwrap_or(path)
@@ -489,7 +473,7 @@ pub async fn check_codex_runtime_update(
     require_windows()?;
     let source = parse_source(source)?;
     let install_mode = parse_install_mode(install_mode)?;
-    let portable_root = portable_root();
+    let portable_root = portable_root()?;
     tauri::async_runtime::spawn_blocking(move || {
         let installed = detect_windows_codex(&portable_root);
         let current_version = installed.as_ref().map(|value| value.version.clone());
@@ -514,7 +498,7 @@ pub async fn check_codex_runtime_update(
 #[tauri::command]
 pub async fn diagnose_codex_runtime() -> Result<Vec<CodexRuntimeDiagnostic>, String> {
     require_windows()?;
-    let portable_root = portable_root();
+    let portable_root = portable_root()?;
     tauri::async_runtime::spawn_blocking(move || {
         Ok(diagnose_windows_codex(&portable_root)
             .into_iter()
@@ -538,7 +522,7 @@ async fn install_release(
     let source = parse_source(source)?;
     let install_mode = parse_install_mode(install_mode)?;
     let root = runtime_root();
-    let portable_root = portable_root();
+    let portable_root = portable_root()?;
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = acquire_operation_lock("codex_runtime_install")?;
         let plan = fetch_windows_release_plan(source, Some(std::env::consts::ARCH))
@@ -594,7 +578,7 @@ pub async fn repair_codex_runtime(
 ) -> Result<CodexRuntimeOperation, String> {
     require_confirmation(confirm, "修复 Codex")?;
     require_windows()?;
-    let installed = detect_windows_codex(&portable_root())
+    let installed = detect_windows_codex(&portable_root()?)
         .ok_or_else(|| "未检测到 Codex，请先执行安装".to_string())?;
     install_release(
         app,
@@ -610,7 +594,7 @@ pub async fn repair_codex_runtime(
 pub async fn rollback_codex_runtime(confirm: bool) -> Result<CodexRuntimeOperation, String> {
     require_confirmation(confirm, "回滚 Codex")?;
     require_windows()?;
-    let portable_root = portable_root();
+    let portable_root = portable_root()?;
     tauri::async_runtime::spawn_blocking(move || {
         let installed =
             detect_windows_codex(&portable_root).ok_or_else(|| "未检测到 Codex".to_string())?;
@@ -631,7 +615,7 @@ pub async fn rollback_codex_runtime(confirm: bool) -> Result<CodexRuntimeOperati
 pub async fn uninstall_codex_runtime(confirm: bool) -> Result<CodexRuntimeOperation, String> {
     require_confirmation(confirm, "卸载 Codex")?;
     require_windows()?;
-    let portable_root = portable_root();
+    let portable_root = portable_root()?;
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = acquire_operation_lock("codex_runtime_uninstall")?;
         uninstall_windows_codex(&portable_root)

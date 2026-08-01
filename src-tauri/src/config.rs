@@ -1,8 +1,15 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
+
+use uuid::Uuid;
 
 use crate::error::AppError;
 
@@ -268,62 +275,120 @@ pub fn write_text_file(path: &Path, data: &str) -> Result<(), AppError> {
     atomic_write(path, data.as_bytes())
 }
 
-/// 原子写入：写入临时文件后 rename 替换，避免半写状态
+/// 原子写入：写入随机临时文件、刷盘后替换目标，避免半写状态和 symlink 跟随。
+///
+/// 临时文件必须使用 `create_new`：可预测的临时文件名会让其他进程预先放置
+/// symlink，`File::create` 随后可能把密钥写入攻击者控制的目标。Windows 使用
+/// `MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)`，不先删除目标，避免目标文件
+/// 出现可见空窗。
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
-    }
-
     let parent = path
         .parent()
         .ok_or_else(|| AppError::Config("无效的路径".to_string()))?;
-    let mut tmp = parent.to_path_buf();
+    fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
+
+    #[cfg(unix)]
+    let existing_mode: Option<u32> = match fs::symlink_metadata(path) {
+        Ok(meta) => {
+            if meta.file_type().is_symlink() {
+                return Err(AppError::Config(format!(
+                    "拒绝写入符号链接目标: {}",
+                    path.display()
+                )));
+            }
+            use std::os::unix::fs::PermissionsExt;
+            Some(meta.permissions().mode() & 0o7777)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(AppError::io(path, error)),
+    };
+
+    #[cfg(not(unix))]
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(AppError::Config(format!(
+                "拒绝写入符号链接目标: {}",
+                path.display()
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(AppError::io(path, error)),
+    }
+
     let file_name = path
         .file_name()
         .ok_or_else(|| AppError::Config("无效的文件名".to_string()))?
-        .to_string_lossy()
-        .to_string();
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    tmp.push(format!("{file_name}.tmp.{ts}"));
+        .to_string_lossy();
+    let tmp = parent.join(format!(".{file_name}.tmp-{}", Uuid::new_v4()));
 
-    {
-        let mut f = fs::File::create(&tmp).map_err(|e| AppError::io(&tmp, e))?;
-        f.write_all(data).map_err(|e| AppError::io(&tmp, e))?;
-        f.flush().map_err(|e| AppError::io(&tmp, e))?;
-    }
+    let result = (|| {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(existing_mode.unwrap_or(0o600));
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = fs::metadata(path) {
-            let perm = meta.permissions().mode();
-            let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(perm));
+        let mut file = options.open(&tmp).map_err(|e| AppError::io(&tmp, e))?;
+        file.write_all(data).map_err(|e| AppError::io(&tmp, e))?;
+        file.flush().map_err(|e| AppError::io(&tmp, e))?;
+        file.sync_all().map_err(|e| AppError::io(&tmp, e))?;
+        drop(file);
+
+        #[cfg(unix)]
+        if let Some(mode) = existing_mode {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&tmp, fs::Permissions::from_mode(mode))
+                .map_err(|e| AppError::io(&tmp, e))?;
         }
-    }
 
-    #[cfg(windows)]
-    {
-        // Windows 上 rename 目标存在会失败，先移除再重命名（尽量接近原子性）
-        if path.exists() {
-            let _ = fs::remove_file(path);
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Storage::FileSystem::{
+                MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+            };
+            let source: Vec<u16> = tmp
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let destination: Vec<u16> = path
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let flags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
+            let moved = unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), flags) };
+            if moved == 0 {
+                return Err(AppError::IoContext {
+                    context: format!("原子替换失败: {} -> {}", tmp.display(), path.display()),
+                    source: std::io::Error::last_os_error(),
+                });
+            }
         }
+
+        #[cfg(not(windows))]
         fs::rename(&tmp, path).map_err(|e| AppError::IoContext {
             context: format!("原子替换失败: {} -> {}", tmp.display(), path.display()),
             source: e,
         })?;
-    }
 
-    #[cfg(not(windows))]
-    {
-        fs::rename(&tmp, path).map_err(|e| AppError::IoContext {
-            context: format!("原子替换失败: {} -> {}", tmp.display(), path.display()),
-            source: e,
-        })?;
+        #[cfg(unix)]
+        if let Err(error) = fs::File::open(parent).and_then(|directory| directory.sync_all()) {
+            // rename 已经完成；不要把已提交的写入报告成失败，但记录无法提供
+            // 目录级持久化保证的文件系统错误，便于诊断断电恢复问题。
+            log::warn!(
+                "配置文件已替换，但父目录刷盘失败 ({}): {error}",
+                parent.display()
+            );
+        }
+
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
     }
-    Ok(())
+    result
 }
 
 #[cfg(test)]

@@ -6,15 +6,42 @@ use crate::error::AppError;
 use base64::prelude::*;
 use url::Url;
 
-/// Validate that a string is a valid HTTP(S) URL
+/// Validate that a string is a safe HTTP(S) URL.
+///
+/// Deep links are untrusted input. In addition to the scheme, require a host,
+/// reject userinfo and fragments, and cap the length before handing the URL to
+/// config writers or HTTP clients.
 pub fn validate_url(url_str: &str, field_name: &str) -> Result<(), AppError> {
+    const MAX_URL_BYTES: usize = 4096;
+
+    if url_str.len() > MAX_URL_BYTES {
+        return Err(AppError::InvalidInput(format!(
+            "URL for '{field_name}' is too long (max {MAX_URL_BYTES} bytes)"
+        )));
+    }
+
     let url = Url::parse(url_str)
-        .map_err(|e| AppError::InvalidInput(format!("Invalid URL for '{field_name}': {e}")))?;
+        .map_err(|_| AppError::InvalidInput(format!("Invalid URL for '{field_name}'")))?;
 
     let scheme = url.scheme();
     if scheme != "http" && scheme != "https" {
         return Err(AppError::InvalidInput(format!(
-            "Invalid URL scheme for '{field_name}': must be http or https, got '{scheme}'"
+            "Invalid URL scheme for '{field_name}': must be http or https"
+        )));
+    }
+    if url.host_str().is_none() {
+        return Err(AppError::InvalidInput(format!(
+            "URL for '{field_name}' must include a host"
+        )));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(AppError::InvalidInput(format!(
+            "URL for '{field_name}' must not include userinfo"
+        )));
+    }
+    if url.fragment().is_some() {
+        return Err(AppError::InvalidInput(format!(
+            "URL for '{field_name}' must not include a fragment"
         )));
     }
 
@@ -28,6 +55,15 @@ pub fn validate_url(url_str: &str, field_name: &str) -> Result<(), AppError> {
 /// - Missing padding `=`
 /// - Both standard and URL-safe Base64 variants
 pub fn decode_base64_param(field: &str, raw: &str) -> Result<Vec<u8>, AppError> {
+    const MAX_BASE64_INPUT_BYTES: usize = 8 * 1024 * 1024;
+    const MAX_DECODED_BYTES: usize = 6 * 1024 * 1024;
+
+    if raw.len() > MAX_BASE64_INPUT_BYTES {
+        return Err(AppError::InvalidInput(format!(
+            "{field} 参数过大（Base64 输入最多 {MAX_BASE64_INPUT_BYTES} 字节）"
+        )));
+    }
+
     let mut candidates: Vec<String> = Vec::new();
     // Keep spaces (to restore `+`), but remove newlines
     let trimmed = raw.trim_matches(|c| c == '\r' || c == '\n');
@@ -67,7 +103,12 @@ pub fn decode_base64_param(field: &str, raw: &str) -> Result<Vec<u8>, AppError> 
             &BASE64_URL_SAFE_NO_PAD,
         ] {
             match engine.decode(&candidate) {
-                Ok(bytes) => return Ok(bytes),
+                Ok(bytes) if bytes.len() <= MAX_DECODED_BYTES => return Ok(bytes),
+                Ok(_) => {
+                    return Err(AppError::InvalidInput(format!(
+                        "{field} 参数解码后过大（最多 {MAX_DECODED_BYTES} 字节）"
+                    )));
+                }
                 Err(err) => last_error = Some(err.to_string()),
             }
         }
