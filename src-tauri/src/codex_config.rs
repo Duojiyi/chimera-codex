@@ -312,6 +312,43 @@ pub(crate) fn is_custom_codex_model_provider_id(id: &str) -> bool {
             .any(|reserved| reserved.eq_ignore_ascii_case(id))
 }
 
+/// Remove stale native-login requirements from an active third-party provider.
+///
+/// Older Chimera++ templates marked every custom provider with
+/// `requires_openai_auth = true`. Codex interprets that flag as "use the
+/// ChatGPT login", so an API-key provider can unexpectedly open the official
+/// login screen after a provider switch. Official routes are never passed to
+/// this helper; for third-party routes we remove both the legacy top-level
+/// field and the active provider's field while preserving all other settings.
+pub fn normalize_codex_third_party_auth_config(config_text: &str) -> Result<String, AppError> {
+    if config_text.trim().is_empty() {
+        return Ok(config_text.to_string());
+    }
+
+    let mut doc = config_text
+        .parse::<DocumentMut>()
+        .map_err(|e| AppError::Message(format!("Invalid Codex config.toml: {e}")))?;
+
+    doc.as_table_mut().remove("requires_openai_auth");
+
+    if let Some(provider_id) = active_codex_model_provider_id(&doc) {
+        if let Some(model_providers) = doc
+            .get_mut("model_providers")
+            .and_then(|item| item.as_table_mut())
+        {
+            if let Some(provider) = model_providers.get_mut(&provider_id) {
+                if let Some(table) = provider.as_table_mut() {
+                    table.remove("requires_openai_auth");
+                } else if let Some(table) = provider.as_inline_table_mut() {
+                    table.remove("requires_openai_auth");
+                }
+            }
+        }
+    }
+
+    Ok(doc.to_string())
+}
+
 /// Write only Codex `config.toml` for provider switching.
 ///
 /// Codex login state lives in `auth.json`; provider routing, endpoint, model,
@@ -1809,6 +1846,14 @@ pub fn write_codex_live_for_provider(
             None
         };
     let config_text = unified_official_config.as_deref().or(config_text);
+    let normalized_third_party_config = if category == Some("official") {
+        None
+    } else {
+        config_text
+            .map(normalize_codex_third_party_auth_config)
+            .transpose()?
+    };
+    let config_text = normalized_third_party_config.as_deref().or(config_text);
 
     if category == Some("official") {
         let auth_path = get_codex_auth_path();
@@ -2091,6 +2136,42 @@ mod tests {
         assert_eq!(
             CodexCatalogToolProfile::from_api_format(None),
             CodexCatalogToolProfile::ProxyChat
+        );
+    }
+
+    #[test]
+    fn third_party_config_does_not_force_chatgpt_login() {
+        let input = r#"model_provider = "custom"
+requires_openai_auth = true
+
+[model_providers.custom]
+name = "Relay"
+base_url = "https://relay.example/v1"
+requires_openai_auth = true
+wire_api = "responses"
+
+[model_providers.other]
+requires_openai_auth = true
+"#;
+
+        let output = normalize_codex_third_party_auth_config(input).expect("normalize config");
+        let doc: toml::Value = toml::from_str(&output).expect("parse normalized config");
+        assert!(doc.get("requires_openai_auth").is_none());
+        assert!(doc["model_providers"]["custom"]
+            .get("requires_openai_auth")
+            .is_none());
+        assert_eq!(
+            doc["model_providers"]["custom"]
+                .get("base_url")
+                .and_then(toml::Value::as_str),
+            Some("https://relay.example/v1")
+        );
+        assert_eq!(
+            doc["model_providers"]["other"]
+                .get("requires_openai_auth")
+                .and_then(toml::Value::as_bool),
+            Some(true),
+            "unrelated provider entries must remain untouched"
         );
     }
 

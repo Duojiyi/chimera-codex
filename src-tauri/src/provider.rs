@@ -810,7 +810,7 @@ disable_response_storage = true
 name = "NewAPI"
 base_url = "{codex_base_url}"
 wire_api = "responses"
-requires_openai_auth = true"#
+requires_openai_auth = false"#
         );
 
         let settings_config = serde_json::json!({
@@ -1231,6 +1231,13 @@ mod tests {
             .expect("config toml");
 
         assert!(config.contains("base_url = \"https://api.example.com/v1\""));
+        let parsed: toml::Value = toml::from_str(config).expect("valid Codex config");
+        assert_eq!(
+            parsed["model_providers"]["custom"]
+                .get("requires_openai_auth")
+                .and_then(toml::Value::as_bool),
+            Some(false)
+        );
         assert_eq!(
             provider
                 .settings_config

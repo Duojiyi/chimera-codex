@@ -26,7 +26,7 @@ disable_response_storage = true
 [model_providers.custom]
 name = "custom"
 wire_api = "responses"
-requires_openai_auth = true`;
+requires_openai_auth = false`;
 
   return {
     auth: { OPENAI_API_KEY: "" },
@@ -47,7 +47,7 @@ disable_response_storage = true
 [model_providers.custom]
 name = "custom"
 wire_api = "responses"
-requires_openai_auth = true
+requires_openai_auth = false
 base_url = "https://api.chimerahub.org/v1"`;
 
   return {
