@@ -137,11 +137,9 @@ fn codex_is_running(installed: &codex_win_engine::InstalledWindowsCodex) -> Resu
         .map_err(|error| format!("无法读取 Codex 进程状态: {error}"))
 }
 
-fn launch_action(was_running: bool, restarted: bool) -> &'static str {
-    if restarted {
+fn launch_action(was_running: bool) -> &'static str {
+    if was_running {
         "restarted"
-    } else if was_running {
-        "opened"
     } else {
         "launched"
     }
@@ -294,11 +292,21 @@ pub async fn get_codex_process_status() -> Result<CodexProcessStatus, String> {
     .map_err(|error| format!("读取 Codex 进程状态时任务中断: {error}"))?
 }
 
-/// Start Codex, focus it, or restart the managed installation after a provider
-/// change. Restart is explicit and path-pinned so unrelated installations are
-/// never terminated.
+/// Launch the managed Codex installation, replacing a running managed instance
+/// first. The deprecated optional flag is accepted only for IPC compatibility:
+/// lifecycle policy is backend-owned and a running target is always restarted.
+///
+/// The cross-process lock covers discovery, shutdown, launch, and health
+/// verification. Process discovery and termination are path-pinned in
+/// `codex_win_engine`, so unrelated Electron or ChatGPT processes are never
+/// selected.
 #[tauri::command]
-pub async fn open_codex_runtime(restart_if_running: bool) -> Result<CodexLaunchResult, String> {
+pub async fn open_codex_runtime(
+    restart_if_running: Option<bool>,
+) -> Result<CodexLaunchResult, String> {
+    // Keep accepting the old renderer argument without allowing it to weaken
+    // the safe restart policy. The renderer submits launch intent only.
+    let _legacy_restart_preference = restart_if_running;
     require_windows()?;
     let portable_root = portable_root();
     tauri::async_runtime::spawn_blocking(move || {
@@ -306,17 +314,15 @@ pub async fn open_codex_runtime(restart_if_running: bool) -> Result<CodexLaunchR
         let installed = codex_win_engine::detect_installed_codex(&portable_root)
             .ok_or_else(|| "未检测到 Codex 安装".to_string())?;
         let was_running = codex_is_running(&installed)?;
-        let restarted = was_running && restart_if_running;
-        if restarted {
+        if was_running {
             close_codex_for_restart(&installed, &portable_root)?;
         }
         if let Err(error) = codex_win_engine::launch_codex(&installed) {
-            // Portable Electron exits its second process after handing focus to
-            // the existing instance. The manager reports that short-lived child
-            // as an error, so accept it only when the same path remains active.
-            if !was_running || restarted || !codex_is_running(&installed)? {
-                return Err(format!("无法启动 Codex: {error}"));
-            }
+            // A second portable Electron process may exit after handing focus
+            // to an already-running instance. We intentionally reject that
+            // path here: a previous target was either absent or confirmed
+            // closed, so accepting it could hide a failed replacement.
+            return Err(format!("无法启动 Codex: {error}"));
         }
         let running = wait_for_codex_running(&installed)?;
         if !running {
@@ -325,7 +331,7 @@ pub async fn open_codex_runtime(restart_if_running: bool) -> Result<CodexLaunchR
         Ok(CodexLaunchResult {
             was_running,
             running,
-            action: launch_action(was_running, restarted),
+            action: launch_action(was_running),
         })
     })
     .await
@@ -641,10 +647,9 @@ mod tests {
     use super::{launch_action, process_install_mode, CodexProcessStatus, CodexRuntimeStatus};
 
     #[test]
-    fn launch_action_distinguishes_start_from_open() {
-        assert_eq!(launch_action(false, false), "launched");
-        assert_eq!(launch_action(true, false), "opened");
-        assert_eq!(launch_action(true, true), "restarted");
+    fn launch_action_replaces_a_running_instance() {
+        assert_eq!(launch_action(false), "launched");
+        assert_eq!(launch_action(true), "restarted");
     }
 
     #[test]

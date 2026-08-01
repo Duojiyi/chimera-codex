@@ -2,10 +2,14 @@ name: Chimera++ CI
 
 on:
   push:
+  pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
-  group: chimera-ci-${{ github.ref }}
+  group: chimera-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -30,8 +34,28 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify version consistency
+        run: node scripts/verify-release-version.mjs
+
+      - name: Check frontend formatting
+        run: pnpm format:check
+
       - name: Type-check frontend
         run: pnpm typecheck
+
+      - name: Run frontend unit tests
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path test-results | Out-Null
+          pnpm test:unit -- --reporter=default --reporter=junit --outputFile=test-results/vitest.junit.xml
+
+      - name: Upload frontend test report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-test-results-${{ github.sha }}
+          path: test-results/
+          if-no-files-found: warn
 
   backend:
     name: Backend Validation (${{ matrix.os }})

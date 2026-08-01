@@ -5,6 +5,19 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-08-01
+
+### Added
+
+- **Safer Codex lifecycle:** launching a managed Codex instance now always replaces a detected, path-pinned prior instance under the runtime lock; the renderer no longer decides whether a restart is needed.
+- **GitHub candidate builds:** a manual Windows/macOS candidate workflow now validates the version, quality gates, produces platform artifacts, checksums, dependency manifests, and build provenance without creating a Release or updater metadata.
+- **Release integrity checks:** release jobs verify package, Tauri, Cargo manifest, and Cargo lock versions agree, then validate generated updater metadata against the release assets.
+- **CC Switch v3.19.1 compatibility/security adaptations:** native DeepSeek Responses catalog generation, protected config walkers, SQL import statement isolation, POSIX terminal path quoting, and deeplink/MCP risk disclosures.
+
+### Changed
+
+- CI now runs on pull requests as well as pushes and enforces formatter, lint/type checks, frontend unit tests, Rust formatting, Clippy with warnings denied, and Rust tests.
+
 ## [3.18.0] - 2026-07-21
 
 Development since v3.17.0 is headlined by Grok Build joining as the eighth managed app — full provider switching, proxy takeover on its own route namespace, MCP/Skills/prompts sync, a curated preset list, and a Grok Official entry with official-login import (schema v14/v15) — and by xAI Grok account sign-in over an OAuth device flow for Claude Code, Claude Desktop, and Codex, including a strict-gateway compatibility layer that lets codex 0.142+ drive a Grok subscription over native Responses. A usage-accounting repair wave fixes the v3.17.0 fork/sub-agent double count with a one-time automatic rebuild (schema v16) plus a manual rebuild action, makes proxy usage logging idempotent, and stops the usage page freezing during large imports. Diagnostics mature: logs persist across restarts under size rotation, every log egress redacts secrets, and renderer crashes are captured to disk behind an error boundary with a reload screen. The Codex conversion layer gets four correctness fixes — tool schemas normalized to object type, reasoning attached forward across turns, streamed tool-call identity and order preserved, and parser-required catalog fields backfilled so codex 0.144.5+ starts — while managed-OAuth providers are now reliably flagged as routing-required and Windows provider switches no longer flash a console window or freeze the UI. Rounded out by Kimi K3 presets and pricing, corrected OpenClaw preset costs, SudoCode.us restored beside SudoCode.chat, sponsor-grouped preset ordering, first-run tray language detection, and permanently deletable default Skill repositories.
