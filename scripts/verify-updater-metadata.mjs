@@ -4,51 +4,71 @@ import fs from "node:fs";
 import path from "node:path";
 
 function usage() {
-  console.error("Usage: node scripts/verify-updater-metadata.mjs --file latest.json --tag vX.Y.Z --assets-dir release-assets");
+  console.error("Usage: node scripts/verify-updater-metadata.mjs --file latest.json --tag vX.Y.Z --assets-dir release-assets [--repository owner/repo]");
   process.exit(2);
 }
 
 const args = process.argv.slice(2);
-const valueAfter = (flag) => {
+function valueAfter(flag) {
   const index = args.indexOf(flag);
   return index >= 0 ? args[index + 1] : undefined;
-};
+}
 const file = valueAfter("--file");
 const tag = valueAfter("--tag");
-const assetsDir = valueAfter("--assets-dir");
-if (!file || !tag || !assetsDir || !tag.startsWith("v")) usage();
-
+const assetsDirArg = valueAfter("--assets-dir");
+const repository = valueAfter("--repository") ?? process.env.GITHUB_REPOSITORY;
+if (!file || !assetsDirArg || !repository || !/^v\d+\.\d+\.\d+$/.test(tag ?? "") || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) usage();
+const assetsDir = path.resolve(assetsDirArg);
 const expectedVersion = tag.slice(1);
-const metadata = JSON.parse(fs.readFileSync(file, "utf8"));
-if (metadata.version !== expectedVersion) {
-  throw new Error(`latest.json version ${JSON.stringify(metadata.version)} does not match ${JSON.stringify(expectedVersion)}`);
-}
-if (!metadata.url?.endsWith(`/releases/tag/${tag}`)) {
-  throw new Error("latest.json release URL does not point to this tag");
-}
-if (!metadata.platforms || typeof metadata.platforms !== "object") {
-  throw new Error("latest.json has no updater platforms");
-}
-for (const [platform, entry] of Object.entries(metadata.platforms)) {
-  if (!entry?.url?.includes(`/releases/download/${tag}/`) || !entry?.signature) {
-    throw new Error(`invalid updater entry for ${platform}`);
+const baseUrl = `https://github.com/${repository}/releases/download/${tag}`;
+const releaseUrl = `https://github.com/${repository}/releases/tag/${tag}`;
+const metadata = JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
+
+function safeBasename(value, label) {
+  if (typeof value !== "string" || value.length === 0 || value !== path.basename(value) || value === "." || value === ".." || value.includes("\\")) {
+    throw new Error(`${label} must be a non-empty basename`);
   }
+  return value;
 }
-if (!Array.isArray(metadata.assets) || metadata.assets.length === 0) {
-  throw new Error("latest.json has no release assets");
+function readRegularAsset(name) {
+  const filePath = path.join(assetsDir, safeBasename(name, "asset name"));
+  const stat = fs.lstatSync(filePath, { throwIfNoEntry: false });
+  if (!stat || !stat.isFile() || stat.isSymbolicLink()) throw new Error(`Release asset is missing or unsafe: ${name}`);
+  return { bytes: fs.readFileSync(filePath), size: stat.size };
 }
-for (const asset of metadata.assets) {
-  const name = path.basename(asset?.name || "");
-  const assetPath = path.join(assetsDir, name);
-  if (!name || !fs.existsSync(assetPath)) {
-    throw new Error(`metadata asset is missing from ${assetsDir}: ${name || "<empty>"}`);
-  }
-  const actualSha = crypto.createHash("sha256").update(fs.readFileSync(assetPath)).digest("hex");
-  if (asset.sha256 !== actualSha) {
-    throw new Error(`SHA-256 mismatch for ${name}`);
-  }
-  if (asset.size !== fs.statSync(assetPath).size) {
-    throw new Error(`size mismatch for ${name}`);
-  }
+
+if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) throw new Error("latest.json must be an object");
+if (metadata.version !== expectedVersion) throw new Error(`latest.json version ${JSON.stringify(metadata.version)} does not match ${JSON.stringify(expectedVersion)}`);
+if (metadata.url !== releaseUrl) throw new Error("latest.json release URL does not exactly point to this repository tag");
+
+const platformArtifacts = {
+  "windows-x86_64": `Chimera++-${tag}-Windows.msi`,
+  "windows-aarch64": `Chimera++-${tag}-Windows-arm64.msi`,
+  "darwin-x86_64": `Chimera++-${tag}-macOS.tar.gz`,
+  "darwin-aarch64": `Chimera++-${tag}-macOS.tar.gz`,
+};
+if (!metadata.platforms || typeof metadata.platforms !== "object" || Array.isArray(metadata.platforms)) throw new Error("latest.json has no updater platforms");
+const actualPlatformNames = Object.keys(metadata.platforms).sort();
+const expectedPlatformNames = Object.keys(platformArtifacts).sort();
+if (JSON.stringify(actualPlatformNames) !== JSON.stringify(expectedPlatformNames)) throw new Error("latest.json updater platform set is not exact");
+for (const [platform, artifact] of Object.entries(platformArtifacts)) {
+  const entry = metadata.platforms[platform];
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`invalid updater entry for ${platform}`);
+  if (entry.url !== `${baseUrl}/${artifact}`) throw new Error(`updater URL for ${platform} is not bound to the expected release asset`);
+  if (typeof entry.signature !== "string" || entry.signature.length === 0) throw new Error(`updater signature for ${platform} is missing`);
+  const sig = readRegularAsset(`${artifact}.sig`).bytes.toString("utf8").trimEnd();
+  if (entry.signature !== sig) throw new Error(`updater signature for ${platform} does not exactly match ${artifact}.sig`);
 }
-console.log(`Updater metadata verified for ${tag}`);
+
+const legacyName = `ChimeraPlusPlus-${expectedVersion}-windows-x64-setup.exe`;
+if (!Array.isArray(metadata.assets) || metadata.assets.length !== 1) throw new Error("latest.json must contain exactly one legacy update asset");
+const legacy = metadata.assets[0];
+if (!legacy || typeof legacy !== "object" || Array.isArray(legacy)) throw new Error("legacy update asset is invalid");
+if (legacy.name !== legacyName || legacy.url !== `${baseUrl}/${legacyName}`) throw new Error("legacy update asset is not bound to the expected filename and URL");
+if (typeof legacy.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(legacy.sha256)) throw new Error("legacy update asset SHA-256 is invalid");
+if (!Number.isSafeInteger(legacy.size) || legacy.size <= 0) throw new Error("legacy update asset size is invalid");
+const legacyBytes = readRegularAsset(legacyName);
+const actualSha = crypto.createHash("sha256").update(legacyBytes.bytes).digest("hex");
+if (legacy.sha256 !== actualSha) throw new Error(`SHA-256 mismatch for ${legacyName}`);
+if (legacy.size !== legacyBytes.size) throw new Error(`size mismatch for ${legacyName}`);
+console.log(`Updater metadata verified for ${tag}.`);

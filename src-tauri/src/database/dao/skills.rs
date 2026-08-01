@@ -11,7 +11,8 @@ use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::services::skill::SkillRepo;
 use indexmap::IndexMap;
-use rusqlite::params;
+use rusqlite::{params, TransactionBehavior};
+use std::collections::HashSet;
 
 impl Database {
     // ========== InstalledSkill CRUD ==========
@@ -152,6 +153,138 @@ impl Database {
         let conn = lock_conn!(self.conn);
         conn.execute("DELETE FROM skills", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// 原子地写入 Skill/仓库状态。
+    ///
+    /// `clear_skills_first` 仅用于一次性迁移；普通导入必须传 `false`，
+    /// 这样数据库错误或并发冲突时整个批次都会回滚，不会留下部分 Skill 或仓库记录。
+    pub fn apply_skills_and_repos_atomic(
+        &self,
+        skills: &[InstalledSkill],
+        repos: &[SkillRepo],
+        clear_skills_first: bool,
+        clear_setting_key: Option<&str>,
+    ) -> Result<(), AppError> {
+        let mut conn = lock_conn!(self.conn);
+        // 先取得写锁，再在同一事务中重做冲突检查；不能依赖调用方事务外的预检查。
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| AppError::Database(format!("开启 Skill 事务失败: {e}")))?;
+
+        let mut batch_ids = HashSet::with_capacity(skills.len());
+        let mut batch_directories = HashSet::with_capacity(skills.len());
+        for skill in skills {
+            if !batch_ids.insert(skill.id.clone()) {
+                return Err(AppError::Database(format!(
+                    "同一批次包含重复 Skill ID: {}",
+                    skill.id
+                )));
+            }
+            if !batch_directories.insert(skill.directory.clone()) {
+                return Err(AppError::Database(format!(
+                    "同一批次包含重复 Skill 目录: {}",
+                    skill.directory
+                )));
+            }
+        }
+
+        if clear_skills_first {
+            tx.execute("DELETE FROM skills", [])
+                .map_err(|e| AppError::Database(format!("清空 Skills 失败: {e}")))?;
+        } else {
+            // 普通导入不能覆盖现有记录。由于事务使用 IMMEDIATE 写锁，
+            // 这里的检查与后续 INSERT 之间不会被另一写事务插入竞争数据。
+            for skill in skills {
+                let id_exists: i64 = tx
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM skills WHERE id = ?1)",
+                        params![skill.id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| {
+                        AppError::Database(format!("检查 Skill ID {} 失败: {e}", skill.id))
+                    })?;
+                if id_exists != 0 {
+                    return Err(AppError::Database(format!(
+                        "拒绝覆盖已有 ID 的 Skill: {}",
+                        skill.id
+                    )));
+                }
+
+                let directory_exists: i64 = tx
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM skills WHERE directory = ?1)",
+                        params![skill.directory],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| {
+                        AppError::Database(format!("检查 Skill 目录 {} 失败: {e}", skill.directory))
+                    })?;
+                if directory_exists != 0 {
+                    return Err(AppError::Database(format!(
+                        "拒绝覆盖已有数据库记录的 Skill: {}",
+                        skill.directory
+                    )));
+                }
+            }
+        }
+
+        for skill in skills {
+            tx.execute(
+                "INSERT INTO skills
+                 (id, name, description, directory, repo_owner, repo_name, repo_branch,
+                  readme_url, enabled_claude, enabled_codex, enabled_gemini, enabled_grokbuild, enabled_opencode, enabled_hermes,
+                  installed_at, content_hash, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                params![
+                    skill.id,
+                    skill.name,
+                    skill.description,
+                    skill.directory,
+                    skill.repo_owner,
+                    skill.repo_name,
+                    skill.repo_branch,
+                    skill.readme_url,
+                    skill.apps.claude,
+                    skill.apps.codex,
+                    skill.apps.gemini,
+                    skill.apps.grokbuild,
+                    skill.apps.opencode,
+                    skill.apps.hermes,
+                    skill.installed_at,
+                    skill.content_hash,
+                    skill.updated_at,
+                ],
+            )
+            .map_err(|e| AppError::Database(format!("写入 Skill {} 失败: {e}", skill.id)))?;
+        }
+
+        // 只补充 lock 中的新仓库，不覆盖用户已经调整的分支/启用状态。
+        for repo in repos {
+            tx.execute(
+                "INSERT OR IGNORE INTO skill_repos (owner, name, branch, enabled) VALUES (?1, ?2, ?3, ?4)",
+                params![repo.owner, repo.name, repo.branch, repo.enabled],
+            )
+            .map_err(|e| {
+                AppError::Database(format!(
+                    "写入 Skill 仓库 {}/{} 失败: {e}",
+                    repo.owner, repo.name
+                ))
+            })?;
+        }
+
+        if let Some(key) = clear_setting_key {
+            tx.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+                params![key, ""],
+            )
+            .map_err(|e| AppError::Database(format!("清理迁移快照失败: {e}")))?;
+        }
+
+        tx.commit()
+            .map_err(|e| AppError::Database(format!("提交 Skill 事务失败: {e}")))?;
         Ok(())
     }
 

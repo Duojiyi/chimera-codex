@@ -6,14 +6,90 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
+  actions: read
 
 concurrency:
   group: release-${{ github.ref_name }}
   cancel-in-progress: true
 
 jobs:
+  verify-release:
+    name: Verify release commit and required CI
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout tag and history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+
+      - name: Verify tag identity and required CI checks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          tag_commit=$(git rev-parse "${RELEASE_TAG}^{commit}")
+          if [[ "$tag_commit" != "$RELEASE_SHA" ]]; then
+            echo "Tag commit mismatch: git=$tag_commit event=$RELEASE_SHA" >&2
+            exit 1
+          fi
+          git fetch origin main --no-tags
+          if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
+            echo "Release tag must point to a commit reachable from main: $tag_commit" >&2
+            exit 1
+          fi
+          node scripts/verify-release-version.mjs --expect "$RELEASE_TAG"
+
+          ci_runs_json=$(gh api "repos/$REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$tag_commit&event=push&per_page=100")
+          ci_run_id=$(jq -r --arg sha "$tag_commit" '
+            .workflow_runs[]
+            | select(
+                .head_sha == $sha
+                and .head_branch == "main"
+                and .status == "completed"
+                and .conclusion == "success"
+              )
+            | .id
+          ' <<<"$ci_runs_json" | head -n 1)
+          if [[ -z "$ci_run_id" || "$ci_run_id" == "null" ]]; then
+            echo "No successful ci.yml push run on main found for $tag_commit" >&2
+            exit 1
+          fi
+          jobs_json=$(gh api "repos/$REPOSITORY/actions/runs/$ci_run_id/jobs?per_page=100")
+          required_jobs=(
+            "Windows Frontend Validation"
+            "Backend Validation (windows-2022)"
+            "Backend Validation (macos-15)"
+          )
+          for required_job in "${required_jobs[@]}"; do
+            if ! jq -e --arg name "$required_job" \
+              '.jobs[] | select(.name == $name and .conclusion == "success")' \
+              <<<"$jobs_json" >/dev/null; then
+              echo "Required CI job did not pass: $required_job" >&2
+              exit 1
+            fi
+          done
+          echo "Release $RELEASE_TAG is bound to audited commit $tag_commit and successful CI run $ci_run_id"
+
   release:
+    needs: verify-release
     runs-on: ${{ matrix.os }}
     environment: release
     strategy:
@@ -28,15 +104,26 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Record source commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit=$(git rev-parse HEAD)
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          printf 'SOURCE_COMMIT=%s\n' "$commit" >> "$GITHUB_ENV"
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: "20"
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Add Windows ARM64 target
         if: runner.os == 'Windows' && matrix.arch == 'arm64'
@@ -82,7 +169,7 @@ jobs:
 
       - name: Setup pnpm
         if: runner.os != 'Windows' || matrix.arch != 'arm64'
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34
         with:
           version: 10.12.3
           run_install: false
@@ -105,7 +192,7 @@ jobs:
 
       - name: Setup pnpm cache
         if: runner.os != 'Windows' || matrix.arch != 'arm64'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: ${{ runner.os }}-${{ runner.arch }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -129,7 +216,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Verify release version consistency
-        run: node scripts/verify-release-version.mjs --expect ${{ github.ref_name }}
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: node scripts/verify-release-version.mjs --expect "$RELEASE_TAG"
 
       - name: Verify renderer contracts
         if: runner.os != 'Windows' || matrix.arch != 'arm64'
@@ -143,59 +233,10 @@ jobs:
 
       - name: Prepare Tauri signing key
         shell: bash
-        run: |
-          # 调试：检查 Secret 是否存在
-          if [ -z "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" ]; then
-            echo "❌ TAURI_SIGNING_PRIVATE_KEY Secret 为空或不存在" >&2
-            echo "请检查 GitHub 仓库 Settings > Secrets and variables > Actions" >&2
-            exit 1
-          fi
-
-          RAW="${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"
-          # 目标：提供正确的私钥“文件路径”给 Tauri CLI，避免内容解码歧义
-          KEY_PATH="$RUNNER_TEMP/tauri_signing.key"
-          # 情况 1：原始两行文本（第一行以 "untrusted comment:" 开头）
-          if echo "$RAW" | head -n1 | grep -q '^untrusted comment:'; then
-            printf '%s\n' "$RAW" > "$KEY_PATH"
-            echo "✅ 使用原始两行密钥文件格式"
-          else
-            # 情况 2：整体被 base64 包裹（解包后应当是两行）
-            if DECODED=$(printf '%s' "$RAW" | (base64 --decode 2>/dev/null || base64 -D 2>/dev/null)) \
-               && echo "$DECODED" | head -n1 | grep -q '^untrusted comment:'; then
-              printf '%s\n' "$DECODED" > "$KEY_PATH"
-              echo "✅ 成功解码 base64 包裹密钥，已还原为两行文件"
-            else
-              # 情况 3：已是第二行（纯 Base64 一行）→ 构造两行文件
-              if echo "$RAW" | grep -Eq '^[A-Za-z0-9+/=]+$'; then
-                ONE=$(printf '%s' "$RAW" | tr -d '\r\n')
-                printf '%s\n%s\n' "untrusted comment: tauri signing key" "$ONE" > "$KEY_PATH"
-                echo "✅ 使用一行 Base64 私钥，已构造两行文件"
-              else
-                echo "❌ TAURI_SIGNING_PRIVATE_KEY 格式无法识别：既不是两行原文，也不是其 base64，亦非一行 base64" >&2
-                echo "密钥前10个字符: $(echo "$RAW" | head -c 10)..." >&2
-                exit 1
-              fi
-            fi
-          fi
-          # 将“完整两行内容”作为环境变量注入（Tauri 支持传入完整私钥文本或文件路径）
-          # 使用多行写入语法，保持换行以便解析
-          # 将完整两行私钥内容进行 base64 编码，作为单行内容注入环境变量
-          if command -v base64 >/dev/null 2>&1; then
-            KEY_B64=$(base64 < "$KEY_PATH" | tr -d '\r\n')
-          elif command -v openssl >/dev/null 2>&1; then
-            KEY_B64=$(openssl base64 -A -in "$KEY_PATH")
-          else
-            KEY_B64=$(KEY_PATH="$KEY_PATH" node -e "process.stdout.write(require('fs').readFileSync(process.env.KEY_PATH).toString('base64'))")
-          fi
-          if [ -z "$KEY_B64" ]; then
-            echo "❌ 无法生成私钥 base64 内容" >&2
-            exit 1
-          fi
-          echo "TAURI_SIGNING_PRIVATE_KEY=$KEY_B64" >> "$GITHUB_ENV"
-          if [ -n "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" ]; then
-            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" >> $GITHUB_ENV
-          fi
-          echo "✅ Tauri signing key prepared"
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bash scripts/prepare-tauri-signing-key.sh
 
       - name: Build Tauri App (macOS)
         if: runner.os == 'macOS'
@@ -346,15 +387,11 @@ jobs:
             if (Test-Path $sigPath) {
               Copy-Item $sigPath (Join-Path release-assets ("$dest.sig"))
               Write-Host "Signature copied: $dest.sig"
-            } elseif ($isArm64) {
-              throw "Signature not found for $($msi.Name)"
             } else {
-              Write-Warning "Signature not found for $($msi.Name)"
+              throw "Signature not found for $($msi.Name)"
             }
-          } elseif ($isArm64) {
-            throw 'No Windows ARM64 MSI installer found'
           } else {
-            Write-Warning 'No Windows MSI installer found'
+            throw "No Windows $($env:WINDOWS_RELEASE_ARCH) MSI installer found"
           }
 
           # Chimera++ 1.x uses its own updater and can only launch an NSIS setup
@@ -385,28 +422,55 @@ jobs:
             New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
             Copy-Item $exePath $portableDir
 
-            # Bundle the matching Codex desktop package from our audited mirror.
-            $mirrorRelease = Invoke-RestMethod -Uri 'https://api.github.com/repos/Duojiyi/codex-app-mirror/releases/latest' -Headers @{ 'User-Agent' = 'Chimera-Release' }
-            $archPattern = if ($isArm64) { '_arm64__.*\.Msix$' } else { '_x64__.*\.Msix$' }
-            $msixAsset = $mirrorRelease.assets | Where-Object { $_.name -match $archPattern } | Select-Object -First 1
-            $sumsAsset = $mirrorRelease.assets | Where-Object { $_.name -eq 'SHA256SUMS-windows.txt' } | Select-Object -First 1
-            if ($null -eq $msixAsset -or $null -eq $sumsAsset) {
-              throw "Codex mirror does not contain the required $env:WINDOWS_RELEASE_ARCH package or checksum"
+            # Bundle one exact, audited Codex desktop package from the pinned mirror release.
+            $codexMirrorRepository = 'Duojiyi/codex-app-mirror'
+            $codexMirrorTag = 'codex-app-26.721.41059'
+            $codexMirrorCommit = '84c625145ad2e2cfc6f06439250c1fddce0eff14'
+            $apiHeaders = @{
+              Accept = 'application/vnd.github+json'
+              'X-GitHub-Api-Version' = '2022-11-28'
+              'User-Agent' = 'Chimera-Release'
             }
+            $mirrorRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/$codexMirrorRepository/releases/tags/$codexMirrorTag" -Headers $apiHeaders
+            if ($mirrorRelease.tag_name -ne $codexMirrorTag) {
+              throw "Codex mirror release tag mismatch: $($mirrorRelease.tag_name)"
+            }
+            $mirrorCommitResponse = Invoke-RestMethod -Uri "https://api.github.com/repos/$codexMirrorRepository/commits/$codexMirrorTag" -Headers $apiHeaders
+            if ($mirrorCommitResponse.sha -ne $codexMirrorCommit) {
+              throw "Codex mirror commit mismatch: expected $codexMirrorCommit, got $($mirrorCommitResponse.sha)"
+            }
+            $archPattern = if ($isArm64) { '_arm64__.*\.Msix$' } else { '_x64__.*\.Msix$' }
+            $msixAssets = @($mirrorRelease.assets | Where-Object { $_.name -match $archPattern })
+            $sumsAssets = @($mirrorRelease.assets | Where-Object { $_.name -eq 'SHA256SUMS-windows.txt' })
+            if ($msixAssets.Count -ne 1 -or $sumsAssets.Count -ne 1) {
+              throw "Codex mirror must contain exactly one $env:WINDOWS_RELEASE_ARCH MSIX and one SHA256SUMS-windows.txt"
+            }
+            $msixAsset = $msixAssets[0]
+            $sumsAsset = $sumsAssets[0]
             $codexMsix = Join-Path $env:RUNNER_TEMP $msixAsset.name
             $checksumFile = Join-Path $env:RUNNER_TEMP 'SHA256SUMS-windows.txt'
             Invoke-WebRequest -Uri $msixAsset.browser_download_url -OutFile $codexMsix
             Invoke-WebRequest -Uri $sumsAsset.browser_download_url -OutFile $checksumFile
-            $expectedHash = ((Get-Content $checksumFile | Where-Object { $_ -match [regex]::Escape($msixAsset.name) } | Select-Object -First 1) -split '\s+')[0]
+            $checksumPattern = "(^|\s){0}$" -f [regex]::Escape($msixAsset.name)
+            $checksumLine = @(Get-Content $checksumFile | Where-Object { $_ -match $checksumPattern }) | Select-Object -First 1
+            $expectedHash = (($checksumLine -split '\s+')[0])
             $actualHash = (Get-FileHash -Algorithm SHA256 $codexMsix).Hash.ToLowerInvariant()
-            if ([string]::IsNullOrWhiteSpace($expectedHash) -or $actualHash -ne $expectedHash.ToLowerInvariant()) {
+            if ($expectedHash -notmatch '^[0-9a-fA-F]{64}$' -or $actualHash -ne $expectedHash.ToLowerInvariant()) {
               throw 'Codex mirror checksum verification failed'
             }
             $codexArchive = Join-Path $env:RUNNER_TEMP 'codex-package.zip'
             Copy-Item $codexMsix $codexArchive
             Expand-Archive -LiteralPath $codexArchive -DestinationPath (Join-Path $portableDir 'Codex') -Force
-            Set-Content -Path (Join-Path $portableDir 'Codex\CHIMERA-CODEX-VERSION.txt') -Value $mirrorRelease.tag_name -Encoding UTF8
-
+            Set-Content -Path (Join-Path $portableDir 'Codex\CHIMERA-CODEX-VERSION.txt') -Value "$codexMirrorTag`n$codexMirrorCommit" -Encoding UTF8
+            $codexPlatform = if ($isArm64) { 'windows-arm64' } else { 'windows-x86_64' }
+            [ordered]@{
+              schemaVersion = 1
+              repository = $codexMirrorRepository
+              tag = $codexMirrorTag
+              commit = $codexMirrorCommit
+              asset = $msixAsset.name
+              sha256 = $actualHash
+            } | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path 'release-assets' "codex-mirror-provenance-$codexPlatform.json") -Encoding UTF8
             $portableIniPath = Join-Path $portableDir 'portable.ini'
             $portableContent = if ($isArm64) {
               @(
@@ -430,7 +494,7 @@ jobs:
           } elseif ($isArm64) {
             throw 'Portable ARM64 exe not found'
           } else {
-            Write-Warning 'Portable exe not found'
+            throw 'Portable exe not found'
           }
 
       - name: Prepare Linux Assets
@@ -468,6 +532,107 @@ jobs:
             echo "No .rpm found (optional)"
           fi
 
+      - name: Generate Windows release evidence
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_COMMIT: ${{ env.SOURCE_COMMIT }}
+          WINDOWS_RELEASE_ARCH: ${{ matrix.arch || 'x86_64' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $platform = if ($env:WINDOWS_RELEASE_ARCH -eq 'arm64') { 'windows-arm64' } else { 'windows-x86_64' }
+          $mirrorPath = Join-Path (Get-Location) "release-assets/codex-mirror-provenance-$platform.json"
+          if (-not (Test-Path -LiteralPath $mirrorPath)) {
+            throw "Missing Codex mirror provenance: $mirrorPath"
+          }
+          $codexMirror = Get-Content -LiteralPath $mirrorPath -Raw | ConvertFrom-Json
+          $frontendSbom = pnpm list --prod --json
+          if ($LASTEXITCODE -ne 0) { throw "Frontend SBOM generation failed with exit code $LASTEXITCODE" }
+          $frontendSbom | Set-Content -Path (Join-Path 'release-assets' "frontend-sbom-$platform.json") -Encoding UTF8
+          $rustSbom = cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 --locked
+          if ($LASTEXITCODE -ne 0) { throw "Rust SBOM generation failed with exit code $LASTEXITCODE" }
+          $rustSbom | Set-Content -Path (Join-Path 'release-assets' "rust-sbom-$platform.json") -Encoding UTF8
+          $externalGitDependencies = @(
+            [ordered]@{ package = 'chimera-runtime'; repository = 'https://github.com/Duojiyi/chimera-codex.git'; revision = 'a5075e6e4d58aad13db259e3eebeabdc0417e3b3' },
+            [ordered]@{ package = 'chimera-platform'; repository = 'https://github.com/Duojiyi/chimera-codex.git'; revision = 'a5075e6e4d58aad13db259e3eebeabdc0417e3b3' },
+            [ordered]@{ package = 'codex-win-engine'; repository = 'https://github.com/Wangnov/Codex-App-Manager.git'; revision = '89b542b9299453dcd833757b10cdb15f6d14d527' },
+            [ordered]@{ package = 'codex-theme-engine'; repository = 'https://github.com/Wangnov/Codex-App-Manager.git'; revision = '89b542b9299453dcd833757b10cdb15f6d14d527' }
+          )
+          $target = if ($env:WINDOWS_RELEASE_ARCH -eq 'arm64') { 'aarch64-pc-windows-msvc' } else { 'x86_64-pc-windows-msvc' }
+          [ordered]@{
+            schemaVersion = 1
+            releaseTag = $env:RELEASE_TAG
+            sourceCommit = $env:SOURCE_COMMIT
+            platform = $platform
+            runner = [ordered]@{
+              name = $env:RUNNER_NAME
+              os = $env:RUNNER_OS
+              arch = $env:RUNNER_ARCH
+            }
+            target = $target
+            externalGitDependencies = $externalGitDependencies
+            codexMirror = $codexMirror
+          } | ConvertTo-Json -Depth 10 | Set-Content -Path (Join-Path 'release-assets' "build-provenance-$platform.json") -Encoding UTF8
+          $checksumName = "SHA256SUMS-$platform.txt"
+          $assetFiles = @(Get-ChildItem -LiteralPath 'release-assets' -File | Where-Object { $_.Name -ne $checksumName } | Sort-Object Name)
+          if ($assetFiles.Count -eq 0) {
+            throw "No release assets found for checksum generation: $platform"
+          }
+          $assetFiles | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "{0}  {1}" -f $hash, $_.Name
+          } | Set-Content -Path (Join-Path 'release-assets' $checksumName) -Encoding UTF8
+          if (-not (Test-Path -LiteralPath (Join-Path 'release-assets' $checksumName))) {
+            throw "Checksum file was not generated: $checksumName"
+          }
+
+      - name: Generate macOS release evidence
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_COMMIT: ${{ env.SOURCE_COMMIT }}
+        run: |
+          set -euo pipefail
+          platform='macos-universal'
+          pnpm list --prod --json > "release-assets/frontend-sbom-$platform.json"
+          cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 --locked > "release-assets/rust-sbom-$platform.json"
+          jq -n \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg platform "$platform" \
+            --arg runner_name "$RUNNER_NAME" \
+            --arg runner_os "$RUNNER_OS" \
+            --arg runner_arch "$RUNNER_ARCH" \
+            --argjson external_git_dependencies '[
+              {"package":"chimera-runtime","repository":"https://github.com/Duojiyi/chimera-codex.git","revision":"a5075e6e4d58aad13db259e3eebeabdc0417e3b3"},
+              {"package":"chimera-platform","repository":"https://github.com/Duojiyi/chimera-codex.git","revision":"a5075e6e4d58aad13db259e3eebeabdc0417e3b3"},
+              {"package":"codex-win-engine","repository":"https://github.com/Wangnov/Codex-App-Manager.git","revision":"89b542b9299453dcd833757b10cdb15f6d14d527"},
+              {"package":"codex-theme-engine","repository":"https://github.com/Wangnov/Codex-App-Manager.git","revision":"89b542b9299453dcd833757b10cdb15f6d14d527"}
+            ]' \
+            '{
+              schemaVersion: 1,
+              releaseTag: $release_tag,
+              sourceCommit: $source_commit,
+              platform: $platform,
+              runner: {name: $runner_name, os: $runner_os, arch: $runner_arch},
+              target: "universal-apple-darwin",
+              appleDeveloperIdSigned: false,
+              notarized: false,
+              externalGitDependencies: $external_git_dependencies
+            }' > "release-assets/build-provenance-$platform.json"
+          checksum_name="SHA256SUMS-$platform.txt"
+          (
+            cd release-assets
+            for asset in *; do
+              [ "$asset" = "$checksum_name" ] && continue
+              [ -f "$asset" ] || continue
+              shasum -a 256 "$asset"
+            done
+          ) > "release-assets/$checksum_name"
+          test -s "release-assets/$checksum_name"
+
       - name: List prepared assets
         shell: bash
         run: |
@@ -477,11 +642,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "Collected signatures (if any alongside artifacts):"
-          ls -la release-assets/*.sig || echo "No signatures found"
+          sig_files=(release-assets/*.sig)
+          if [ ! -e "${sig_files[0]}" ]; then
+            echo "No updater signatures were produced for $RUNNER_OS" >&2
+            exit 1
+          fi
+          printf '%s\n' "Collected signatures:"
+          ls -la -- release-assets/*.sig
 
       - name: Upload release artifacts to workflow
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: release-assets-${{ runner.os }}-${{ matrix.arch || runner.arch }}
           path: release-assets/*
@@ -500,22 +670,115 @@ jobs:
     needs: release
     permissions:
       contents: write
+      actions: read
     steps:
+      - name: Checkout release verification scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+
       - name: Download built release artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: release-assets-*
-          path: release-assets
-          merge-multiple: true
+          path: downloaded-release-assets
+          merge-multiple: false
+
+      - name: Merge release artifacts without overwriting
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf release-assets
+          mkdir -p release-assets
+          found=0
+          while IFS= read -r -d '' source; do
+            found=1
+            name=$(basename "$source")
+            destination="release-assets/$name"
+            if [ -e "$destination" ]; then
+              echo "Duplicate release asset name detected: $name" >&2
+              exit 1
+            fi
+            cp -- "$source" "$destination"
+          done < <(find downloaded-release-assets -type f -print0 | sort -z)
+          if [ "$found" -ne 1 ]; then
+            echo "No release artifact files were downloaded" >&2
+            exit 1
+          fi
 
       - name: List downloaded release artifacts
         shell: bash
         run: |
           set -euo pipefail
-          ls -la release-assets
+          find release-assets -maxdepth 1 -type f -print -exec ls -l {} \;
+
+      - name: Verify release evidence and updater signatures
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          tag="$RELEASE_TAG"
+          required_files=(
+            "Chimera++-$tag-Windows.msi"
+            "Chimera++-$tag-Windows-arm64.msi"
+            "Chimera++-$tag-Windows-Portable.zip"
+            "Chimera++-$tag-Windows-arm64-Portable.zip"
+            "ChimeraPlusPlus-${tag#v}-windows-x64-setup.exe"
+            "Chimera++-$tag-macOS.tar.gz"
+            "Chimera++-$tag-macOS.zip"
+            "Chimera++-$tag-macOS.dmg"
+            "SHA256SUMS-windows-x86_64.txt"
+            "SHA256SUMS-windows-arm64.txt"
+            "SHA256SUMS-macos-universal.txt"
+            "frontend-sbom-windows-x86_64.json"
+            "frontend-sbom-windows-arm64.json"
+            "frontend-sbom-macos-universal.json"
+            "rust-sbom-windows-x86_64.json"
+            "rust-sbom-windows-arm64.json"
+            "rust-sbom-macos-universal.json"
+            "build-provenance-windows-x86_64.json"
+            "build-provenance-windows-arm64.json"
+            "build-provenance-macos-universal.json"
+            "codex-mirror-provenance-windows-x86_64.json"
+            "codex-mirror-provenance-windows-arm64.json"
+          )
+          for file in "${required_files[@]}"; do
+            test -s "release-assets/$file" || { echo "Missing release evidence or asset: $file" >&2; exit 1; }
+          done
+          updater_artifacts=(
+            "Chimera++-$tag-Windows.msi"
+            "Chimera++-$tag-Windows-arm64.msi"
+            "Chimera++-$tag-macOS.tar.gz"
+          )
+          for artifact in "${updater_artifacts[@]}"; do
+            test -s "release-assets/$artifact"
+            test -s "release-assets/$artifact.sig" || { echo "Missing updater signature: $artifact.sig" >&2; exit 1; }
+          done
+          for checksum in \
+            SHA256SUMS-windows-x86_64.txt \
+            SHA256SUMS-windows-arm64.txt \
+            SHA256SUMS-macos-universal.txt; do
+            (cd release-assets && sha256sum -c "$checksum")
+          done
+          node scripts/verify-release-evidence.mjs \
+            --assets-dir release-assets \
+            --tag "$tag" \
+            --commit "$RELEASE_COMMIT"
+          node scripts/verify-updater-signatures.mjs \
+            --assets-dir release-assets \
+            --asset "Chimera++-$tag-Windows.msi" \
+            --asset "Chimera++-$tag-Windows-arm64.msi" \
+            --asset "Chimera++-$tag-macOS.tar.gz"
 
       - name: Upload Release Assets
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@c12583777ecdfd3be55c69cf75464299dc01057e
         with:
           tag_name: ${{ github.ref_name }}
           name: Chimera++ ${{ github.ref_name }}
@@ -543,18 +806,32 @@ jobs:
     needs: publish-release
     permissions:
       contents: write
+      actions: read
     steps:
       - name: Checkout release scripts
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: "20"
 
       - name: Prepare GH
+        shell: bash
         run: |
-          gh --version || (type -p curl >/dev/null && sudo apt-get update && sudo apt-get install -y gh || true)
+          set -euo pipefail
+          if ! command -v gh >/dev/null 2>&1; then
+            if ! command -v curl >/dev/null 2>&1; then
+              echo "GitHub CLI is missing and curl is unavailable for installation" >&2
+              exit 1
+            fi
+            sudo apt-get update
+            sudo apt-get install -y gh
+          fi
+          command -v gh >/dev/null 2>&1
+          gh --version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Download all release assets
@@ -565,7 +842,22 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           mkdir -p dl
           gh release download "$TAG" --dir dl --repo "$GITHUB_REPOSITORY"
-          ls -la dl || true
+          if ! find dl -maxdepth 1 -type f -print -quit | grep -q .; then
+            echo "No release assets were downloaded for $TAG" >&2
+            exit 1
+          fi
+          ls -la dl
+      - name: Verify uploaded updater signatures
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-updater-signatures.mjs \
+            --assets-dir dl \
+            --asset "Chimera++-$RELEASE_TAG-Windows.msi" \
+            --asset "Chimera++-$RELEASE_TAG-Windows-arm64.msi" \
+            --asset "Chimera++-$RELEASE_TAG-macOS.tar.gz"
       - name: Generate latest.json
         env:
           REPO: ${{ github.repository }}
@@ -579,14 +871,21 @@ jobs:
           platform_json='{}'
           add_platform() {
             local key="$1" artifact="$2"
-            local sig="dl/$artifact.sig"
-            if [ -f "dl/$artifact" ] && [ -s "$sig" ]; then
-              platform_json=$(jq \
-                --arg key "$key" \
-                --arg url "$base_url/$artifact" \
-                --arg signature "$(cat "$sig")" \
-                '. + {($key): {signature: $signature, url: $url}}' <<< "$platform_json")
+            local asset="dl/$artifact"
+            local sig="$asset.sig"
+            if [ ! -s "$asset" ]; then
+              echo "Missing updater artifact: $artifact" >&2
+              return 1
             fi
+            if [ ! -s "$sig" ]; then
+              echo "Missing updater signature: $artifact.sig" >&2
+              return 1
+            fi
+            platform_json=$(jq \
+              --arg key "$key" \
+              --arg url "$base_url/$artifact" \
+              --arg signature "$(cat "$sig")" \
+              '. + {($key): {signature: $signature, url: $url}}' <<< "$platform_json")
           }
 
           add_platform windows-x86_64 "Chimera++-$TAG-Windows.msi"
@@ -612,7 +911,7 @@ jobs:
             --arg version "$VERSION" \
             --arg minimum "1.2.42-chimera.1" \
             --arg release_url "https://github.com/$REPO/releases/tag/$TAG" \
-            --arg body "Chimera++ 2.0 compatibility bridge release" \
+            --arg body "Chimera++ v2.1.0 release" \
             --arg notes "Release $TAG" \
             --arg pub_date "$PUB_DATE" \
             --argjson platforms "$platform_json" \

@@ -29,6 +29,24 @@ interface DeeplinkError {
   error: string;
 }
 
+function safeDisplayUrl(value?: string): string {
+  if (!value) return "—";
+
+  const trimmed = value.trim();
+  try {
+    const url = new URL(trimmed);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    // Never render a raw malformed URL: it may contain credentials or a token
+    // in a query-like suffix. Keep only a short diagnostic fragment.
+    return trimmed.length > 160 ? `${trimmed.slice(0, 160)}…` : "[invalid URL]";
+  }
+}
+
 export function DeepLinkImportDialog() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -67,11 +85,8 @@ export function DeepLinkImportDialog() {
             );
             setRequest(mergedRequest);
           } catch (error) {
-            console.error("Failed to merge config:", error);
-            toast.error(t("deeplink.configMergeError"), {
-              description:
-                error instanceof Error ? error.message : String(error),
-            });
+            console.error("Failed to merge deep-link config");
+            toast.error(t("deeplink.configMergeError"));
             // Fall back to original request
             setRequest(event.payload);
           }
@@ -85,7 +100,7 @@ export function DeepLinkImportDialog() {
 
     // Listen for deep link error events
     const unlistenError = listen<DeeplinkError>("deeplink-error", (event) => {
-      console.error("Deep link error:", event.payload);
+      console.error("Deep link parsing failed");
       toast.error(t("deeplink.parseError"), {
         description: event.payload.error,
       });
@@ -399,7 +414,7 @@ export function DeepLinkImportDialog() {
                       {t("deeplink.homepage")}
                     </div>
                     <div className="col-span-2 text-sm break-all text-blue-600 dark:text-blue-400">
-                      {request.homepage}
+                      {safeDisplayUrl(request.homepage)}
                     </div>
                   </div>
 
@@ -426,7 +441,7 @@ export function DeepLinkImportDialog() {
                             {endpointRisk && (
                               <span aria-hidden="true">⚠ </span>
                             )}
-                            {ep.trim()}
+                            {safeDisplayUrl(ep)}
                             {idx === 0 && request.endpoint?.includes(",") && (
                               <span className="text-xs text-muted-foreground ml-2">
                                 ({t("deeplink.primaryEndpoint")})
@@ -632,7 +647,7 @@ export function DeepLinkImportDialog() {
                             {t("deeplink.configUrl")}
                           </div>
                           <div className="col-span-2 text-sm font-mono text-muted-foreground break-all">
-                            {request.configUrl}
+                            {safeDisplayUrl(request.configUrl)}
                           </div>
                         </div>
                       )}
@@ -694,7 +709,7 @@ export function DeepLinkImportDialog() {
                               })}
                             </div>
                             <div className="col-span-2 text-sm break-all">
-                              {request.usageBaseUrl}
+                              {safeDisplayUrl(request.usageBaseUrl)}
                             </div>
                           </div>
                         )}

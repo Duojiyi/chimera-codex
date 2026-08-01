@@ -407,13 +407,18 @@ fn handle_deeplink_url(
             }
         }
         Err(e) => {
-            log::error!("✗ Failed to parse deep link URL: {e}");
+            log::error!(
+                "✗ Failed to parse deep link URL from {source}: {} ({e})",
+                redact_url_origin_for_log(url_str)
+            );
 
             if let Err(emit_err) = app.emit(
                 "deeplink-error",
                 serde_json::json!({
-                    "url": url_str,
-                    "error": e.to_string()
+                    // Never forward the raw deep-link URL to the frontend: query,
+                    // fragment and embedded base64/API credentials are untrusted.
+                    "url": redact_url_origin_for_log(url_str),
+                    "error": "DEEP_LINK_PARSE_FAILED"
                 }),
             ) {
                 log::error!("✗ Failed to emit deeplink-error event: {emit_err}");

@@ -606,7 +606,8 @@ impl Database {
 
     /// Restore database from a backup file. Returns the safety backup ID.
     pub fn restore_from_backup(&self, filename: &str) -> Result<String, AppError> {
-        // Security: validate filename to prevent path traversal
+        // Security: validate filename to prevent path traversal and symlink
+        // substitution through the backup directory.
         if filename.contains("..")
             || filename.contains('/')
             || filename.contains('\\')
@@ -619,36 +620,96 @@ impl Database {
 
         let backup_dir = get_app_config_dir().join("backups");
         let backup_path = backup_dir.join(filename);
-
-        if !backup_path.exists() {
-            return Err(AppError::InvalidInput(format!(
-                "Backup file not found: {filename}"
-            )));
+        let metadata = fs::symlink_metadata(&backup_path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                AppError::InvalidInput(format!("Backup file not found: {filename}"))
+            } else {
+                AppError::io(&backup_path, error)
+            }
+        })?;
+        if !metadata.file_type().is_file() {
+            return Err(AppError::InvalidInput(
+                "Backup path is not a regular file".to_string(),
+            ));
         }
 
-        // Step 1: Create safety backup of current database
+        // Stage the restore in a separate SQLite file. The source backup is
+        // never copied directly into the live connection: migrations, seed
+        // writes and validation must all succeed before the main database is
+        // touched.
+        let staging_file = NamedTempFile::new_in(&backup_dir).map_err(|e| AppError::IoContext {
+            context: "创建数据库恢复临时文件失败".to_string(),
+            source: e,
+        })?;
+        // Close the temporary file handle before SQLite opens the path. This is
+        // required on Windows, where an open NamedTempFile can otherwise keep
+        // the path locked. TempPath still removes the file when it is dropped.
+        let staging_path = staging_file.into_temp_path();
+        {
+            let source_conn =
+                Connection::open(&backup_path).map_err(|e| AppError::Database(e.to_string()))?;
+            let staging_conn =
+                Connection::open(&staging_path).map_err(|e| AppError::Database(e.to_string()))?;
+            let mut staging_conn = staging_conn;
+
+            let backup = Backup::new(&source_conn, &mut staging_conn)
+                .map_err(|e| AppError::Database(format!("读取数据库备份失败: {e}")))?;
+            backup
+                .step(-1)
+                .map_err(|e| AppError::Database(format!("复制数据库备份失败: {e}")))?;
+            drop(backup);
+
+            Self::create_tables_on_conn(&staging_conn)?;
+            Self::apply_schema_migrations_on_conn(&staging_conn)?;
+            Self::ensure_model_pricing_seeded_on_conn(&staging_conn)?;
+            Self::validate_basic_state(&staging_conn)?;
+        }
+
+        // Create a safety snapshot only after the staged database has passed
+        // all checks. This avoids consuming a backup slot for malformed input.
         let safety_backup = self.backup_database_file()?;
         let safety_id = safety_backup
+            .as_ref()
             .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
             .unwrap_or_default();
 
-        // Step 2: Open the backup file and restore it to the main database
-        let source_conn =
-            Connection::open(&backup_path).map_err(|e| AppError::Database(e.to_string()))?;
-
-        {
+        // Commit the already validated staged database into the live connection.
+        // rusqlite's backup API can still fail during the final copy (for
+        // example, disk/connection errors), so immediately restore the safety
+        // snapshot on that path.
+        let commit_result = (|| -> Result<(), AppError> {
+            let staged_conn =
+                Connection::open(&staging_path).map_err(|e| AppError::Database(e.to_string()))?;
             let mut main_conn = lock_conn!(self.conn);
-            let backup = Backup::new(&source_conn, &mut main_conn)
-                .map_err(|e| AppError::Database(e.to_string()))?;
+            let backup = Backup::new(&staged_conn, &mut main_conn)
+                .map_err(|e| AppError::Database(format!("提交数据库恢复失败: {e}")))?;
             backup
                 .step(-1)
-                .map_err(|e| AppError::Database(e.to_string()))?;
-        }
+                .map_err(|e| AppError::Database(format!("提交数据库恢复失败: {e}")))?;
+            Ok(())
+        })();
 
-        // Step 3: Run schema migrations (backup may be from an older version)
-        self.create_tables()?;
-        self.apply_schema_migrations()?;
-        self.ensure_model_pricing_seeded()?;
+        if let Err(commit_error) = commit_result {
+            if let Some(safety_path) = safety_backup.as_ref() {
+                let rollback_result = (|| -> Result<(), AppError> {
+                    let safety_conn = Connection::open(safety_path)
+                        .map_err(|e| AppError::Database(e.to_string()))?;
+                    let mut main_conn = lock_conn!(self.conn);
+                    let backup = Backup::new(&safety_conn, &mut main_conn)
+                        .map_err(|e| AppError::Database(format!("恢复安全备份失败: {e}")))?;
+                    backup
+                        .step(-1)
+                        .map_err(|e| AppError::Database(format!("恢复安全备份失败: {e}")))?;
+                    Ok(())
+                })();
+                if let Err(rollback_error) = rollback_result {
+                    return Err(AppError::Database(format!(
+                        "数据库恢复失败，且自动回滚失败: {commit_error}; {rollback_error}"
+                    )));
+                }
+            }
+            return Err(commit_error);
+        }
 
         log::info!("Database restored from backup: {filename}, safety backup: {safety_id}");
         Ok(safety_id)

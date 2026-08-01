@@ -118,19 +118,8 @@ fn runtime_root() -> PathBuf {
     data_root().join("codex-runtime")
 }
 
-fn portable_root() -> PathBuf {
-    if let Some(configured) = crate::settings::get_settings().codex_portable_root {
-        return PathBuf::from(configured);
-    }
-    if let Ok(executable) = std::env::current_exe() {
-        if let Some(parent) = executable.parent() {
-            let bundled = parent.join("Codex");
-            if bundled.exists() {
-                return bundled;
-            }
-        }
-    }
-    runtime_root().join("portable")
+fn portable_root() -> Result<PathBuf, String> {
+    crate::settings::resolve_codex_portable_root()
 }
 
 fn operation_lock() -> PathBuf {
@@ -310,7 +299,7 @@ pub async fn apply_skin_package(skin_id: String, confirm: bool) -> Result<(), St
         return Err("Applying a skin requires explicit confirmation.".to_string());
     }
     let root = themes_root();
-    let portable_root = portable_root();
+    let portable_root = portable_root()?;
     let native = native_paths();
     let active = active_path();
     let lock_path = operation_lock();
@@ -368,7 +357,7 @@ pub async fn try_skin_package(skin_id: String, confirm: bool) -> Result<(), Stri
         return Err("Trying a skin requires explicit confirmation.".to_string());
     }
     let root = themes_root();
-    let portable_root = portable_root();
+    let portable_root = portable_root()?;
     tauri::async_runtime::spawn_blocking(move || {
         close_and_launch(&portable_root, Some(THEME_CDP_PORT))
     })
@@ -383,7 +372,7 @@ pub async fn restore_skin_package(confirm: bool) -> Result<(), String> {
     if !confirm {
         return Err("Restoring Codex appearance requires explicit confirmation.".to_string());
     }
-    let portable_root = portable_root();
+    let portable_root = portable_root()?;
     let native = native_paths();
     let active = active_path();
     let lock_path = operation_lock();
