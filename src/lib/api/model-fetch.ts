@@ -29,6 +29,30 @@ export async function fetchModelsForConfig(
   });
 }
 
+export interface DetectedCodexApiFormat {
+  apiFormat: "openai_responses" | "openai_chat" | "anthropic";
+  anthropicAuthField?: "ANTHROPIC_AUTH_TOKEN" | "ANTHROPIC_API_KEY";
+}
+
+/**
+ * Detect the upstream capability with non-billable invalid requests. A result
+ * is returned only when the backend can identify a real protocol endpoint;
+ * callers must keep the manual selector available for inconclusive gateways.
+ */
+export async function detectCodexApiFormat(
+  baseUrl: string,
+  apiKey: string,
+  isFullUrl?: boolean,
+  customUserAgent?: string,
+): Promise<DetectedCodexApiFormat> {
+  return invoke("detect_codex_api_format", {
+    baseUrl,
+    apiKey,
+    isFullUrl,
+    customUserAgent,
+  });
+}
+
 /**
  * 获取 Codex OAuth (ChatGPT Plus/Pro 反代) 可用模型列表
  *

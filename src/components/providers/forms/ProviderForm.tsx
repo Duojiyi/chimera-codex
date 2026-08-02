@@ -13,12 +13,14 @@ import {
   formatRequestOverrideObject,
 } from "@/lib/requestOverrides";
 import { providersApi, settingsApi, type AppId } from "@/lib/api";
+import { detectCodexApiFormat } from "@/lib/api/model-fetch";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import type {
   ProviderCategory,
   ProviderMeta,
   ClaudeApiFormat,
   CodexApiFormat,
+  CodexApiFormatSelection,
   CodexCatalogModel,
   CodexChatReasoning,
   PromptCacheRoutingMode,
@@ -602,7 +604,7 @@ function ProviderFormFull({
             ) ?? "openai_responses");
 
   const [localCodexApiFormat, setLocalCodexApiFormat] =
-    useState<CodexApiFormat>(initialCodexApiFormat);
+    useState<CodexApiFormatSelection>(initialCodexApiFormat);
 
   // Auth-field choice for the Anthropic Messages upstream (defaults to the Bearer form)
   const initialCodexAnthropicAuthField: ClaudeApiKeyField =
@@ -638,7 +640,7 @@ function ProviderFormFull({
   );
 
   const handleCodexApiFormatChange = useCallback(
-    (format: CodexApiFormat) => {
+    (format: CodexApiFormatSelection) => {
       setLocalCodexApiFormat(format);
       // wire_api is always "responses" for Codex; format controls proxy-layer conversion
       setCodexConfig((prev) => {
@@ -654,6 +656,7 @@ function ProviderFormFull({
     if (appId === "codex" && !initialData && selectedPresetId === "custom") {
       const template = getCodexCustomTemplate();
       resetCodexConfig(template.auth, template.config);
+      setLocalCodexApiFormat("auto");
       setCodexChatReasoning({});
       setPromptCacheRouting("auto");
     }
@@ -727,6 +730,14 @@ function ProviderFormFull({
     )?.preset;
     return preset && "providerType" in preset ? preset.providerType : undefined;
   }, [presetEntries, selectedPresetId]);
+
+  // 在编辑已有供应商时，null 表示用户尚未切换预设，因此保留原有身份；
+  // 一旦用户明确选择 custom 或其它预设，当前选择必须覆盖旧 meta，避免
+  // 从官方 OAuth 切到第三方 API 后仍被误判为需要官方登录。
+  const activeProviderType =
+    selectedPresetId === null
+      ? initialData?.meta?.providerType
+      : presetProviderType;
 
   const {
     templateValues,
@@ -1164,15 +1175,10 @@ function ProviderFormFull({
 
     // OAuth 未登录：B 类（token 根本不存在，保存了也没法建立）
     const isCopilotProvider =
-      presetProviderType === "github_copilot" ||
-      initialData?.meta?.providerType === "github_copilot" ||
+      activeProviderType === "github_copilot" ||
       baseUrl.includes("githubcopilot.com");
-    const isCodexOauthProvider =
-      presetProviderType === "codex_oauth" ||
-      initialData?.meta?.providerType === "codex_oauth";
-    const isXaiOauthProvider =
-      presetProviderType === "xai_oauth" ||
-      initialData?.meta?.providerType === "xai_oauth";
+    const isCodexOauthProvider = activeProviderType === "codex_oauth";
+    const isXaiOauthProvider = activeProviderType === "xai_oauth";
     if (isCopilotProvider && !isCopilotAuthenticated) {
       toast.error(
         t("copilot.loginRequired", {
@@ -1356,15 +1362,53 @@ function ProviderFormFull({
 
     // OAuth / 其它身份识别（与 handleSubmit 保持一致）
     const isCopilotProvider =
-      presetProviderType === "github_copilot" ||
-      initialData?.meta?.providerType === "github_copilot" ||
+      activeProviderType === "github_copilot" ||
       baseUrl.includes("githubcopilot.com");
-    const isCodexOauthProvider =
-      presetProviderType === "codex_oauth" ||
-      initialData?.meta?.providerType === "codex_oauth";
-    const isXaiOauthProvider =
-      presetProviderType === "xai_oauth" ||
-      initialData?.meta?.providerType === "xai_oauth";
+    const isCodexOauthProvider = activeProviderType === "codex_oauth";
+    const isXaiOauthProvider = activeProviderType === "xai_oauth";
+
+    let resolvedCodexApiFormat: CodexApiFormat =
+      localCodexApiFormat === "auto" ? "openai_responses" : localCodexApiFormat;
+    if (
+      appId === "codex" &&
+      category !== "official" &&
+      !isXaiOauthProvider &&
+      localCodexApiFormat === "auto"
+    ) {
+      try {
+        const detected = await detectCodexApiFormat(
+          codexBaseUrl,
+          codexApiKey,
+          localIsFullUrl,
+          customUserAgent,
+        );
+        resolvedCodexApiFormat = detected.apiFormat;
+        setLocalCodexApiFormat(detected.apiFormat);
+        if (detected.anthropicAuthField) {
+          setLocalCodexAnthropicAuthField(detected.anthropicAuthField);
+        }
+        toast.success(
+          t("codexConfig.upstreamFormatDetected", {
+            defaultValue: "已自动识别上游协议：{{format}}",
+            format:
+              detected.apiFormat === "openai_responses"
+                ? "Responses"
+                : detected.apiFormat === "openai_chat"
+                  ? "Chat Completions"
+                  : "Anthropic Messages",
+          }),
+        );
+      } catch (error) {
+        console.warn("[CODEX_API_FORMAT_AUTO_DETECT_FAILED]", error);
+        toast.error(
+          t("codexConfig.upstreamFormatDetectFailed", {
+            defaultValue:
+              "无法自动识别上游 API 协议。请确认端点和 API Key，或在高级设置中手动选择协议。",
+          }),
+        );
+        return;
+      }
+    }
 
     let settingsConfig: string;
 
@@ -1541,7 +1585,7 @@ function ProviderFormFull({
       payload.meta ?? (initialData?.meta ? { ...initialData.meta } : undefined);
 
     // 确定 providerType（新建时从预设获取，编辑时从现有数据获取）
-    const providerType = presetProviderType || initialData?.meta?.providerType;
+    const providerType = activeProviderType;
 
     const nextMeta: ProviderMeta = {
       ...(baseMeta ?? {}),
@@ -1585,13 +1629,13 @@ function ProviderFormFull({
       codexChatReasoning:
         appId === "codex" &&
         category !== "official" &&
-        localCodexApiFormat === "openai_chat"
+        resolvedCodexApiFormat === "openai_chat"
           ? normalizeCodexChatReasoningForSave(codexChatReasoning)
           : undefined,
       promptCacheRouting:
         appId === "codex" &&
         category !== "official" &&
-        localCodexApiFormat === "openai_chat" &&
+        resolvedCodexApiFormat === "openai_chat" &&
         promptCacheRouting !== "auto"
           ? promptCacheRouting
           : undefined,
@@ -1617,7 +1661,7 @@ function ProviderFormFull({
           : appId === "codex" && category !== "official"
             ? isXaiOauthProvider
               ? "openai_responses"
-              : localCodexApiFormat
+              : resolvedCodexApiFormat
             : undefined,
       apiKeyField:
         appId === "claude" &&
@@ -1626,7 +1670,7 @@ function ProviderFormFull({
           ? localApiKeyField
           : appId === "codex" &&
               category !== "official" &&
-              localCodexApiFormat === "anthropic" &&
+              resolvedCodexApiFormat === "anthropic" &&
               localCodexAnthropicAuthField !== "ANTHROPIC_AUTH_TOKEN"
             ? localCodexAnthropicAuthField
             : undefined,
@@ -1634,7 +1678,7 @@ function ProviderFormFull({
       impersonateClaudeCode:
         appId === "codex" &&
         category !== "official" &&
-        localCodexApiFormat === "anthropic" &&
+        resolvedCodexApiFormat === "anthropic" &&
         localCodexImpersonateClaudeCode
           ? true
           : undefined,
@@ -1642,7 +1686,7 @@ function ProviderFormFull({
       maxOutputTokens:
         appId === "codex" &&
         category !== "official" &&
-        localCodexApiFormat === "anthropic" &&
+        resolvedCodexApiFormat === "anthropic" &&
         localCodexMaxOutputTokens.trim() !== "" &&
         Number(localCodexMaxOutputTokens) > 0
           ? Number(localCodexMaxOutputTokens)
@@ -1769,10 +1813,7 @@ function ProviderFormFull({
         resetCodexConfig(template.auth, template.config);
         setCodexChatReasoning({});
         setPromptCacheRouting("auto");
-        setLocalCodexApiFormat(
-          codexApiFormatFromWireApi(extractCodexWireApi(template.config)) ??
-            "openai_responses",
-        );
+        setLocalCodexApiFormat("auto");
       }
       if (appId === "gemini") {
         resetGeminiConfig({}, {});
@@ -2200,27 +2241,17 @@ function ProviderFormFull({
               isPartner={isClaudePartner}
               partnerPromotionKey={claudePartnerPromotionKey}
               isCopilotPreset={
-                presetProviderType === "github_copilot" ||
-                initialData?.meta?.providerType === "github_copilot" ||
+                activeProviderType === "github_copilot" ||
                 baseUrl.includes("githubcopilot.com")
               }
-              isCodexOauthPreset={
-                presetProviderType === "codex_oauth" ||
-                initialData?.meta?.providerType === "codex_oauth"
-              }
-              isXaiOauthPreset={
-                presetProviderType === "xai_oauth" ||
-                initialData?.meta?.providerType === "xai_oauth"
-              }
+              isCodexOauthPreset={activeProviderType === "codex_oauth"}
+              isXaiOauthPreset={activeProviderType === "xai_oauth"}
               usesOAuth={
                 templatePreset?.requiresOAuth === true ||
-                presetProviderType === "github_copilot" ||
-                initialData?.meta?.providerType === "github_copilot" ||
+                activeProviderType === "github_copilot" ||
                 baseUrl.includes("githubcopilot.com") ||
-                presetProviderType === "codex_oauth" ||
-                initialData?.meta?.providerType === "codex_oauth" ||
-                presetProviderType === "xai_oauth" ||
-                initialData?.meta?.providerType === "xai_oauth"
+                activeProviderType === "codex_oauth" ||
+                activeProviderType === "xai_oauth"
               }
               isCopilotAuthenticated={isCopilotAuthenticated}
               selectedGitHubAccountId={selectedGitHubAccountId}
@@ -2279,10 +2310,7 @@ function ProviderFormFull({
           {appId === "codex" && (
             <CodexFormFields
               providerId={providerId}
-              isXaiOauthPreset={
-                presetProviderType === "xai_oauth" ||
-                initialData?.meta?.providerType === "xai_oauth"
-              }
+              isXaiOauthPreset={activeProviderType === "xai_oauth"}
               isXaiOauthAuthenticated={isXaiOauthAuthenticated}
               selectedXaiAccountId={selectedXaiAccountId}
               onXaiAccountSelect={setSelectedXaiAccountId}
@@ -2309,6 +2337,7 @@ function ProviderFormFull({
               onModelChange={handleCodexModelChange}
               apiFormat={localCodexApiFormat}
               onApiFormatChange={handleCodexApiFormatChange}
+              allowAutoApiFormat
               anthropicAuthField={localCodexAnthropicAuthField}
               onAnthropicAuthFieldChange={setLocalCodexAnthropicAuthField}
               impersonateClaudeCode={localCodexImpersonateClaudeCode}

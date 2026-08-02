@@ -4,6 +4,7 @@ mod auto_launch;
 mod claude_desktop_config;
 mod claude_mcp;
 mod claude_plugin;
+mod codex_cdp;
 mod codex_config;
 mod codex_history_migration;
 mod codex_state_db;
@@ -1644,6 +1645,7 @@ pub fn run() {
             commands::apply_profile,
             // model list fetch (OpenAI-compatible /v1/models)
             commands::fetch_models_for_config,
+            commands::detect_codex_api_format,
             // ours: endpoint speed test + custom endpoint management
             commands::test_api_endpoints,
             commands::get_custom_endpoints,

@@ -90,6 +90,61 @@ fn switch_provider_internal(
     ProviderService::switch(state, app_type, id)
 }
 
+/// Codex-family clients speak Responses natively. Chat Completions, Anthropic
+/// Messages, full endpoint URLs, and managed OAuth credentials require the
+/// local router to translate or inject authentication.
+fn provider_requires_automatic_routing(app_type: &AppType, provider: &Provider) -> bool {
+    if !matches!(app_type, AppType::Codex | AppType::GrokBuild)
+        || provider.category.as_deref() == Some("official")
+    {
+        return false;
+    }
+
+    let is_full_url = provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.is_full_url)
+        .unwrap_or(false);
+
+    provider.uses_managed_account_auth()
+        || is_full_url
+        || crate::proxy::providers::codex_provider_uses_chat_completions(provider)
+        || crate::proxy::providers::codex_provider_uses_anthropic(provider)
+}
+
+async fn rollback_automatic_routing(
+    proxy_service: &crate::services::ProxyService,
+    db: &crate::database::Database,
+    app_type: &AppType,
+    previous_enabled: bool,
+    previous_proxy_running: bool,
+) -> Option<String> {
+    let mut errors = Vec::new();
+    if let Err(error) = proxy_service
+        .set_takeover_for_app(app_type.as_str(), previous_enabled)
+        .await
+    {
+        errors.push(error);
+    }
+
+    // set_takeover_for_app(false) is intentionally idempotent and returns early
+    // when takeover was never committed. If enabling failed after start(), clean
+    // up that newly-started server only when no application is using it.
+    if !previous_proxy_running && proxy_service.is_running().await {
+        match db.is_live_takeover_active().await {
+            Ok(false) => {
+                if let Err(error) = proxy_service.stop().await {
+                    errors.push(error);
+                }
+            }
+            Ok(true) => {}
+            Err(error) => errors.push(format!("检查接管状态失败: {error}")),
+        }
+    }
+
+    (!errors.is_empty()).then(|| errors.join("；"))
+}
+
 #[cfg_attr(not(feature = "test-hooks"), doc(hidden))]
 pub fn switch_provider_test_hook(
     state: &AppState,
@@ -106,14 +161,130 @@ pub async fn switch_provider(
     id: String,
 ) -> Result<SwitchResult, String> {
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || {
+    switch_provider_with_automatic_routing(app_handle, app_type, id).await
+}
+
+/// Shared provider switch path for the main UI and tray. Codex-family apps
+/// reconcile takeover automatically before switching; other apps retain their
+/// existing routing behavior.
+pub(crate) async fn switch_provider_with_automatic_routing(
+    app_handle: tauri::AppHandle,
+    app_type: AppType,
+    id: String,
+) -> Result<SwitchResult, String> {
+    // Resolve the target before touching Live state. This makes a missing/stale
+    // provider fail without starting or stopping the local router.
+    let target = {
         let state = app_handle
             .try_state::<AppState>()
             .ok_or_else(|| "应用状态不可用".to_string())?;
-        switch_provider_internal(state.inner(), app_type, &id).map_err(|e| e.to_string())
+        state
+            .db
+            .get_provider_by_id(&id, app_type.as_str())
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("供应商 {id} 不存在"))?
+    };
+
+    let auto_manage_routing = matches!(app_type, AppType::Codex | AppType::GrokBuild);
+    let routing_required = provider_requires_automatic_routing(&app_type, &target);
+    let (proxy_service, db) = {
+        let state = app_handle
+            .try_state::<AppState>()
+            .ok_or_else(|| "应用状态不可用".to_string())?;
+        (state.proxy_service.clone(), state.db.clone())
+    };
+
+    let previous_routing_enabled = if auto_manage_routing {
+        db.get_proxy_config_for_app(app_type.as_str())
+            .await
+            .map_err(|e| format!("获取 {} 路由状态失败: {e}", app_type.as_str()))?
+            .enabled
+    } else {
+        false
+    };
+    let previous_proxy_running = proxy_service.is_running().await;
+
+    // Do not turn off an active takeover merely to bypass the official-provider
+    // safety policy. Only the built-in Codex official entry is explicitly
+    // compatible; copied/forged `category = official` entries remain blocked.
+    if auto_manage_routing
+        && previous_routing_enabled
+        && target.category.as_deref() == Some("official")
+        && !crate::services::provider::official_provider_supports_proxy_takeover(&app_type, &target)
+    {
+        return Err(
+            "代理接管模式下不能切换到此官方供应商。请先关闭接管，或选择受支持的官方供应商。"
+                .to_string(),
+        );
+    }
+
+    let routing_changed = auto_manage_routing && previous_routing_enabled != routing_required;
+
+    if routing_changed {
+        if let Err(error) = proxy_service
+            .set_takeover_for_app(app_type.as_str(), routing_required)
+            .await
+        {
+            // Enabling takeover can start the server before a later Live-config
+            // step fails. Reconcile back to the previous state so an unused
+            // proxy is not left running.
+            let rollback = rollback_automatic_routing(
+                &proxy_service,
+                db.as_ref(),
+                &app_type,
+                previous_routing_enabled,
+                previous_proxy_running,
+            )
+            .await;
+            return Err(match rollback {
+                Some(rollback_error) => format!(
+                    "自动{}本地路由失败: {error}；回滚失败: {rollback_error}",
+                    if routing_required { "开启" } else { "关闭" }
+                ),
+                None => format!(
+                    "自动{}本地路由失败: {error}",
+                    if routing_required { "开启" } else { "关闭" }
+                ),
+            });
+        }
+    }
+
+    let switch_app_type = app_type.clone();
+    let switch_id = id.clone();
+    let switch_handle = app_handle.clone();
+    let switch_result = tauri::async_runtime::spawn_blocking(move || {
+        let state = switch_handle
+            .try_state::<AppState>()
+            .ok_or_else(|| "应用状态不可用".to_string())?;
+        switch_provider_internal(state.inner(), switch_app_type, &switch_id)
+            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| format!("供应商切换任务执行失败: {e}"))?
+    .map_err(|e| format!("供应商切换任务执行失败: {e}"))?;
+
+    match switch_result {
+        Ok(mut result) => {
+            result.routing_changed = routing_changed;
+            result.routing_enabled = auto_manage_routing.then_some(routing_required);
+            Ok(result)
+        }
+        Err(error) => {
+            if routing_changed {
+                let rollback = rollback_automatic_routing(
+                    &proxy_service,
+                    db.as_ref(),
+                    &app_type,
+                    previous_routing_enabled,
+                    previous_proxy_running,
+                )
+                .await;
+                if let Some(rollback_error) = rollback {
+                    return Err(format!("{error}；本地路由回滚失败: {rollback_error}"));
+                }
+            }
+            Err(error)
+        }
+    }
 }
 
 fn import_default_config_internal(state: &AppState, app_type: AppType) -> Result<bool, AppError> {
@@ -920,6 +1091,80 @@ pub fn get_opencode_live_provider_ids() -> Result<Vec<String>, String> {
 // ============================================================================
 // OpenClaw 专属命令 → 已迁移至 commands/openclaw.rs
 // ============================================================================
+
+#[cfg(test)]
+mod automatic_routing_tests {
+    use super::provider_requires_automatic_routing;
+    use crate::app_config::AppType;
+    use crate::provider::{Provider, ProviderMeta};
+    use serde_json::json;
+
+    fn provider(config: serde_json::Value, api_format: Option<&str>) -> Provider {
+        let mut provider = Provider::with_id("test".to_string(), "Test".to_string(), config, None);
+        provider.meta = Some(ProviderMeta {
+            api_format: api_format.map(str::to_string),
+            ..ProviderMeta::default()
+        });
+        provider
+    }
+
+    #[test]
+    fn native_responses_does_not_require_routing() {
+        let provider = provider(json!({}), Some("openai_responses"));
+        assert!(!provider_requires_automatic_routing(
+            &AppType::Codex,
+            &provider
+        ));
+    }
+
+    #[test]
+    fn chat_and_anthropic_protocols_require_routing() {
+        let chat = provider(json!({}), Some("openai_chat"));
+        let anthropic = provider(
+            json!({
+                "config": "model_provider = \"third_party\"\n[model_providers.third_party]\nwire_api = \"anthropic-messages\"\n"
+            }),
+            None,
+        );
+
+        assert!(provider_requires_automatic_routing(&AppType::Codex, &chat));
+        assert!(provider_requires_automatic_routing(
+            &AppType::Codex,
+            &anthropic
+        ));
+    }
+
+    #[test]
+    fn full_url_and_managed_oauth_require_routing() {
+        let mut full_url = provider(json!({}), Some("openai_responses"));
+        full_url.meta.as_mut().unwrap().is_full_url = Some(true);
+
+        let mut oauth = provider(json!({}), Some("openai_responses"));
+        oauth.meta.as_mut().unwrap().provider_type = Some("xai_oauth".to_string());
+
+        assert!(provider_requires_automatic_routing(
+            &AppType::Codex,
+            &full_url
+        ));
+        assert!(provider_requires_automatic_routing(&AppType::Codex, &oauth));
+    }
+
+    #[test]
+    fn official_and_non_codex_apps_are_not_auto_managed() {
+        let mut official = provider(json!({}), Some("openai_chat"));
+        official.category = Some("official".to_string());
+        let third_party = provider(json!({}), Some("openai_chat"));
+
+        assert!(!provider_requires_automatic_routing(
+            &AppType::Codex,
+            &official
+        ));
+        assert!(!provider_requires_automatic_routing(
+            &AppType::Claude,
+            &third_party
+        ));
+    }
+}
 
 #[cfg(test)]
 mod import_claude_desktop_tests {

@@ -245,21 +245,15 @@ fn close_codex(
     installed: &codex_win_engine::InstalledWindowsCodex,
     portable_root: &Path,
 ) -> Result<(), String> {
-    if installed.source == "msix" {
-        codex_win_engine::close_msix_codex_processes(30)
-            .map_err(|_| "Could not close Codex before applying the skin.".to_string())?;
-    } else {
-        codex_win_engine::close_codex_gracefully_for_root(30, portable_root)
-            .map_err(|_| "Could not close Codex before applying the skin.".to_string())?;
-    }
-    Ok(())
+    super::codex_runtime::close_codex_for_restart(installed, portable_root)
+        .map_err(|_| "Could not close Codex before applying the skin.".to_string())
 }
 
 fn close_and_launch(portable_root: &Path, debug_port: Option<u16>) -> Result<(), String> {
     let installed = codex_win_engine::detect_installed_codex(portable_root)
         .ok_or_else(|| "Install Codex before applying a skin.".to_string())?;
     close_codex(&installed, portable_root)?;
-    codex_win_engine::launch_codex_with_options(
+    super::codex_runtime::launch_codex_with_config(
         &installed,
         codex_win_engine::LaunchOptions {
             disable_codex_self_updates: true,
@@ -321,7 +315,7 @@ pub async fn apply_skin_package(skin_id: String, confirm: bool) -> Result<(), St
             codex_theme_engine::native::apply_native_theme_value(&native, block)
                 .map_err(|error| error.to_string())?;
         }
-        codex_win_engine::launch_codex_with_options(
+        super::codex_runtime::launch_codex_with_config(
             &installed,
             codex_win_engine::LaunchOptions {
                 disable_codex_self_updates: true,
@@ -383,18 +377,15 @@ pub async fn restore_skin_package(confirm: bool) -> Result<(), String> {
             .map_err(|_| "Another Chimera++ operation is already running.".to_string())?;
         let installed = codex_win_engine::detect_installed_codex(&portable_root)
             .ok_or_else(|| "Codex is not installed.".to_string())?;
-        if installed.source == "msix" {
-            codex_win_engine::close_msix_codex_processes(30)
-                .map_err(|_| "Could not close Codex for restore.".to_string())?;
-        } else {
-            codex_win_engine::close_codex_gracefully_for_root(30, &portable_root)
-                .map_err(|_| "Could not close Codex for restore.".to_string())?;
-        }
+        close_codex(&installed, &portable_root)
+            .map_err(|_| "Could not close Codex for restore.".to_string())?;
         codex_theme_engine::native::restore_native_theme(&native)
             .map_err(|error| error.to_string())?;
-        codex_win_engine::launch_codex(&installed).map_err(|_| {
-            "Codex appearance was restored, but Codex could not restart.".to_string()
-        })?;
+        super::codex_runtime::launch_codex_with_config(
+            &installed,
+            codex_win_engine::LaunchOptions::default(),
+        )
+        .map_err(|_| "Codex appearance was restored, but Codex could not restart.".to_string())?;
         if active.exists() {
             std::fs::remove_file(active)
                 .map_err(|_| "Could not clear the active skin selection.".to_string())?;
