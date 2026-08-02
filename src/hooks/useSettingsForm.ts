@@ -78,6 +78,7 @@ export function useSettingsForm(): UseSettingsFormResult {
   );
 
   const initialLanguageRef = useRef<Language>("zh");
+  const lastInitializedDataRef = useRef<Settings | null>(null);
 
   const readPersistedLanguage = useCallback((): Language => {
     if (typeof window !== "undefined") {
@@ -101,7 +102,16 @@ export function useSettingsForm(): UseSettingsFormResult {
 
   // 初始化设置数据
   useEffect(() => {
-    if (!data) return;
+    if (!data) {
+      lastInitializedDataRef.current = null;
+      return;
+    }
+
+    // Some i18n versions can change helper callback identities after a render.
+    // Reapply server settings only when the query data itself changes so local
+    // edits and explicit resets are not immediately overwritten.
+    if (lastInitializedDataRef.current === data) return;
+    lastInitializedDataRef.current = data;
 
     const normalizedLanguage = normalizeLanguage(
       data.language ?? readPersistedLanguage(),
