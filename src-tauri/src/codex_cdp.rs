@@ -12,6 +12,8 @@ pub const CODEX_RENDERER_DEBUG_PORT: u16 = 9229;
 
 const TARGET_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 const TARGET_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const MODEL_UNLOCK_VERIFY_TIMEOUT: Duration = Duration::from_secs(10);
+const MODEL_UNLOCK_VERIFY_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const IO_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_HTTP_RESPONSE_BYTES: usize = 512 * 1024;
 const MODEL_UNLOCK_SCRIPT: &str = include_str!("resources/codex_model_unlock.js");
@@ -85,6 +87,26 @@ struct CdpTarget {
     url: String,
     #[serde(default, rename = "webSocketDebuggerUrl")]
     web_socket_debugger_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CodexRendererUnlockRuntimeStatus {
+    installed: bool,
+    #[serde(default)]
+    document_id: String,
+    #[serde(default)]
+    model_count: usize,
+    #[serde(default)]
+    patched: usize,
+    #[serde(default)]
+    requests_seen: usize,
+    #[serde(default)]
+    responses_seen: usize,
+    #[serde(default)]
+    responses_patched: usize,
+    #[serde(default)]
+    catalog_verified: bool,
 }
 
 /// Inject the renderer-only model visibility patch into a newly launched
@@ -407,18 +429,118 @@ fn inject_script(websocket_url: &str, debug_port: u16, script: &str) -> Result<(
             "returnByValue": true,
         }),
     )?;
-    if evaluated.get("exceptionDetails").is_some() {
-        return Err(format!("Codex renderer 执行注入脚本失败：{evaluated}"));
-    }
-    let installed = evaluated
-        .pointer("/result/value/installed")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if !installed {
+    let initial_status = parse_model_unlock_status(&evaluated)?
+        .ok_or_else(|| "Codex renderer 未确认模型注入脚本已安装".to_string())?;
+    if !initial_status.installed {
         return Err("Codex renderer 未确认模型注入脚本已安装".to_string());
     }
+    if initial_status.document_id.is_empty() {
+        return Err("Codex renderer 模型注入脚本缺少文档标识".to_string());
+    }
+
+    // The renderer may have already cached its first model/list response by the
+    // time CDP becomes available. Reload after registering the new-document
+    // script so the patch runs before React Query sends and caches that request.
+    send_cdp_command(
+        &mut socket,
+        5,
+        "Page.reload",
+        json!({ "ignoreCache": true }),
+    )?;
+
+    let deadline = Instant::now() + MODEL_UNLOCK_VERIFY_TIMEOUT;
+    let mut command_id = 6;
+    let mut last_status = None;
+    let mut last_error = None;
+    while Instant::now() < deadline {
+        std::thread::sleep(MODEL_UNLOCK_VERIFY_POLL_INTERVAL);
+        match evaluate_model_unlock_status(&mut socket, command_id) {
+            Ok(Some(status)) => {
+                let is_reloaded_document = status.installed
+                    && !status.document_id.is_empty()
+                    && status.document_id != initial_status.document_id;
+                if model_catalog_ready_after_reload(&initial_status.document_id, &status) {
+                    let _ = socket.close(None);
+                    return Ok(());
+                }
+                if is_reloaded_document {
+                    last_status = Some(status);
+                }
+                last_error = None;
+            }
+            Ok(None) => {
+                last_error = Some("重载后的 renderer 尚未初始化模型注入脚本".to_string());
+            }
+            Err(error) => {
+                // Navigation briefly destroys the old execution context. Keep
+                // polling until the new document and preload bridge are ready.
+                last_error = Some(error);
+            }
+        }
+        command_id += 1;
+    }
+
     let _ = socket.close(None);
-    Ok(())
+    if let Some(status) = last_status {
+        return Err(format!(
+            "Codex renderer 已重载，但模型列表未通过校验（请求 {}，响应 {}，成功改写 {}，目录校验 {}，通用补丁 {}，模型 {}）",
+            status.requests_seen,
+            status.responses_seen,
+            status.responses_patched,
+            status.catalog_verified,
+            status.patched,
+            status.model_count,
+        ));
+    }
+    Err(format!(
+        "Codex renderer 重载后未能确认模型注入脚本：{}",
+        last_error.unwrap_or_else(|| "等待新文档超时".to_string())
+    ))
+}
+
+fn model_catalog_ready_after_reload(
+    initial_document_id: &str,
+    status: &CodexRendererUnlockRuntimeStatus,
+) -> bool {
+    status.installed
+        && !status.document_id.is_empty()
+        && status.document_id != initial_document_id
+        && status.catalog_verified
+}
+
+fn evaluate_model_unlock_status(
+    socket: &mut WebSocket<TcpStream>,
+    id: u64,
+) -> Result<Option<CodexRendererUnlockRuntimeStatus>, String> {
+    let evaluated = send_cdp_command(
+        socket,
+        id,
+        "Runtime.evaluate",
+        json!({
+            "expression": "globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_STATUS__ ?? null",
+            "returnByValue": true,
+        }),
+    )?;
+    parse_model_unlock_status(&evaluated)
+}
+
+fn parse_model_unlock_status(
+    evaluated: &Value,
+) -> Result<Option<CodexRendererUnlockRuntimeStatus>, String> {
+    if let Some(exception) = evaluated.get("exceptionDetails") {
+        return Err(format!(
+            "Codex renderer 执行模型注入状态检查失败：{exception}"
+        ));
+    }
+    let Some(value) = evaluated.pointer("/result/value") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    serde_json::from_value(value.clone())
+        .map(Some)
+        .map_err(|error| format!("无法解析 Codex renderer 模型注入状态：{error}"))
 }
 
 fn send_cdp_command(
@@ -478,9 +600,10 @@ fn send_cdp_command(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_model_unlock_config, build_model_unlock_script, parse_targets_http_response,
-        pick_codex_page_target, validate_cdp_websocket_url, CodexRendererModelUnlockConfig,
-        CODEX_RENDERER_DEBUG_PORT,
+        build_model_unlock_config, build_model_unlock_script, model_catalog_ready_after_reload,
+        parse_model_unlock_status, parse_targets_http_response, pick_codex_page_target,
+        validate_cdp_websocket_url, CodexRendererModelUnlockConfig,
+        CodexRendererUnlockRuntimeStatus, CODEX_RENDERER_DEBUG_PORT,
     };
     use serde_json::json;
 
@@ -558,6 +681,10 @@ mod tests {
             "available_models",
             "includeHidden",
             "model/list",
+            "requestsSeen",
+            "responsesPatched",
+            "catalogVerified",
+            "documentId",
             "modelPayloadLooksPatchable",
             "String(args[0]) === \"107580212\"",
             "claude-sonnet-5",
@@ -567,5 +694,54 @@ mod tests {
         assert!(!script.contains("auth.json"));
         assert!(!script.contains("OPENAI_API_KEY"));
         assert!(!script.contains("access_token"));
+    }
+    #[test]
+    fn runtime_status_requires_a_new_verified_document() {
+        let mut status = CodexRendererUnlockRuntimeStatus {
+            installed: true,
+            document_id: "before".to_string(),
+            model_count: 2,
+            patched: 1,
+            requests_seen: 1,
+            responses_seen: 1,
+            responses_patched: 1,
+            catalog_verified: true,
+        };
+        assert!(!model_catalog_ready_after_reload("before", &status));
+        status.document_id = "after".to_string();
+        assert!(model_catalog_ready_after_reload("before", &status));
+        status.catalog_verified = false;
+        assert!(!model_catalog_ready_after_reload("before", &status));
+    }
+
+    #[test]
+    fn runtime_status_parser_reads_renderer_diagnostics() {
+        let evaluated = json!({
+            "result": {
+                "type": "object",
+                "value": {
+                    "installed": true,
+                    "documentId": "document-2",
+                    "modelCount": 4,
+                    "patched": 2,
+                    "requestsSeen": 1,
+                    "responsesSeen": 1,
+                    "responsesPatched": 1,
+                    "catalogVerified": true
+                }
+            }
+        });
+        let status = parse_model_unlock_status(&evaluated)
+            .expect("status parses")
+            .expect("status exists");
+        assert_eq!(status.document_id, "document-2");
+        assert_eq!(status.model_count, 4);
+        assert_eq!(status.responses_patched, 1);
+        assert!(status.catalog_verified);
+        assert!(
+            parse_model_unlock_status(&json!({"result": {"value": null}}))
+                .expect("null status is valid")
+                .is_none()
+        );
     }
 }

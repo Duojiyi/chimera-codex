@@ -29,16 +29,28 @@
     modelNames,
     defaultModel,
   };
+
+  const existingStatus = globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_STATUS__;
+  if (globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_INSTALLED__) {
+    const status = existingStatus && typeof existingStatus === "object" ? existingStatus : {};
+    status.installed = true;
+    status.modelCount = modelNames.length;
+    globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_STATUS__ = status;
+    return status;
+  }
+
+  globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_INSTALLED__ = true;
   globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_STATUS__ = {
     installed: true,
+    documentId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     modelCount: modelNames.length,
     patched: 0,
+    requestsSeen: 0,
+    responsesSeen: 0,
+    responsesPatched: 0,
+    catalogVerified: false,
+    lastModelListRequestId: null,
   };
-
-  if (globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_INSTALLED__) {
-    return globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_STATUS__;
-  }
-  globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_INSTALLED__ = true;
 
   const names = () => {
     const current = globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_CONFIG__;
@@ -138,6 +150,31 @@
     }
     return changed;
   };
+  const catalogContainsConfiguredModels = (value) => {
+    const found = new Set();
+    const visit = (candidate, depth = 0) => {
+      if (candidate == null || depth > 5) return;
+      if (Array.isArray(candidate)) {
+        for (const entry of candidate) {
+          if (typeof entry === "string" && entry.trim()) found.add(entry.trim());
+          else {
+            const key = modelKey(entry);
+            if (key) found.add(key);
+            if (entry && typeof entry === "object") visit(entry, depth + 1);
+          }
+        }
+        return;
+      }
+      if (typeof candidate !== "object") return;
+      for (const key of ["models", "data", "result", "pages", "message", "response", "payload"]) {
+        if (key in candidate) visit(candidate[key], depth + 1);
+      }
+    };
+    visit(value);
+    const configured = names();
+    return configured.length > 0 && configured.every((name) => found.has(name));
+  };
+
   const patchModelNameArray = (value, allowEmpty = false) => {
     if (!isStringArray(value) || (!allowEmpty && value.length === 0)) return false;
     return appendNames(value);
@@ -197,15 +234,16 @@
       "hiddenModels", "hidden_models", "modelMetadata", "model_metadata",
     ].some((key) => key in value);
 
-    if (patchModelArray(value.models, hasModelSignal)) changed = true;
+    const allowEmptyModelArrays = allowEmpty || hasModelSignal;
+    if (patchModelArray(value.models, allowEmptyModelArrays)) changed = true;
     if (hasModelSignal && patchModelNameArray(value.models, true)) changed = true;
-    if (patchModelArray(value.data, false)) changed = true;
-    if (patchModelArray(value.result, false)) changed = true;
-    if (patchModelArray(value.result?.data, false)) changed = true;
-    if (patchModelArray(value.result?.models, false)) changed = true;
-    if (patchModelArray(value.pages?.[0]?.data, false)) changed = true;
-    if (patchModelArray(value.message?.result?.data, false)) changed = true;
-    if (patchModelArray(value.message?.result?.models, false)) changed = true;
+    if (patchModelArray(value.data, allowEmpty)) changed = true;
+    if (patchModelArray(value.result, allowEmpty)) changed = true;
+    if (patchModelArray(value.result?.data, allowEmpty)) changed = true;
+    if (patchModelArray(value.result?.models, allowEmpty)) changed = true;
+    if (patchModelArray(value.pages?.[0]?.data, allowEmpty)) changed = true;
+    if (patchModelArray(value.message?.result?.data, allowEmpty)) changed = true;
+    if (patchModelArray(value.message?.result?.models, allowEmpty)) changed = true;
 
     if ("availableModels" in value && patchSetOrArray(value.availableModels)) changed = true;
     if ("available_models" in value && patchSetOrArray(value.available_models)) changed = true;
@@ -317,14 +355,18 @@
       const request = detail?.request;
       if (detail?.type === "mcp-request" && request?.method === "model/list") {
         request.params = { ...(request.params || {}), includeHidden: true };
+        const status = globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_STATUS__ || {};
+        status.requestsSeen = (status.requestsSeen || 0) + 1;
         if (request.id != null) {
           const requestId = String(request.id);
+          status.lastModelListRequestId = requestId;
           modelListRequestIds.add(requestId);
           if (modelListRequestIds.size > 64) {
             modelListRequestIds.delete(modelListRequestIds.values().next().value);
           }
           globalThis.setTimeout?.(() => modelListRequestIds.delete(requestId), 30_000);
         }
+        globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_STATUS__ = status;
       }
     } catch {
       // Keep the renderer usable if a future event shape changes.
@@ -337,7 +379,13 @@
       const id = message?.id == null ? "" : String(message.id);
       if (data?.type === "mcp-response" && modelListRequestIds.has(id)) {
         modelListRequestIds.delete(id);
-        patchContainer(message?.result, true);
+        const status = globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_STATUS__ || {};
+        status.responsesSeen = (status.responsesSeen || 0) + 1;
+        if (patchContainer(message?.result, true)) {
+          status.responsesPatched = (status.responsesPatched || 0) + 1;
+        }
+        status.catalogVerified = catalogContainsConfiguredModels(message?.result);
+        globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_STATUS__ = status;
       } else {
         patchParsedJson(data);
       }
