@@ -22,6 +22,16 @@ pub const CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID: &str = "cc-switch-official
 pub const CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME: &str = "cc-switch-model-catalog.json";
 const CODEX_PROXY_AUTH_PLACEHOLDER: &str = "PROXY_MANAGED";
 
+/// A model identity returned by Codex's own `debug models` command.
+///
+/// This is deliberately smaller than the full catalog entry: verification only
+/// needs the fields that the model picker uses to identify and label a model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexRuntimeModel {
+    pub slug: String,
+    pub display_name: String,
+}
+
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -810,6 +820,15 @@ fn push_home_codex_cli_candidates(
 }
 
 fn push_env_codex_cli_candidates(candidates: &mut Vec<PathBuf>, seen: &mut HashSet<String>) {
+    if let Some(explicit) = std::env::var_os("CODEX_CLI_PATH") {
+        if !explicit.is_empty() {
+            // An explicit override is allowed to be a command name (for
+            // example `codex`) or an absolute path. Do not require it to
+            // exist here; Command::new will produce the useful OS error.
+            push_codex_cli_candidate(candidates, seen, PathBuf::from(explicit));
+        }
+    }
+
     for (env_key, suffix) in [
         ("NPM_CONFIG_PREFIX", &["bin", "codex"][..]),
         ("VOLTA_HOME", &["bin", "codex"][..]),
@@ -853,6 +872,24 @@ fn push_env_codex_cli_candidates(candidates: &mut Vec<PathBuf>, seen: &mut HashS
                 push_existing_codex_cli_candidate(candidates, seen, npm_dir.join(name));
             }
         }
+
+        // The official Codex Desktop installer bundles the CLI under the
+        // Electron resources directory rather than adding `codex` to PATH.
+        // This is the path used by the Windows desktop installation.
+        for (env_key, relative) in [
+            ("LOCALAPPDATA", "Programs/Codex/resources/codex.exe"),
+            ("LOCALAPPDATA", "Programs/Codex/codex.exe"),
+            ("PROGRAMFILES", "Codex/resources/codex.exe"),
+            ("PROGRAMFILES", "OpenAI/Codex/resources/codex.exe"),
+        ] {
+            if let Some(root) = std::env::var_os(env_key) {
+                push_existing_codex_cli_candidate(
+                    candidates,
+                    seen,
+                    PathBuf::from(root).join(relative),
+                );
+            }
+        }
     }
 }
 
@@ -870,11 +907,12 @@ fn codex_cli_candidates() -> Vec<PathBuf> {
     candidates
 }
 
-fn codex_bundled_models_command(candidate: &Path) -> Command {
+fn codex_command(candidate: &Path, args: &[&str], codex_home: Option<&Path>) -> Command {
     let mut command = Command::new(candidate);
-    command
-        .args(["debug", "models", "--bundled"])
-        .stdin(Stdio::null());
+    command.args(args).stdin(Stdio::null());
+    if let Some(codex_home) = codex_home {
+        command.env("CODEX_HOME", codex_home);
+    }
 
     // A release build uses the Windows GUI subsystem, so a console child that
     // is created without this flag gets its own transient console window. npm
@@ -886,6 +924,14 @@ fn codex_bundled_models_command(candidate: &Path) -> Command {
     }
 
     command
+}
+
+fn codex_bundled_models_command(candidate: &Path) -> Command {
+    codex_command(candidate, &["debug", "models", "--bundled"], None)
+}
+
+fn codex_runtime_models_command(candidate: &Path, codex_home: &Path) -> Command {
+    codex_command(candidate, &["debug", "models"], Some(codex_home))
 }
 
 fn load_codex_model_template_from_bundled() -> Result<Option<Value>, AppError> {
@@ -920,6 +966,96 @@ fn load_codex_model_template_from_bundled() -> Result<Option<Value>, AppError> {
     }
 
     Ok(None)
+}
+
+/// Ask Codex itself which models it loaded from the active `CODEX_HOME`.
+///
+/// The generated JSON file can be syntactically valid while the desktop app is
+/// reading a different config directory, so file-level checks alone are not
+/// sufficient. This probe intentionally returns only model identities and never
+/// includes stderr or config contents in an error/log message.
+pub fn probe_codex_runtime_models() -> Result<Vec<CodexRuntimeModel>, AppError> {
+    let codex_home = get_codex_config_dir();
+    let mut launched_candidate = false;
+
+    for candidate in codex_cli_candidates() {
+        let output = match codex_runtime_models_command(&candidate, &codex_home).output() {
+            Ok(output) => {
+                launched_candidate = true;
+                output
+            }
+            Err(error) => {
+                log::debug!(
+                    "unable to run Codex model probe ({}): {}",
+                    candidate.display(),
+                    error.kind()
+                );
+                continue;
+            }
+        };
+
+        if !output.status.success() {
+            log::debug!(
+                "Codex model probe exited unsuccessfully ({}): {:?}",
+                candidate.display(),
+                output.status.code()
+            );
+            continue;
+        }
+
+        let catalog: Value = match serde_json::from_slice(&output.stdout) {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                log::debug!("Codex model probe returned invalid JSON: {error}");
+                continue;
+            }
+        };
+        let Some(models) = catalog.get("models").and_then(Value::as_array) else {
+            log::debug!("Codex model probe returned no models array");
+            continue;
+        };
+
+        let mut parsed = Vec::with_capacity(models.len());
+        let mut malformed = false;
+        for model in models {
+            let Some(slug) = model
+                .get("slug")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|slug| !slug.is_empty())
+            else {
+                malformed = true;
+                break;
+            };
+            let Some(display_name) = model
+                .get("display_name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|display_name| !display_name.is_empty())
+            else {
+                malformed = true;
+                break;
+            };
+            parsed.push(CodexRuntimeModel {
+                slug: slug.to_string(),
+                display_name: display_name.to_string(),
+            });
+        }
+
+        if malformed || parsed.is_empty() {
+            log::debug!("Codex model probe returned an empty or malformed model list");
+            continue;
+        }
+
+        return Ok(parsed);
+    }
+
+    let message = if launched_candidate {
+        "Codex CLI 无法解析当前配置目录中的实际模型列表"
+    } else {
+        "未找到可用的 Codex CLI，无法验证 Codex 实际模型列表"
+    };
+    Err(AppError::Message(message.to_string()))
 }
 
 fn load_codex_model_template_static() -> Option<Value> {

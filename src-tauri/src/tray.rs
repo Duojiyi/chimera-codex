@@ -592,37 +592,58 @@ fn handle_provider_click(
     if let Some(app_state) = app.try_state::<AppState>() {
         let app_type_str = app_type.as_str();
 
-        // 获取当前 proxy 状态，保持 enabled 不变，只关闭 auto_failover
+        // Preserve the current takeover state until the shared switch path has
+        // classified the target protocol; only automatic failover is disabled
+        // immediately for this explicit provider selection.
         let (proxy_enabled, _) = app_state.db.get_proxy_flags_sync(app_type_str);
         app_state
             .db
             .set_proxy_flags_sync(app_type_str, proxy_enabled, false)?;
 
-        // 切换供应商。需要本地路由的供应商也不在这里自动启动代理，
-        // 由用户在页面/设置中手动开启。
-        crate::services::ProviderService::switch(app_state.inner(), app_type.clone(), provider_id)?;
-
-        // 更新托盘菜单
-        if let Ok(new_menu) = create_tray_menu(app, app_state.inner()) {
-            if let Some(tray) = app.tray_by_id(TRAY_ID) {
-                let _ = tray.set_menu(Some(new_menu));
+        let app_handle = app.clone();
+        let switch_app_type = app_type.clone();
+        let switch_provider_id = provider_id.to_string();
+        tauri::async_runtime::spawn(async move {
+            if let Err(error) = crate::commands::switch_provider_with_automatic_routing(
+                app_handle.clone(),
+                switch_app_type.clone(),
+                switch_provider_id.clone(),
+            )
+            .await
+            {
+                log::error!(
+                    "托盘切换 {} 供应商 {} 失败: {error}",
+                    switch_app_type.as_str(),
+                    switch_provider_id
+                );
+                return;
             }
-        }
 
-        // 发射事件到前端
-        let event_data = serde_json::json!({
-            "appType": app_type_str,
-            "proxyEnabled": proxy_enabled,
-            "autoFailoverEnabled": false,
-            "providerId": provider_id
+            let Some(state) = app_handle.try_state::<AppState>() else {
+                return;
+            };
+            let app_type_str = switch_app_type.as_str();
+            let (final_proxy_enabled, _) = state.db.get_proxy_flags_sync(app_type_str);
+
+            if let Ok(new_menu) = create_tray_menu(&app_handle, state.inner()) {
+                if let Some(tray) = app_handle.tray_by_id(TRAY_ID) {
+                    let _ = tray.set_menu(Some(new_menu));
+                }
+            }
+
+            let event_data = serde_json::json!({
+                "appType": app_type_str,
+                "proxyEnabled": final_proxy_enabled,
+                "autoFailoverEnabled": false,
+                "providerId": switch_provider_id
+            });
+            if let Err(e) = app_handle.emit("proxy-flags-changed", event_data.clone()) {
+                log::error!("发射 proxy-flags-changed 事件失败: {e}");
+            }
+            if let Err(e) = app_handle.emit("provider-switched", event_data) {
+                log::error!("发射 provider-switched 事件失败: {e}");
+            }
         });
-        if let Err(e) = app.emit("proxy-flags-changed", event_data.clone()) {
-            log::error!("发射 proxy-flags-changed 事件失败: {e}");
-        }
-        // 发射 provider-switched 事件（保持向后兼容）
-        if let Err(e) = app.emit("provider-switched", event_data) {
-            log::error!("发射 provider-switched 事件失败: {e}");
-        }
     }
     Ok(())
 }
