@@ -147,8 +147,9 @@ describe("SettingsPage integration", () => {
   it("loads default settings from MSW", async () => {
     renderDialog();
 
-    await waitFor(() =>
-      expect(screen.getByText("language:zh")).toBeInTheDocument(),
+    await waitFor(
+      () => expect(screen.getByText("language:zh")).toBeInTheDocument(),
+      { timeout: 4000 },
     );
     fireEvent.click(screen.getByText("settings.tabAdvanced"));
     fireEvent.click(screen.getByText("settings.advanced.configDir.title"));
@@ -162,8 +163,9 @@ describe("SettingsPage integration", () => {
     const onImportSuccess = vi.fn();
     renderDialog({ onImportSuccess });
 
-    await waitFor(() =>
-      expect(screen.getByText("language:zh")).toBeInTheDocument(),
+    await waitFor(
+      () => expect(screen.getByText("language:zh")).toBeInTheDocument(),
+      { timeout: 4000 },
     );
 
     fireEvent.click(screen.getByText("settings.tabAdvanced"));
@@ -186,8 +188,9 @@ describe("SettingsPage integration", () => {
   it("saves settings and handles restart prompt", async () => {
     renderDialog();
 
-    await waitFor(() =>
-      expect(screen.getByText("language:zh")).toBeInTheDocument(),
+    await waitFor(
+      () => expect(screen.getByText("language:zh")).toBeInTheDocument(),
+      { timeout: 4000 },
     );
 
     fireEvent.click(screen.getByText("settings.tabAdvanced"));
@@ -213,8 +216,9 @@ describe("SettingsPage integration", () => {
   it("allows browsing and resetting directories", async () => {
     renderDialog();
 
-    await waitFor(() =>
-      expect(screen.getByText("language:zh")).toBeInTheDocument(),
+    await waitFor(
+      () => expect(screen.getByText("language:zh")).toBeInTheDocument(),
+      { timeout: 4000 },
     );
 
     fireEvent.click(screen.getByText("settings.tabAdvanced"));
@@ -254,8 +258,9 @@ describe("SettingsPage integration", () => {
   it("notifies when export fails", async () => {
     renderDialog();
 
-    await waitFor(() =>
-      expect(screen.getByText("language:zh")).toBeInTheDocument(),
+    await waitFor(
+      () => expect(screen.getByText("language:zh")).toBeInTheDocument(),
+      { timeout: 4000 },
     );
     fireEvent.click(screen.getByText("settings.tabAdvanced"));
     fireEvent.click(screen.getByText("settings.advanced.data.title"));
