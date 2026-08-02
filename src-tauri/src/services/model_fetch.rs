@@ -4,7 +4,8 @@
 //! 主要面向第三方聚合站（硅基流动、OpenRouter 等），以及把 Anthropic
 //! 协议挂在兼容子路径上的官方供应商（DeepSeek、Kimi、智谱 GLM 等）。
 
-use reqwest::header::{HeaderValue, USER_AGENT};
+use futures::future::join_all;
+use reqwest::header::{HeaderValue, CONTENT_TYPE, USER_AGENT};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -30,6 +31,7 @@ struct ModelEntry {
 }
 
 const FETCH_TIMEOUT_SECS: u64 = 15;
+const API_FORMAT_PROBE_TIMEOUT_SECS: u64 = 8;
 
 /// 404/405 响应体截断长度：避免把几十 KB HTML 404 页整页保留到错误串里。
 const ERROR_BODY_MAX_CHARS: usize = 512;
@@ -124,6 +126,294 @@ pub async fn fetch_models(
         "All candidates failed: {}",
         last_err.unwrap_or_else(|| "no candidates".to_string())
     ))
+}
+
+/// A protocol selected by the non-billable Codex API capability probe.
+///
+/// The frontend intentionally stores the resolved format rather than an opaque
+/// `auto` value, so the same provider behaves predictably on later switches.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedCodexApiFormat {
+    pub api_format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anthropic_auth_field: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexApiProbe {
+    Responses,
+    ChatCompletions,
+    AnthropicMessages,
+}
+
+impl CodexApiProbe {
+    const ALL: [Self; 3] = [
+        Self::Responses,
+        Self::ChatCompletions,
+        Self::AnthropicMessages,
+    ];
+
+    fn api_format(self) -> &'static str {
+        match self {
+            Self::Responses => "openai_responses",
+            Self::ChatCompletions => "openai_chat",
+            Self::AnthropicMessages => "anthropic",
+        }
+    }
+
+    fn suffix(self) -> &'static str {
+        match self {
+            Self::Responses => "/responses",
+            Self::ChatCompletions => "/chat/completions",
+            Self::AnthropicMessages => "/messages",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ApiProbeOutcome {
+    probe: CodexApiProbe,
+    supported: bool,
+    anthropic_auth_field: Option<&'static str>,
+    diagnostic: String,
+}
+
+/// Detect which upstream protocol a custom Codex endpoint exposes.
+///
+/// Each request sends a deliberately invalid, protocol-shaped payload. A real
+/// endpoint rejects it at request validation (HTTP 400/422) before model
+/// selection, so the probe cannot create a model completion or bill tokens.
+/// Authentication errors are deliberately treated as inconclusive rather than
+/// as a protocol match.
+pub async fn detect_codex_api_format(
+    base_url: &str,
+    api_key: &str,
+    is_full_url: bool,
+    user_agent: Option<HeaderValue>,
+) -> Result<DetectedCodexApiFormat, String> {
+    if api_key.trim().is_empty() {
+        return Err("API Key is required to detect the upstream API format".to_string());
+    }
+
+    let candidates = build_api_format_probe_urls(base_url, is_full_url)?;
+    let client = crate::proxy::http_client::get();
+    let probes = candidates.into_iter().map(|(probe, url)| {
+        probe_codex_api_format_endpoint(&client, probe, url, api_key, user_agent.clone())
+    });
+    let outcomes = join_all(probes).await;
+
+    // Prefer direct Responses when an upstream intentionally exposes more than
+    // one compatibility surface. It avoids unnecessary local conversion.
+    for preferred in CodexApiProbe::ALL {
+        if outcomes
+            .iter()
+            .any(|outcome| outcome.probe == preferred && outcome.supported)
+        {
+            let outcome = outcomes
+                .iter()
+                .find(|outcome| outcome.probe == preferred && outcome.supported)
+                .expect("supported probe outcome must exist");
+            return Ok(DetectedCodexApiFormat {
+                api_format: preferred.api_format().to_string(),
+                anthropic_auth_field: outcome.anthropic_auth_field.map(str::to_string),
+            });
+        }
+    }
+
+    let diagnostics = outcomes
+        .iter()
+        .map(|outcome| format!("{}: {}", outcome.probe.api_format(), outcome.diagnostic))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(format!(
+        "Could not safely identify a supported API protocol. Verify the endpoint and API Key, or choose the protocol manually. {diagnostics}"
+    ))
+}
+
+async fn probe_codex_api_format_endpoint(
+    client: &reqwest::Client,
+    probe: CodexApiProbe,
+    url: String,
+    api_key: &str,
+    user_agent: Option<HeaderValue>,
+) -> ApiProbeOutcome {
+    // Native Anthropic gateways differ on whether they expect `x-api-key` or
+    // Bearer auth. Probe the canonical header first and only then fall back to
+    // Bearer, so a successful auto-detect also selects the correct auth field.
+    let auth_variants: &[Option<&str>] = if probe == CodexApiProbe::AnthropicMessages {
+        &[Some("ANTHROPIC_API_KEY"), Some("ANTHROPIC_AUTH_TOKEN")]
+    } else {
+        &[None]
+    };
+
+    let mut diagnostics = Vec::with_capacity(auth_variants.len());
+    for auth_field in auth_variants {
+        let (supported, diagnostic) = send_codex_api_format_probe(
+            client,
+            probe,
+            &url,
+            api_key,
+            user_agent.clone(),
+            *auth_field,
+        )
+        .await;
+        diagnostics.push(diagnostic);
+        if supported {
+            return ApiProbeOutcome {
+                probe,
+                supported: true,
+                anthropic_auth_field: *auth_field,
+                diagnostic: diagnostics.join(", "),
+            };
+        }
+    }
+
+    ApiProbeOutcome {
+        probe,
+        supported: false,
+        anthropic_auth_field: None,
+        diagnostic: diagnostics.join(", "),
+    }
+}
+
+async fn send_codex_api_format_probe(
+    client: &reqwest::Client,
+    probe: CodexApiProbe,
+    url: &str,
+    api_key: &str,
+    user_agent: Option<HeaderValue>,
+    anthropic_auth_field: Option<&str>,
+) -> (bool, String) {
+    let mut request = client
+        .post(url)
+        .header(CONTENT_TYPE, "application/json")
+        .header("Accept", "application/json")
+        .body(invalid_probe_body(probe))
+        .timeout(Duration::from_secs(API_FORMAT_PROBE_TIMEOUT_SECS));
+
+    match anthropic_auth_field {
+        Some("ANTHROPIC_API_KEY") => {
+            request = request
+                .header("x-api-key", api_key)
+                .header("anthropic-version", "2023-06-01");
+        }
+        _ => {
+            request = request.header("Authorization", format!("Bearer {api_key}"));
+            if anthropic_auth_field.is_some() {
+                request = request.header("anthropic-version", "2023-06-01");
+            }
+        }
+    }
+    if let Some(ua) = user_agent {
+        request = request.header(USER_AGENT, ua);
+    }
+
+    match request.send().await {
+        Ok(response) => {
+            let status = response.status();
+            let body = truncate_body(response.text().await.unwrap_or_default());
+            (
+                response_indicates_protocol_support(status, &body),
+                format!("HTTP {status}"),
+            )
+        }
+        Err(error) => (false, format!("request failed: {error}")),
+    }
+}
+
+/// Invalid by construction for all three protocols: no model may be selected
+/// and token generation cannot begin. The protocol-specific shape makes route
+/// validation more reliable than a generic empty object.
+fn invalid_probe_body(probe: CodexApiProbe) -> &'static str {
+    match probe {
+        CodexApiProbe::Responses => r#"{"model":"","input":[],"max_output_tokens":0}"#,
+        CodexApiProbe::ChatCompletions => r#"{"model":"","messages":[],"max_tokens":0}"#,
+        CodexApiProbe::AnthropicMessages => r#"{"model":"","messages":[],"max_tokens":0}"#,
+    }
+}
+
+/// Accept only request-validation responses from an existing endpoint. 401/403
+/// are not enough: gateways commonly send authentication failures before route
+/// lookup, which would make an invalid path look supported. Likewise, a bare
+/// generic 400 is inconclusive; it must mention a deliberately-invalid request
+/// field to avoid treating a catch-all gateway error as protocol support.
+fn response_indicates_protocol_support(status: StatusCode, body: &str) -> bool {
+    if status != StatusCode::BAD_REQUEST && status != StatusCode::UNPROCESSABLE_ENTITY {
+        return false;
+    }
+
+    let normalized = body.to_ascii_lowercase();
+    if [
+        "not found",
+        "unknown endpoint",
+        "unknown route",
+        "unsupported endpoint",
+        "cannot post",
+        "no route",
+        "route not found",
+        "invalid url",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        return false;
+    }
+
+    [
+        "model",
+        "messages",
+        "input",
+        "max_tokens",
+        "max tokens",
+        "max_output_tokens",
+        "max output tokens",
+        "parameter",
+        "request body",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+}
+
+/// Derive the three protocol endpoints from either a base URL or a full API URL.
+/// Full URLs are normalized by replacing their terminal known protocol path; an
+/// unknown full URL falls back to its containing directory.
+fn build_api_format_probe_urls(
+    base_url: &str,
+    is_full_url: bool,
+) -> Result<Vec<(CodexApiProbe, String)>, String> {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return Err("Base URL is empty".to_string());
+    }
+
+    let root = if is_full_url {
+        let known_suffixes = ["/chat/completions", "/responses", "/messages"];
+        if let Some(suffix) = known_suffixes
+            .iter()
+            .find(|suffix| trimmed.ends_with(**suffix))
+        {
+            &trimmed[..trimmed.len() - suffix.len()]
+        } else {
+            trimmed
+                .rsplit_once('/')
+                .map(|(parent, _)| parent)
+                .filter(|parent| parent.contains("://"))
+                .ok_or_else(|| "Cannot derive API root from full URL".to_string())?
+        }
+    } else if ends_with_version_segment(trimmed) {
+        trimmed
+    } else {
+        return Ok(CodexApiProbe::ALL
+            .into_iter()
+            .map(|probe| (probe, format!("{trimmed}/v1{}", probe.suffix())))
+            .collect());
+    };
+
+    Ok(CodexApiProbe::ALL
+        .into_iter()
+        .map(|probe| (probe, format!("{root}{}", probe.suffix())))
+        .collect())
 }
 
 /// 构造「模型列表端点」的候选 URL 列表
@@ -313,6 +603,79 @@ mod tests {
     #[test]
     fn test_candidates_empty() {
         assert!(build_models_url_candidates("", false, None).is_err());
+    }
+    #[test]
+    fn protocol_probe_candidates_support_root_version_and_full_urls() {
+        let root = build_api_format_probe_urls("https://gateway.example", false).unwrap();
+        assert_eq!(
+            root.iter().map(|(_, url)| url.as_str()).collect::<Vec<_>>(),
+            vec![
+                "https://gateway.example/v1/responses",
+                "https://gateway.example/v1/chat/completions",
+                "https://gateway.example/v1/messages",
+            ]
+        );
+
+        let versioned = build_api_format_probe_urls("https://gateway.example/v1", false).unwrap();
+        assert_eq!(
+            versioned
+                .iter()
+                .map(|(_, url)| url.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "https://gateway.example/v1/responses",
+                "https://gateway.example/v1/chat/completions",
+                "https://gateway.example/v1/messages",
+            ]
+        );
+
+        let full = build_api_format_probe_urls("https://gateway.example/v1/chat/completions", true)
+            .unwrap();
+        assert_eq!(
+            full.iter().map(|(_, url)| url.as_str()).collect::<Vec<_>>(),
+            vec![
+                "https://gateway.example/v1/responses",
+                "https://gateway.example/v1/chat/completions",
+                "https://gateway.example/v1/messages",
+            ]
+        );
+    }
+
+    #[test]
+    fn protocol_probe_bodies_are_invalid_by_construction() {
+        for probe in CodexApiProbe::ALL {
+            let body = invalid_probe_body(probe);
+            assert!(body.contains(r#""model":"""#));
+            assert!(body.contains(":0"));
+        }
+    }
+
+    #[test]
+    fn protocol_probe_accepts_only_validation_errors_from_real_routes() {
+        assert!(response_indicates_protocol_support(
+            StatusCode::BAD_REQUEST,
+            r#"{"error":"model is required"}"#
+        ));
+        assert!(response_indicates_protocol_support(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            r#"{"error":"messages must not be empty"}"#
+        ));
+        assert!(!response_indicates_protocol_support(
+            StatusCode::UNAUTHORIZED,
+            r#"{"error":"invalid api key"}"#
+        ));
+        assert!(!response_indicates_protocol_support(
+            StatusCode::NOT_FOUND,
+            "not found"
+        ));
+        assert!(!response_indicates_protocol_support(
+            StatusCode::BAD_REQUEST,
+            "Unknown endpoint"
+        ));
+        assert!(!response_indicates_protocol_support(
+            StatusCode::BAD_REQUEST,
+            "Bad request"
+        ));
     }
 
     #[test]

@@ -39,7 +39,7 @@ import { LocalProxyRequestOverridesField } from "./LocalProxyRequestOverridesFie
 import { cn } from "@/lib/utils";
 import type {
   ClaudeApiKeyField,
-  CodexApiFormat,
+  CodexApiFormatSelection,
   CodexCatalogModel,
   CodexChatReasoning,
   PromptCacheRoutingMode,
@@ -86,8 +86,10 @@ interface CodexFormFieldsProps {
 
   // API Format
   // Note: wire_api is always "responses" for Codex; apiFormat controls proxy-layer conversion
-  apiFormat: CodexApiFormat;
-  onApiFormatChange: (format: CodexApiFormat) => void;
+  apiFormat: CodexApiFormatSelection;
+  onApiFormatChange: (format: CodexApiFormatSelection) => void;
+  // Only the Codex provider can resolve `auto` through the backend capability probe.
+  allowAutoApiFormat?: boolean;
   // Auth field for the Anthropic Messages upstream (only used when apiFormat === "anthropic")
   anthropicAuthField: ClaudeApiKeyField;
   onAnthropicAuthFieldChange: (value: ClaudeApiKeyField) => void;
@@ -191,6 +193,7 @@ export function CodexFormFields({
   onModelChange,
   apiFormat,
   onApiFormatChange,
+  allowAutoApiFormat = false,
   anthropicAuthField,
   onAnthropicAuthFieldChange,
   impersonateClaudeCode,
@@ -662,7 +665,7 @@ export function CodexFormFields({
                   <Select
                     value={apiFormat}
                     onValueChange={(value) =>
-                      onApiFormatChange(value as CodexApiFormat)
+                      onApiFormatChange(value as CodexApiFormatSelection)
                     }
                   >
                     <SelectTrigger
@@ -672,6 +675,13 @@ export function CodexFormFields({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
+                      {allowAutoApiFormat && (
+                        <SelectItem value="auto">
+                          {t("codexConfig.upstreamFormatAuto", {
+                            defaultValue: "自动识别（推荐）",
+                          })}
+                        </SelectItem>
+                      )}
                       <SelectItem value="openai_chat">
                         {t("codexConfig.upstreamFormatChat", {
                           defaultValue: "Chat Completions（需开启路由）",
@@ -690,10 +700,15 @@ export function CodexFormFields({
                     </SelectContent>
                   </Select>
                   <p className="text-xs leading-relaxed text-muted-foreground">
-                    {t("codexConfig.upstreamFormatHint", {
-                      defaultValue:
-                        "供应商原生是 Responses API 就选 Responses（直连，不转换格式）；使用 Chat Completions 协议就选 Chat；供应商只提供原生 Anthropic Messages 协议就选 Anthropic Messages。Chat 与 Anthropic Messages 均需开启路由接管才能转换为 Responses。",
-                    })}
+                    {allowAutoApiFormat
+                      ? t("codexConfig.upstreamFormatAutoHint", {
+                          defaultValue:
+                            "默认自动识别：保存时会以不产生模型调用的校验请求探测端点；识别失败会提示你手动选择。供应商原生是 Responses API 就选 Responses（直连，不转换格式）；使用 Chat Completions 协议就选 Chat；供应商只提供原生 Anthropic Messages 协议就选 Anthropic Messages。Chat 与 Anthropic Messages 均需开启路由接管才能转换为 Responses。",
+                        })
+                      : t("codexConfig.upstreamFormatHint", {
+                          defaultValue:
+                            "供应商原生是 Responses API 就选 Responses（直连，不转换格式）；使用 Chat Completions 协议就选 Chat；供应商只提供原生 Anthropic Messages 协议就选 Anthropic Messages。Chat 与 Anthropic Messages 均需开启路由接管才能转换为 Responses。",
+                        })}
                   </p>
                 </div>
 

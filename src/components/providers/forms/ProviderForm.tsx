@@ -13,12 +13,14 @@ import {
   formatRequestOverrideObject,
 } from "@/lib/requestOverrides";
 import { providersApi, settingsApi, type AppId } from "@/lib/api";
+import { detectCodexApiFormat } from "@/lib/api/model-fetch";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import type {
   ProviderCategory,
   ProviderMeta,
   ClaudeApiFormat,
   CodexApiFormat,
+  CodexApiFormatSelection,
   CodexCatalogModel,
   CodexChatReasoning,
   PromptCacheRoutingMode,
@@ -602,7 +604,7 @@ function ProviderFormFull({
             ) ?? "openai_responses");
 
   const [localCodexApiFormat, setLocalCodexApiFormat] =
-    useState<CodexApiFormat>(initialCodexApiFormat);
+    useState<CodexApiFormatSelection>(initialCodexApiFormat);
 
   // Auth-field choice for the Anthropic Messages upstream (defaults to the Bearer form)
   const initialCodexAnthropicAuthField: ClaudeApiKeyField =
@@ -638,7 +640,7 @@ function ProviderFormFull({
   );
 
   const handleCodexApiFormatChange = useCallback(
-    (format: CodexApiFormat) => {
+    (format: CodexApiFormatSelection) => {
       setLocalCodexApiFormat(format);
       // wire_api is always "responses" for Codex; format controls proxy-layer conversion
       setCodexConfig((prev) => {
@@ -654,6 +656,7 @@ function ProviderFormFull({
     if (appId === "codex" && !initialData && selectedPresetId === "custom") {
       const template = getCodexCustomTemplate();
       resetCodexConfig(template.auth, template.config);
+      setLocalCodexApiFormat("auto");
       setCodexChatReasoning({});
       setPromptCacheRouting("auto");
     }
@@ -1366,6 +1369,49 @@ function ProviderFormFull({
       presetProviderType === "xai_oauth" ||
       initialData?.meta?.providerType === "xai_oauth";
 
+    let resolvedCodexApiFormat: CodexApiFormat =
+      localCodexApiFormat === "auto" ? "openai_responses" : localCodexApiFormat;
+    if (
+      appId === "codex" &&
+      category !== "official" &&
+      !isXaiOauthProvider &&
+      localCodexApiFormat === "auto"
+    ) {
+      try {
+        const detected = await detectCodexApiFormat(
+          codexBaseUrl,
+          codexApiKey,
+          localIsFullUrl,
+          customUserAgent,
+        );
+        resolvedCodexApiFormat = detected.apiFormat;
+        setLocalCodexApiFormat(detected.apiFormat);
+        if (detected.anthropicAuthField) {
+          setLocalCodexAnthropicAuthField(detected.anthropicAuthField);
+        }
+        toast.success(
+          t("codexConfig.upstreamFormatDetected", {
+            defaultValue: "已自动识别上游协议：{{format}}",
+            format:
+              detected.apiFormat === "openai_responses"
+                ? "Responses"
+                : detected.apiFormat === "openai_chat"
+                  ? "Chat Completions"
+                  : "Anthropic Messages",
+          }),
+        );
+      } catch (error) {
+        console.warn("[CODEX_API_FORMAT_AUTO_DETECT_FAILED]", error);
+        toast.error(
+          t("codexConfig.upstreamFormatDetectFailed", {
+            defaultValue:
+              "无法自动识别上游 API 协议。请确认端点和 API Key，或在高级设置中手动选择协议。",
+          }),
+        );
+        return;
+      }
+    }
+
     let settingsConfig: string;
 
     if (appId === "codex") {
@@ -1585,13 +1631,13 @@ function ProviderFormFull({
       codexChatReasoning:
         appId === "codex" &&
         category !== "official" &&
-        localCodexApiFormat === "openai_chat"
+        resolvedCodexApiFormat === "openai_chat"
           ? normalizeCodexChatReasoningForSave(codexChatReasoning)
           : undefined,
       promptCacheRouting:
         appId === "codex" &&
         category !== "official" &&
-        localCodexApiFormat === "openai_chat" &&
+        resolvedCodexApiFormat === "openai_chat" &&
         promptCacheRouting !== "auto"
           ? promptCacheRouting
           : undefined,
@@ -1617,7 +1663,7 @@ function ProviderFormFull({
           : appId === "codex" && category !== "official"
             ? isXaiOauthProvider
               ? "openai_responses"
-              : localCodexApiFormat
+              : resolvedCodexApiFormat
             : undefined,
       apiKeyField:
         appId === "claude" &&
@@ -1626,7 +1672,7 @@ function ProviderFormFull({
           ? localApiKeyField
           : appId === "codex" &&
               category !== "official" &&
-              localCodexApiFormat === "anthropic" &&
+              resolvedCodexApiFormat === "anthropic" &&
               localCodexAnthropicAuthField !== "ANTHROPIC_AUTH_TOKEN"
             ? localCodexAnthropicAuthField
             : undefined,
@@ -1634,7 +1680,7 @@ function ProviderFormFull({
       impersonateClaudeCode:
         appId === "codex" &&
         category !== "official" &&
-        localCodexApiFormat === "anthropic" &&
+        resolvedCodexApiFormat === "anthropic" &&
         localCodexImpersonateClaudeCode
           ? true
           : undefined,
@@ -1642,7 +1688,7 @@ function ProviderFormFull({
       maxOutputTokens:
         appId === "codex" &&
         category !== "official" &&
-        localCodexApiFormat === "anthropic" &&
+        resolvedCodexApiFormat === "anthropic" &&
         localCodexMaxOutputTokens.trim() !== "" &&
         Number(localCodexMaxOutputTokens) > 0
           ? Number(localCodexMaxOutputTokens)
@@ -1769,10 +1815,7 @@ function ProviderFormFull({
         resetCodexConfig(template.auth, template.config);
         setCodexChatReasoning({});
         setPromptCacheRouting("auto");
-        setLocalCodexApiFormat(
-          codexApiFormatFromWireApi(extractCodexWireApi(template.config)) ??
-            "openai_responses",
-        );
+        setLocalCodexApiFormat("auto");
       }
       if (appId === "gemini") {
         resetGeminiConfig({}, {});
@@ -2309,6 +2352,7 @@ function ProviderFormFull({
               onModelChange={handleCodexModelChange}
               apiFormat={localCodexApiFormat}
               onApiFormatChange={handleCodexApiFormatChange}
+              allowAutoApiFormat
               anthropicAuthField={localCodexAnthropicAuthField}
               onAnthropicAuthFieldChange={setLocalCodexAnthropicAuthField}
               impersonateClaudeCode={localCodexImpersonateClaudeCode}
