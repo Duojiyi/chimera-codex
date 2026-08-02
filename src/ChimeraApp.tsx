@@ -176,6 +176,10 @@ type CodexLaunchResult = {
   wasRunning: boolean;
   running: boolean;
   action: "launched" | "opened" | "restarted";
+  modelUnlockAttempted: boolean;
+  modelUnlockInjected: boolean;
+  modelUnlockModelCount: number;
+  modelUnlockError?: string | null;
 };
 type ReleaseStatus = {
   currentVersion?: string | null;
@@ -496,6 +500,11 @@ export default function ChimeraApp() {
             ? "已打开 Codex"
             : "Codex 已启动",
       );
+      if (result.modelUnlockError) {
+        toast.warning("Codex 已启动，但第三方模型列表注入未生效", {
+          description: result.modelUnlockError,
+        });
+      }
     } catch (error) {
       toast.error("无法启动 Codex", { description: String(error) });
       await loadCodexProcess();
@@ -812,6 +821,10 @@ export default function ChimeraApp() {
       try {
         await invoke("verify_codex_model_catalog", {
           expectedModel: editor.model.trim(),
+          expectedModels: catalogModels.map((item) => ({
+            model: item.model.trim(),
+            displayName: item.displayName?.trim() || item.model.trim(),
+          })),
         });
       } catch (error) {
         await loadProviders();
@@ -1177,11 +1190,17 @@ export default function ChimeraApp() {
           }}
           onConfirm={async () => {
             try {
-              await invoke("restart_codex_for_model_catalog", {
-                confirm: true,
-              });
+              const result = await invoke<CodexLaunchResult>(
+                "restart_codex_for_model_catalog",
+                { confirm: true },
+              );
               setPendingModelReload(null);
               toast.success("Codex 已重新加载模型列表");
+              if (result.modelUnlockError) {
+                toast.warning("第三方模型列表注入未生效", {
+                  description: result.modelUnlockError,
+                });
+              }
             } catch (error) {
               toast.error("无法自动重启 Codex", {
                 description: `${String(error)}。请彻底退出并重新打开 Codex。`,

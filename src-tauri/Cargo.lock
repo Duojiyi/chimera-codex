@@ -850,7 +850,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-plus-plus"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -915,6 +915,7 @@ dependencies = [
  "toml_edit 0.22.27",
  "tower 0.4.13",
  "tower-http 0.5.2",
+ "tungstenite",
  "url",
  "uuid",
  "webkit2gtk",

@@ -220,7 +220,7 @@ describe("useProviderActions", () => {
     expect(switchProviderMutateAsync).toHaveBeenCalledWith(provider.id);
   });
 
-  it("warns but still switches Codex full URL providers when proxy is not running", async () => {
+  it("lets the backend auto-route Codex full URL providers without a manual warning", async () => {
     switchProviderMutateAsync.mockResolvedValueOnce(undefined);
     const { wrapper } = createWrapper();
     const provider = createProvider({
@@ -238,11 +238,11 @@ describe("useProviderActions", () => {
       await result.current.switchProvider(provider);
     });
 
-    expect(toastWarningMock).toHaveBeenCalledTimes(1);
+    expect(toastWarningMock).not.toHaveBeenCalled();
     expect(switchProviderMutateAsync).toHaveBeenCalledWith(provider.id);
   });
 
-  it("warns when switching a Codex Anthropic-format provider without proxy", async () => {
+  it("lets the backend auto-route a Codex Anthropic-format provider", async () => {
     switchProviderMutateAsync.mockResolvedValueOnce(undefined);
     const { wrapper } = createWrapper();
     const provider = createProvider({
@@ -258,13 +258,11 @@ describe("useProviderActions", () => {
       await result.current.switchProvider(provider);
     });
 
-    expect(toastWarningMock).toHaveBeenCalledWith(
-      expect.stringContaining("Anthropic Messages"),
-    );
+    expect(toastWarningMock).not.toHaveBeenCalled();
     expect(switchProviderMutateAsync).toHaveBeenCalledWith(provider.id);
   });
 
-  it("warns for Grok providers that require the Responses router", async () => {
+  it("lets the backend auto-route Grok providers that need translation", async () => {
     switchProviderMutateAsync.mockResolvedValue(undefined);
     const { wrapper } = createWrapper();
     const providers = [
@@ -296,11 +294,11 @@ describe("useProviderActions", () => {
       });
     }
 
-    expect(toastWarningMock).toHaveBeenCalledTimes(3);
+    expect(toastWarningMock).not.toHaveBeenCalled();
     expect(switchProviderMutateAsync).toHaveBeenCalledTimes(3);
   });
 
-  it("warns for managed OAuth until the current Code app is taken over", async () => {
+  it("lets the backend auto-enable routing for managed OAuth", async () => {
     switchProviderMutateAsync.mockResolvedValueOnce(undefined);
     const { wrapper } = createWrapper();
     const provider = createProvider({
@@ -320,9 +318,7 @@ describe("useProviderActions", () => {
       await result.current.switchProvider(provider);
     });
 
-    expect(toastWarningMock).toHaveBeenCalledWith(
-      expect.stringContaining("托管 OAuth"),
-    );
+    expect(toastWarningMock).not.toHaveBeenCalled();
     expect(switchProviderMutateAsync).toHaveBeenCalledWith(provider.id);
   });
 

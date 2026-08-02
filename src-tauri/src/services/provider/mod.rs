@@ -113,6 +113,10 @@ pub struct ProviderService;
 #[serde(rename_all = "camelCase")]
 pub struct SwitchResult {
     pub warnings: Vec<String>,
+    /// Whether this switch automatically changed the app's local-routing takeover state.
+    pub routing_changed: bool,
+    /// The resulting takeover state when routing is managed automatically for this app.
+    pub routing_enabled: Option<bool>,
 }
 
 #[cfg(test)]
