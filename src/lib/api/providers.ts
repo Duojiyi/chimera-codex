@@ -19,6 +19,8 @@ export interface ProviderSwitchEvent {
 
 export interface SwitchResult {
   warnings: string[];
+  routingChanged: boolean;
+  routingEnabled?: boolean | null;
 }
 
 export interface OpenTerminalOptions {

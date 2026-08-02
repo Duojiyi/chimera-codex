@@ -5,6 +5,7 @@
 //! and requires explicit confirmation from the renderer.
 
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use chimera_platform::lock::{LockGuard, OperationLock};
@@ -14,7 +15,7 @@ use chimera_runtime::manager::{
     maintenance_route, rollback_portable_install, uninstall_windows_codex, InstallMode,
     MaintenanceRoute, UpdateSource,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_opener::OpenerExt;
 
@@ -63,6 +64,10 @@ pub struct CodexLaunchResult {
     pub was_running: bool,
     pub running: bool,
     pub action: &'static str,
+    pub model_unlock_attempted: bool,
+    pub model_unlock_injected: bool,
+    pub model_unlock_model_count: usize,
+    pub model_unlock_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -99,6 +104,140 @@ pub struct CodexModelCatalogStatus {
     pub model_count: usize,
 }
 
+/// Renderer-side expectation for one catalog entry. Keeping this contract
+/// explicit prevents a stale catalog with only the default model from being
+/// reported as healthy merely because its JSON is parseable.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpectedCodexCatalogModel {
+    pub model: String,
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CatalogModelIdentity {
+    slug: String,
+    display_name: String,
+}
+
+fn normalize_expected_catalog_models(
+    expected_model: &str,
+    expected_models: Option<Vec<ExpectedCodexCatalogModel>>,
+) -> Result<Vec<ExpectedCodexCatalogModel>, String> {
+    let mut normalized = Vec::new();
+    for entry in expected_models.unwrap_or_default() {
+        let model = entry.model.trim().to_string();
+        if model.is_empty() {
+            return Err("预期模型映射包含空模型".to_string());
+        }
+        normalized.push(ExpectedCodexCatalogModel {
+            model,
+            display_name: entry
+                .display_name
+                .map(|name| name.trim().to_string())
+                .filter(|name| !name.is_empty()),
+        });
+    }
+
+    let expected_model = expected_model.trim();
+    if normalized.is_empty() {
+        normalized.push(ExpectedCodexCatalogModel {
+            model: expected_model.to_string(),
+            display_name: None,
+        });
+    }
+
+    let mut expected_seen = std::collections::HashSet::new();
+    for entry in &normalized {
+        if !expected_seen.insert(entry.model.clone()) {
+            return Err(format!("预期模型映射包含重复模型 {}", entry.model));
+        }
+    }
+    if !expected_seen.contains(expected_model) {
+        return Err(format!("预期模型映射不包含默认模型 {expected_model}"));
+    }
+
+    Ok(normalized)
+}
+
+fn parse_catalog_model_identities(
+    models: &[serde_json::Value],
+    source: &str,
+) -> Result<Vec<CatalogModelIdentity>, String> {
+    let mut actual = Vec::with_capacity(models.len());
+    for (index, model_entry) in models.iter().enumerate() {
+        let slug = model_entry
+            .get("slug")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|slug| !slug.is_empty())
+            .ok_or_else(|| format!("{source}第 {} 项缺少非空 slug", index + 1))?;
+        let display_name = model_entry
+            .get("display_name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| format!("{source}第 {} 项 {slug} 缺少非空 display_name", index + 1))?;
+        actual.push(CatalogModelIdentity {
+            slug: slug.to_string(),
+            display_name: display_name.to_string(),
+        });
+    }
+    Ok(actual)
+}
+
+fn validate_catalog_model_identities(
+    expected: &[ExpectedCodexCatalogModel],
+    actual: &[CatalogModelIdentity],
+    source: &str,
+) -> Result<(), String> {
+    if actual.len() != expected.len() {
+        return Err(format!(
+            "{source}数量不一致：期望 {} 个，实际 {} 个",
+            expected.len(),
+            actual.len()
+        ));
+    }
+
+    let mut actual_seen = std::collections::HashSet::new();
+    for (index, actual_entry) in actual.iter().enumerate() {
+        if !actual_seen.insert(actual_entry.slug.clone()) {
+            return Err(format!("{source}包含重复 slug：{}", actual_entry.slug));
+        }
+
+        let Some(expected_entry) = expected.get(index) else {
+            return Err(format!("{source}多出模型 {}", actual_entry.slug));
+        };
+        if actual_entry.slug != expected_entry.model {
+            return Err(format!(
+                "{source}顺序或 slug 不一致：第 {} 项期望 {}，实际 {}",
+                index + 1,
+                expected_entry.model,
+                actual_entry.slug
+            ));
+        }
+        if let Some(expected_display_name) = expected_entry.display_name.as_deref() {
+            if actual_entry.display_name != expected_display_name {
+                return Err(format!(
+                    "{source}显示名不一致：{} 期望“{}”，实际“{}”",
+                    actual_entry.slug, expected_display_name, actual_entry.display_name
+                ));
+            }
+        }
+    }
+
+    let missing = expected
+        .iter()
+        .filter(|entry| !actual_seen.contains(&entry.model))
+        .map(|entry| entry.model.as_str())
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(format!("{source}缺少映射：{}", missing.join(", ")));
+    }
+
+    Ok(())
+}
+
 fn runtime_root() -> PathBuf {
     crate::config::get_app_config_dir().join("codex-runtime")
 }
@@ -129,6 +268,57 @@ fn launch_action(was_running: bool) -> &'static str {
     }
 }
 
+fn renderer_unlock_available(installed: &codex_win_engine::InstalledWindowsCodex) -> bool {
+    if installed.source == "portable" {
+        return true;
+    }
+    let live_home = crate::codex_config::get_codex_config_dir();
+    let default_home = crate::config::get_home_dir().join(".codex");
+    codex_win_engine::same_windows_path(&live_home, &default_home)
+}
+
+fn renderer_unlock_launch_options(
+    installed: &codex_win_engine::InstalledWindowsCodex,
+) -> codex_win_engine::LaunchOptions {
+    let mut options = codex_win_engine::LaunchOptions::default();
+    if renderer_unlock_available(installed) {
+        options.remote_debugging_port = Some(crate::codex_cdp::CODEX_RENDERER_DEBUG_PORT);
+    }
+    options
+}
+
+fn renderer_unlock_status(
+    installed: &codex_win_engine::InstalledWindowsCodex,
+) -> crate::codex_cdp::CodexModelUnlockStatus {
+    let status = if renderer_unlock_available(installed) {
+        crate::codex_cdp::inject_codex_model_unlock(crate::codex_cdp::CODEX_RENDERER_DEBUG_PORT)
+    } else {
+        crate::codex_cdp::unavailable_model_unlock(
+            "标准 MSIX 使用自定义 CODEX_HOME 时无法同时传入 CDP 参数；请恢复默认 ~/.codex 或改用便携版 Codex",
+        )
+    };
+    if let Some(error) = status.error.as_deref() {
+        log::warn!("Codex renderer 模型注入未生效: {error}");
+    }
+    status
+}
+
+fn launch_result(
+    was_running: bool,
+    running: bool,
+    model_unlock: crate::codex_cdp::CodexModelUnlockStatus,
+) -> CodexLaunchResult {
+    CodexLaunchResult {
+        was_running,
+        running,
+        action: launch_action(was_running),
+        model_unlock_attempted: model_unlock.attempted,
+        model_unlock_injected: model_unlock.injected,
+        model_unlock_model_count: model_unlock.model_count,
+        model_unlock_error: model_unlock.error,
+    }
+}
+
 fn official_login_available() -> bool {
     let path = crate::codex_config::get_codex_auth_path();
     let Ok(contents) = std::fs::read_to_string(path) else {
@@ -143,7 +333,9 @@ fn official_login_available() -> bool {
 fn wait_for_codex_running(
     installed: &codex_win_engine::InstalledWindowsCodex,
 ) -> Result<bool, String> {
-    for _ in 0..8 {
+    // MSIX activation can take longer than a direct portable spawn on a cold
+    // system, so allow a bounded ten-second window before declaring failure.
+    for _ in 0..40 {
         if codex_is_running(installed)? {
             return Ok(true);
         }
@@ -152,7 +344,159 @@ fn wait_for_codex_running(
     Ok(false)
 }
 
-fn close_codex_for_restart(
+fn wait_for_codex_stopped(
+    installed: &codex_win_engine::InstalledWindowsCodex,
+) -> Result<bool, String> {
+    // Electron can briefly replace the main process while it is shutting down.
+    // Require a full second of consecutive path-pinned scans with no matching
+    // process before starting the replacement instance.
+    let mut clear_polls = 0_u8;
+    for _ in 0..120 {
+        if codex_is_running(installed)? {
+            clear_polls = 0;
+        } else {
+            clear_polls += 1;
+            if clear_polls >= 4 {
+                return Ok(true);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    Ok(false)
+}
+
+fn launch_executable_with_codex_home(
+    executable: &Path,
+    working_dir: &Path,
+    codex_home: &Path,
+    options: codex_win_engine::LaunchOptions,
+) -> Result<(), String> {
+    let mut command = Command::new(executable);
+    command
+        .current_dir(working_dir)
+        .env("CODEX_HOME", codex_home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    if options.disable_codex_self_updates {
+        command.env("CODEX_SPARKLE_ENABLED", "false");
+    }
+    if let Some(port) = options.remote_debugging_port {
+        command.args([
+            "--remote-debugging-address=127.0.0.1",
+            &format!("--remote-debugging-port={port}"),
+        ]);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+
+    let child = command.spawn().map_err(|error| {
+        format!(
+            "无法启动 Codex 可执行文件 {}: {error}",
+            executable.display()
+        )
+    })?;
+    // The process is intentionally owned by Codex after launch. We verify its
+    // liveness separately, so waiting here would block the Tauri command.
+    std::mem::forget(child);
+    Ok(())
+}
+
+fn launch_msix_with_codex_home(
+    codex_home: &Path,
+    options: codex_win_engine::LaunchOptions,
+) -> Result<(), String> {
+    if options.remote_debugging_port.is_some() {
+        return Err("MSIX 启动暂不支持通过环境注入远程调试参数".to_string());
+    }
+
+    // Shell activation normally happens in a separate process and therefore
+    // cannot see a temporary Rust-side environment change. Start the shell
+    // activation from PowerShell with CODEX_HOME explicitly present so the
+    // activated Desktop process inherits the same config directory.
+    let script = r#"
+$ErrorActionPreference = 'Stop'
+$pkg = Get-AppxPackage -Name 'OpenAI.Codex' |
+  Sort-Object -Property Version -Descending |
+  Select-Object -First 1
+if ($null -eq $pkg) { throw 'Codex is not installed' }
+$app = (Get-AppxPackageManifest $pkg).Package.Applications.Application
+if ($app -is [array]) { $app = $app[0] }
+$id = [string]$app.Id
+if ([string]::IsNullOrWhiteSpace($id)) { $id = 'App' }
+Start-Process ("shell:AppsFolder\" + $pkg.PackageFamilyName + "!" + $id)
+"#;
+    let mut command = Command::new("powershell.exe");
+    command
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .env("CODEX_HOME", codex_home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    if options.disable_codex_self_updates {
+        command.env("CODEX_SPARKLE_ENABLED", "false");
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+
+    let output = command
+        .output()
+        .map_err(|error| format!("无法调用 PowerShell 启动 MSIX Codex: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            format!("MSIX Codex 激活失败（退出码 {:?}）", output.status.code())
+        } else {
+            format!("MSIX Codex 激活失败：{detail}")
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn launch_codex_with_config(
+    installed: &codex_win_engine::InstalledWindowsCodex,
+    options: codex_win_engine::LaunchOptions,
+) -> Result<(), String> {
+    let codex_home = crate::codex_config::get_codex_config_dir();
+
+    if installed.source == "portable" {
+        let root = Path::new(&installed.path);
+        let executable = codex_win_engine::installed_app_exe(root)
+            .ok_or_else(|| format!("未找到 Codex 启动程序：{}", root.display()))?;
+        return launch_executable_with_codex_home(&executable, root, &codex_home, options);
+    }
+
+    // The audited engine uses IApplicationActivationManager when Electron
+    // arguments are present, which is the only reliable way to pass the local
+    // CDP flags to an MSIX desktop app. This path is used only with the default
+    // ~/.codex directory, so no CODEX_HOME environment override is required.
+    if options.remote_debugging_port.is_some() {
+        return codex_win_engine::launch_codex_with_options(installed, options)
+            .map_err(|error| format!("无法带 CDP 参数启动 MSIX Codex：{error}"));
+    }
+
+    // Without renderer injection, prefer the environment-aware shell activation.
+    // If PowerShell is policy-blocked, fall back to the audited engine launcher.
+    match launch_msix_with_codex_home(&codex_home, options) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            log::warn!("环境注入的 MSIX Codex 启动失败，回退到系统激活：{error}");
+            codex_win_engine::launch_codex_with_options(installed, options)
+                .map_err(|fallback| format!("{error}；系统激活也失败：{fallback}"))
+        }
+    }
+}
+
+pub(crate) fn close_codex_for_restart(
     installed: &codex_win_engine::InstalledWindowsCodex,
     portable_root: &Path,
 ) -> Result<(), String> {
@@ -163,22 +507,30 @@ fn close_codex_for_restart(
         codex_win_engine::close_codex_gracefully_for_root(30, portable_root)
             .map_err(|error| format!("无法关闭 Codex: {error}"))?;
     }
-    if codex_is_running(installed)? {
+    if !wait_for_codex_stopped(installed)? {
         return Err("Codex 未能完全退出，已取消重启".to_string());
     }
     Ok(())
 }
 
 /// Verify that the live Codex config points at Chimera's catalog and contains
-/// the selected default model. This command is read-only.
+/// every model that the renderer just saved. This command is read-only.
+///
+/// `expected_models` is optional for IPC compatibility with older renderers;
+/// those callers still get the legacy default-model check. New renderers pass
+/// the complete mapping (including display names), which catches the exact
+/// failure mode where only Codex's single `custom` entry remains visible.
 #[tauri::command]
 pub fn verify_codex_model_catalog(
     expected_model: String,
+    expected_models: Option<Vec<ExpectedCodexCatalogModel>>,
 ) -> Result<CodexModelCatalogStatus, String> {
     let expected_model = expected_model.trim();
     if expected_model.is_empty() {
         return Err("默认模型不能为空".to_string());
     }
+    let expected_models = normalize_expected_catalog_models(expected_model, expected_models)?;
+
     let config_text = crate::codex_config::read_codex_config_text().map_err(|e| e.to_string())?;
     let config = config_text
         .parse::<toml_edit::DocumentMut>()
@@ -199,32 +551,52 @@ pub fn verify_codex_model_catalog(
     let catalog_path =
         crate::codex_config::resolve_cc_switch_catalog_path(&config_text, &generated_path)
             .ok_or_else(|| "Codex 配置未引用 Chimera 模型目录".to_string())?;
-    let catalog_text = std::fs::read_to_string(&catalog_path)
-        .map_err(|_| "Chimera 模型目录文件不存在或无法读取".to_string())?;
+    let catalog_text = std::fs::read_to_string(&catalog_path).map_err(|_| {
+        format!(
+            "Chimera 模型目录文件不存在或无法读取：{}",
+            catalog_path.display()
+        )
+    })?;
     let catalog: serde_json::Value = serde_json::from_str(&catalog_text)
-        .map_err(|e| format!("Chimera 模型目录无法解析: {e}"))?;
+        .map_err(|e| format!("Chimera 模型目录无法解析：{e}"))?;
     let models = catalog
         .get("models")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| "Chimera 模型目录缺少 models 列表".to_string())?;
-    let contains_default = models
-        .iter()
-        .any(|entry| entry.get("slug").and_then(serde_json::Value::as_str) == Some(expected_model));
-    if !contains_default {
-        return Err(format!("模型目录中没有默认模型 {expected_model}"));
-    }
+    let file_models = parse_catalog_model_identities(models, "模型目录")?;
+    validate_catalog_model_identities(
+        &expected_models,
+        &file_models,
+        &format!("模型目录（{}）", catalog_path.display()),
+    )?;
+
+    // File-level validation is not enough: Codex Desktop may be using a
+    // different CODEX_HOME or may reject the catalog during its own parsing.
+    // Ask Codex's runtime and validate the identities that the picker actually
+    // receives. This is what detects the old "only custom is visible" failure.
+    let runtime_models = crate::codex_config::probe_codex_runtime_models()
+        .map_err(|error| format!("无法验证 Codex 实际模型列表：{error}"))?;
+    let runtime_models = runtime_models
+        .into_iter()
+        .map(|model| CatalogModelIdentity {
+            slug: model.slug,
+            display_name: model.display_name,
+        })
+        .collect::<Vec<_>>();
+    validate_catalog_model_identities(&expected_models, &runtime_models, "Codex 实际模型列表")?;
+
     Ok(CodexModelCatalogStatus {
         valid: true,
         default_model,
         catalog_path: Some(catalog_path.to_string_lossy().to_string()),
-        model_count: models.len(),
+        model_count: file_models.len(),
     })
 }
 
 /// Restart Codex after an explicit renderer confirmation so it reloads the
 /// startup-only model catalog. Reuses Codex App Manager's install detection.
 #[tauri::command]
-pub async fn restart_codex_for_model_catalog(confirm: bool) -> Result<(), String> {
+pub async fn restart_codex_for_model_catalog(confirm: bool) -> Result<CodexLaunchResult, String> {
     require_confirmation(confirm, "重启 Codex 以刷新模型列表")?;
     require_windows()?;
     let portable_root = portable_root()?;
@@ -232,8 +604,15 @@ pub async fn restart_codex_for_model_catalog(confirm: bool) -> Result<(), String
         let _guard = acquire_operation_lock("codex_runtime_restart_catalog")?;
         let installed = codex_win_engine::detect_installed_codex(&portable_root)
             .ok_or_else(|| "未检测到 Codex 安装".to_string())?;
+        let was_running = codex_is_running(&installed)?;
         close_codex_for_restart(&installed, &portable_root)?;
-        codex_win_engine::launch_codex(&installed).map_err(|e| format!("无法重新启动 Codex: {e}"))
+        launch_codex_with_config(&installed, renderer_unlock_launch_options(&installed))?;
+        let running = wait_for_codex_running(&installed)?;
+        if !running {
+            return Err("Codex 重启后未保持运行，请在更新页运行诊断".to_string());
+        }
+        let model_unlock = renderer_unlock_status(&installed);
+        Ok(launch_result(was_running, running, model_unlock))
     })
     .await
     .map_err(|e| format!("Codex 重启任务中断: {e}"))?
@@ -298,10 +677,13 @@ pub async fn open_codex_runtime(
         let installed = codex_win_engine::detect_installed_codex(&portable_root)
             .ok_or_else(|| "未检测到 Codex 安装".to_string())?;
         let was_running = codex_is_running(&installed)?;
-        if was_running {
-            close_codex_for_restart(&installed, &portable_root)?;
-        }
-        if let Err(error) = codex_win_engine::launch_codex(&installed) {
+        // Always pass through the shutdown gate. It is a no-op when the target
+        // is already stopped, and it removes the discovery/launch race where a
+        // just-started Electron child could otherwise survive the restart.
+        close_codex_for_restart(&installed, &portable_root)?;
+        if let Err(error) =
+            launch_codex_with_config(&installed, renderer_unlock_launch_options(&installed))
+        {
             // A second portable Electron process may exit after handing focus
             // to an already-running instance. We intentionally reject that
             // path here: a previous target was either absent or confirmed
@@ -312,11 +694,8 @@ pub async fn open_codex_runtime(
         if !running {
             return Err("Codex 启动后未保持运行，请在更新页运行诊断".to_string());
         }
-        Ok(CodexLaunchResult {
-            was_running,
-            running,
-            action: launch_action(was_running),
-        })
+        let model_unlock = renderer_unlock_status(&installed);
+        Ok(launch_result(was_running, running, model_unlock))
     })
     .await
     .map_err(|error| format!("Codex 启动任务中断: {error}"))?
@@ -628,7 +1007,11 @@ pub async fn uninstall_codex_runtime(confirm: bool) -> Result<CodexRuntimeOperat
 
 #[cfg(test)]
 mod tests {
-    use super::{launch_action, process_install_mode, CodexProcessStatus, CodexRuntimeStatus};
+    use super::{
+        launch_action, normalize_expected_catalog_models, parse_catalog_model_identities,
+        process_install_mode, validate_catalog_model_identities, CatalogModelIdentity,
+        CodexProcessStatus, CodexRuntimeStatus, ExpectedCodexCatalogModel,
+    };
 
     #[test]
     fn launch_action_replaces_a_running_instance() {
@@ -658,6 +1041,83 @@ mod tests {
         assert_eq!(json["installMode"], "portable");
         assert_eq!(json["officialLoginAvailable"], true);
         assert!(json.get("install_mode").is_none());
+    }
+
+    #[test]
+    fn catalog_validation_rejects_a_partial_mapping() {
+        let expected = normalize_expected_catalog_models(
+            "claude-opus-4-5-2025",
+            Some(vec![
+                ExpectedCodexCatalogModel {
+                    model: "claude-opus-4-5-2025".to_string(),
+                    display_name: Some("Claude Opus 4.5".to_string()),
+                },
+                ExpectedCodexCatalogModel {
+                    model: "claude-sonnet-4-5-20250929".to_string(),
+                    display_name: Some("Claude Sonnet 4.5".to_string()),
+                },
+            ]),
+        )
+        .expect("expected mapping normalizes");
+        let actual = vec![CatalogModelIdentity {
+            slug: "claude-opus-4-5-2025".to_string(),
+            display_name: "Claude Opus 4.5".to_string(),
+        }];
+
+        let error = validate_catalog_model_identities(&expected, &actual, "测试目录")
+            .expect_err("partial mapping must fail");
+        assert!(error.contains("期望 2 个，实际 1 个"));
+    }
+
+    #[test]
+    fn catalog_validation_rejects_wrong_display_name_and_duplicate_slug() {
+        let expected = normalize_expected_catalog_models(
+            "claude-opus-4-5-2025",
+            Some(vec![ExpectedCodexCatalogModel {
+                model: "claude-opus-4-5-2025".to_string(),
+                display_name: Some("Claude Opus 4.5".to_string()),
+            }]),
+        )
+        .expect("expected mapping normalizes");
+        let duplicate = vec![
+            CatalogModelIdentity {
+                slug: "claude-opus-4-5-2025".to_string(),
+                display_name: "Claude Opus 4.5".to_string(),
+            },
+            CatalogModelIdentity {
+                slug: "claude-opus-4-5-2025".to_string(),
+                display_name: "Claude Opus 4.5".to_string(),
+            },
+        ];
+        let error = validate_catalog_model_identities(&expected, &duplicate, "运行时目录")
+            .expect_err("duplicate slug must fail");
+        assert!(error.contains("数量不一致") || error.contains("重复 slug"));
+
+        let wrong_display = vec![CatalogModelIdentity {
+            slug: "claude-opus-4-5-2025".to_string(),
+            display_name: "Opus".to_string(),
+        }];
+        let error = validate_catalog_model_identities(&expected, &wrong_display, "运行时目录")
+            .expect_err("wrong display name must fail");
+        assert!(error.contains("显示名不一致"));
+    }
+
+    #[test]
+    fn catalog_json_parser_requires_slug_and_display_name() {
+        let models = vec![serde_json::json!({
+            "slug": "claude-opus-4-5-2025",
+            "display_name": "Claude Opus 4.5",
+        })];
+        let parsed = parse_catalog_model_identities(&models, "目录").expect("valid model");
+        assert_eq!(parsed[0].slug, "claude-opus-4-5-2025");
+        assert_eq!(parsed[0].display_name, "Claude Opus 4.5");
+
+        let missing_display = vec![serde_json::json!({
+            "slug": "claude-opus-4-5-2025",
+        })];
+        let error = parse_catalog_model_identities(&missing_display, "目录")
+            .expect_err("display name is required");
+        assert!(error.contains("display_name"));
     }
 
     #[test]

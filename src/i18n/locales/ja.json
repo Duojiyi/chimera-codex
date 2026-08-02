@@ -231,6 +231,8 @@
     "providerDeleted": "プロバイダーを削除しました",
     "switchSuccess": "切り替え成功！",
     "codexRestartRequired": "切り替えました。反映するにはクライアントを再起動してください",
+    "routingAutoEnabled": "ローカルルーティングを自動で有効にして切り替えました。反映するにはクライアントを再起動してください",
+    "routingAutoDisabled": "ローカルルーティングを自動で無効にして切り替えました。反映するにはクライアントを再起動してください",
     "grokBuildRestartRequired": "切り替えました。反映するには Grok Build を再起動してください",
     "claudeDesktopRestartRequired": "切り替えました。反映するには Claude Desktop を再起動してください",
     "claudeDesktopProxyRestartRequired": "切り替えました。CC Switch を起動したまま Claude Desktop を再起動してください",

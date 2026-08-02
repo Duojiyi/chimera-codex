@@ -540,6 +540,9 @@ export function GrokBuildProviderForm({
               }}
               apiFormat={apiFormat}
               onApiFormatChange={(value) => {
+                // `auto` is only rendered for Codex, which owns the safe
+                // capability probe. Grok Build always persists a concrete format.
+                if (value === "auto") return;
                 const backend = grokApiBackendFromApiFormat(value);
                 setApiFormat(value);
                 setApiBackend(backend);

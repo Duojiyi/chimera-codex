@@ -258,6 +258,10 @@ export type ClaudeApiFormat =
 // - "anthropic": native Anthropic Messages format, needs local routing to convert to Responses
 export type CodexApiFormat = "openai_responses" | "openai_chat" | "anthropic";
 
+// Form-only selection. `auto` is resolved to a concrete CodexApiFormat before
+// saving, so persisted provider metadata never depends on runtime re-detection.
+export type CodexApiFormatSelection = CodexApiFormat | "auto";
+
 export interface CodexCatalogModel {
   model: string;
   displayName?: string;

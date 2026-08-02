@@ -29,3 +29,25 @@ pub async fn fetch_models_for_config(
     )
     .await
 }
+
+/// Safely detect whether a custom Codex endpoint implements Responses, Chat
+/// Completions, or Anthropic Messages. The service probes only invalid empty
+/// requests, so no model completion is created during detection.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn detect_codex_api_format(
+    base_url: String,
+    api_key: String,
+    is_full_url: Option<bool>,
+    custom_user_agent: Option<String>,
+) -> Result<model_fetch::DetectedCodexApiFormat, String> {
+    let user_agent = crate::provider::parse_custom_user_agent(custom_user_agent.as_deref())
+        .ok()
+        .flatten();
+    model_fetch::detect_codex_api_format(
+        &base_url,
+        &api_key,
+        is_full_url.unwrap_or(false),
+        user_agent,
+    )
+    .await
+}
