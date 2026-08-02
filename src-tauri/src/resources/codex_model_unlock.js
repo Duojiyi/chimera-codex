@@ -290,6 +290,314 @@
     return payload;
   };
 
+  // Codex Desktop 2026.8+ connects the renderer to its app host through
+  // Cap'n Web over MessagePort. The wire payload is a JSON string, so the
+  // older WebSocket/window-message hooks never see model/list traffic.
+  const nativeJsonParse = typeof JSON?.parse === "function" ? JSON.parse.bind(JSON) : null;
+  const nativeJsonStringify = typeof JSON?.stringify === "function"
+    ? JSON.stringify.bind(JSON)
+    : null;
+  const messagePortStates = new WeakMap();
+  const messageListenerWrappers = new WeakMap();
+  const onMessageListeners = new WeakMap();
+
+  const portState = (port) => {
+    let state = messagePortStates.get(port);
+    if (!state) {
+      state = { nextImportId: 1, modelListRequestIds: new Set() };
+      messagePortStates.set(port, state);
+    }
+    return state;
+  };
+  const containsExactString = (value, expected, depth = 0) => {
+    if (depth > 16) return false;
+    if (value === expected) return true;
+    if (!value || typeof value !== "object") return false;
+    if (Array.isArray(value)) {
+      return value.some((entry) => containsExactString(entry, expected, depth + 1));
+    }
+    return Object.values(value)
+      .some((entry) => containsExactString(entry, expected, depth + 1));
+  };
+  const enableHiddenModelsInWireRequest = (value, depth = 0) => {
+    if (!value || typeof value !== "object" || depth > 16) return;
+    if (Array.isArray(value)) {
+      for (const entry of value) enableHiddenModelsInWireRequest(entry, depth + 1);
+      return;
+    }
+    if (value.method === "model/list") {
+      value.params = { ...(value.params || {}), includeHidden: true };
+    }
+    if ("includeHidden" in value || "cursor" in value || "limit" in value) {
+      value.includeHidden = true;
+    }
+    for (const entry of Object.values(value)) {
+      enableHiddenModelsInWireRequest(entry, depth + 1);
+    }
+  };
+  const encodeCapnWebValue = (value, depth = 0) => {
+    if (depth > 32) return value;
+    if (Array.isArray(value)) {
+      return [value.map((entry) => encodeCapnWebValue(entry, depth + 1))];
+    }
+    if (value && typeof value === "object") {
+      const encoded = {};
+      for (const [key, entry] of Object.entries(value)) {
+        encoded[key] = encodeCapnWebValue(entry, depth + 1);
+      }
+      return encoded;
+    }
+    return value;
+  };
+  const capnWebArrayItems = (value) => Array.isArray(value)
+    && value.length === 1
+    && Array.isArray(value[0])
+    ? value[0]
+    : null;
+  const patchCapnWebModelArray = (value) => {
+    const items = capnWebArrayItems(value);
+    const currentNames = names();
+    if (!items || !currentNames.length) return false;
+
+    let changed = false;
+    const existing = new Set(items.map(modelKey).filter(Boolean));
+    for (const item of items) {
+      const key = modelKey(item);
+      if (!key || !currentNames.includes(key)) continue;
+      const descriptor = modelDescriptor(key);
+      if (item.hidden !== false) {
+        item.hidden = false;
+        changed = true;
+      }
+      for (const field of [
+        "displayName", "description", "defaultReasoningEffort",
+        "supportedReasoningEfforts",
+      ]) {
+        const encoded = encodeCapnWebValue(descriptor[field]);
+        if (nativeJsonStringify?.(item[field]) !== nativeJsonStringify?.(encoded)) {
+          item[field] = encoded;
+          changed = true;
+        }
+      }
+    }
+    for (const name of currentNames) {
+      if (!existing.has(name)) {
+        items.push(encodeCapnWebValue(modelDescriptor(name)));
+        changed = true;
+      }
+    }
+    return changed;
+  };
+  const patchCapnWebModelListResult = (value, depth = 0) => {
+    if (!value || typeof value !== "object" || depth > 8) return false;
+    if (capnWebArrayItems(value)) return patchCapnWebModelArray(value);
+    if (Array.isArray(value)) return false;
+
+    let changed = false;
+    for (const key of ["data", "models"]) {
+      if (key in value && patchCapnWebModelArray(value[key])) changed = true;
+    }
+    for (const key of ["result", "message", "response", "payload"]) {
+      if (key in value && patchCapnWebModelListResult(value[key], depth + 1)) changed = true;
+    }
+    return changed;
+  };
+  const capnWebCatalogContainsConfiguredModels = (value) => {
+    const found = new Set();
+    const visit = (candidate, depth = 0) => {
+      if (depth > 16 || candidate == null) return;
+      if (typeof candidate === "string") {
+        found.add(candidate);
+        return;
+      }
+      if (typeof candidate !== "object") return;
+      for (const entry of Array.isArray(candidate)
+        ? candidate
+        : Object.values(candidate)) visit(entry, depth + 1);
+    };
+    visit(value);
+    const currentNames = names();
+    return currentNames.length > 0 && currentNames.every((name) => found.has(name));
+  };
+  const rememberModelListRequest = (state, requestId) => {
+    const id = String(requestId);
+    state.modelListRequestIds.add(id);
+    if (state.modelListRequestIds.size > 64) {
+      state.modelListRequestIds.delete(state.modelListRequestIds.values().next().value);
+    }
+    const status = globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_STATUS__ || {};
+    status.requestsSeen = (status.requestsSeen || 0) + 1;
+    status.lastModelListRequestId = id;
+    globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_STATUS__ = status;
+    globalThis.setTimeout?.(() => state.modelListRequestIds.delete(id), 30_000);
+  };
+  const patchMessagePortOutgoing = (port, data) => {
+    if (typeof data !== "string" || !nativeJsonParse || !nativeJsonStringify) return data;
+    try {
+      const wire = nativeJsonParse(data);
+      if (!Array.isArray(wire)) return data;
+      const state = portState(port);
+      if (wire[0] === "push" || wire[0] === "stream" || wire[0] === "pipe") {
+        const requestId = state.nextImportId;
+        state.nextImportId += 1;
+        if ((wire[0] === "push" || wire[0] === "stream")
+            && containsExactString(wire[1], "model/list")) {
+          enableHiddenModelsInWireRequest(wire[1]);
+          rememberModelListRequest(state, requestId);
+          return nativeJsonStringify(wire);
+        }
+      }
+    } catch {
+      // Ignore non-Cap'n-Web MessagePort traffic.
+    }
+    return data;
+  };
+  const patchMessagePortIncoming = (port, data) => {
+    if (typeof data !== "string" || !nativeJsonParse || !nativeJsonStringify) return data;
+    const state = messagePortStates.get(port);
+    if (!state || state.modelListRequestIds.size === 0) return data;
+    try {
+      const wire = nativeJsonParse(data);
+      if (!Array.isArray(wire) || (wire[0] !== "resolve" && wire[0] !== "reject")) {
+        return data;
+      }
+      const requestId = wire[1] == null ? "" : String(wire[1]);
+      if (!state.modelListRequestIds.has(requestId)) return data;
+      state.modelListRequestIds.delete(requestId);
+
+      const status = globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_STATUS__ || {};
+      status.responsesSeen = (status.responsesSeen || 0) + 1;
+      if (wire[0] === "resolve") {
+        const changed = patchCapnWebModelListResult(wire[2]);
+        if (changed) {
+          status.patched = (status.patched || 0) + 1;
+          status.responsesPatched = (status.responsesPatched || 0) + 1;
+        }
+        status.catalogVerified = capnWebCatalogContainsConfiguredModels(wire[2]);
+        globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_STATUS__ = status;
+        return changed ? nativeJsonStringify(wire) : data;
+      }
+      status.catalogVerified = false;
+      globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_STATUS__ = status;
+    } catch {
+      // Keep the original event if the protocol changes.
+    }
+    return data;
+  };
+  const messageEventWithData = (event, data) => {
+    if (!event || data === event.data) return event;
+    if (typeof MessageEvent !== "undefined") {
+      try {
+        return new MessageEvent(event.type || "message", {
+          data,
+          origin: event.origin || "",
+          lastEventId: event.lastEventId || "",
+          source: event.source || null,
+          ports: event.ports ? Array.from(event.ports) : [],
+        });
+      } catch {
+        // Fall through to a transparent proxy for non-browser test contexts.
+      }
+    }
+    try {
+      return new Proxy(event, {
+        get(target, property) {
+          if (property === "data") return data;
+          const current = Reflect.get(target, property, target);
+          return typeof current === "function" ? current.bind(target) : current;
+        },
+      });
+    } catch {
+      return { data };
+    }
+  };
+  const wrapPortMessageListener = (port, listener) => {
+    if (typeof listener !== "function"
+        && (!listener || typeof listener.handleEvent !== "function")) return listener;
+    let byPort = messageListenerWrappers.get(listener);
+    if (!byPort) {
+      byPort = new WeakMap();
+      messageListenerWrappers.set(listener, byPort);
+    }
+    let wrapped = byPort.get(port);
+    if (!wrapped) {
+      wrapped = function chimeraCodexModelUnlockMessagePortListener(event) {
+        const nextEvent = messageEventWithData(
+          event,
+          patchMessagePortIncoming(port, event?.data),
+        );
+        if (typeof listener === "function") return listener.call(this, nextEvent);
+        return listener.handleEvent.call(listener, nextEvent);
+      };
+      byPort.set(port, wrapped);
+    }
+    return wrapped;
+  };
+
+  if (typeof MessagePort !== "undefined" && MessagePort.prototype) {
+    const prototype = MessagePort.prototype;
+    const originalPostMessage = prototype.postMessage;
+    const originalAddEventListener = prototype.addEventListener;
+    const originalRemoveEventListener = prototype.removeEventListener;
+    if (typeof originalPostMessage === "function") {
+      prototype.postMessage = function chimeraCodexModelUnlockMessagePortPostMessage(data, ...args) {
+        return originalPostMessage.call(this, patchMessagePortOutgoing(this, data), ...args);
+      };
+    }
+    if (typeof originalAddEventListener === "function") {
+      prototype.addEventListener = function chimeraCodexModelUnlockMessagePortAddEventListener(
+        type,
+        listener,
+        ...args
+      ) {
+        return originalAddEventListener.call(
+          this,
+          type,
+          type === "message" ? wrapPortMessageListener(this, listener) : listener,
+          ...args,
+        );
+      };
+    }
+    if (typeof originalRemoveEventListener === "function") {
+      prototype.removeEventListener = function chimeraCodexModelUnlockMessagePortRemoveEventListener(
+        type,
+        listener,
+        ...args
+      ) {
+        const canWrap = typeof listener === "function"
+          || (listener && typeof listener === "object");
+        const wrapped = type === "message" && canWrap
+          ? messageListenerWrappers.get(listener)?.get(this) || listener
+          : listener;
+        return originalRemoveEventListener.call(this, type, wrapped, ...args);
+      };
+    }
+
+    const onMessageDescriptor = Object.getOwnPropertyDescriptor(prototype, "onmessage");
+    if (onMessageDescriptor?.get && onMessageDescriptor?.set && onMessageDescriptor.configurable) {
+      Object.defineProperty(prototype, "onmessage", {
+        configurable: true,
+        enumerable: onMessageDescriptor.enumerable,
+        get() {
+          return onMessageListeners.get(this)?.listener
+            ?? onMessageDescriptor.get.call(this);
+        },
+        set(listener) {
+          if (listener == null) {
+            onMessageListeners.delete(this);
+            return onMessageDescriptor.set.call(this, listener);
+          }
+          const wrapped = wrapPortMessageListener(this, listener);
+          onMessageListeners.set(this, { listener, wrapped });
+          return onMessageDescriptor.set.call(this, wrapped);
+        },
+      });
+    }
+    const status = globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_STATUS__ || {};
+    status.messagePortPatched = true;
+    globalThis.__CHIMERA_CODEX_MODEL_UNLOCK_STATUS__ = status;
+  }
+
   if (typeof JSON?.parse === "function") {
     const originalJsonParse = JSON.parse;
     JSON.parse = function chimeraCodexModelUnlockJsonParse(...args) {

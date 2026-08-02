@@ -1376,10 +1376,17 @@ function ProviderFormFull({
       localCodexApiFormat === "auto"
     ) {
       try {
+        const probeModel =
+          codexModel.trim() ||
+          codexCatalogModels
+            .find((entry) => entry.model.trim())
+            ?.model.trim() ||
+          undefined;
         const detected = await detectCodexApiFormat(
           codexBaseUrl,
           codexApiKey,
           localIsFullUrl,
+          probeModel,
           customUserAgent,
         );
         resolvedCodexApiFormat = detected.apiFormat;

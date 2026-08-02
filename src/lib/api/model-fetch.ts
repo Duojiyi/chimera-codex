@@ -35,20 +35,23 @@ export interface DetectedCodexApiFormat {
 }
 
 /**
- * Detect the upstream capability with non-billable invalid requests. A result
- * is returned only when the backend can identify a real protocol endpoint;
- * callers must keep the manual selector available for inconclusive gateways.
+ * Detect the upstream capability with a real model name and a deliberately
+ * malformed, non-generating request. A result is returned only when the backend
+ * can identify a real protocol endpoint; callers must keep the manual selector
+ * available for inconclusive gateways.
  */
 export async function detectCodexApiFormat(
   baseUrl: string,
   apiKey: string,
   isFullUrl?: boolean,
+  model?: string,
   customUserAgent?: string,
 ): Promise<DetectedCodexApiFormat> {
   return invoke("detect_codex_api_format", {
     baseUrl,
     apiKey,
     isFullUrl,
+    model,
     customUserAgent,
   });
 }
