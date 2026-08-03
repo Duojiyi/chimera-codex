@@ -75,6 +75,12 @@ export const grokApiBackendFromApiFormat = (format: CodexApiFormat): string => {
   return "responses";
 };
 
+const grokApiFormatFromApiBackend = (backend: string): CodexApiFormat => {
+  if (backend === "chat_completions") return "openai_chat";
+  if (backend === "messages") return "anthropic";
+  return "openai_responses";
+};
+
 export function GrokBuildProviderForm({
   providerId,
   submitLabel,
@@ -118,9 +124,15 @@ export function GrokBuildProviderForm({
   const [rawConfig, setRawConfig] = useState(
     initialConfigText ?? buildGrokBuildConfig(initialConfig),
   );
-  const [apiFormat, setApiFormat] = useState<CodexApiFormatSelection>(
-    (initialData?.meta?.apiFormat as CodexApiFormat | undefined) ?? "auto",
-  );
+  const [apiFormat, setApiFormat] = useState<CodexApiFormatSelection>(() => {
+    const savedFormat = initialData?.meta?.apiFormat as
+      | CodexApiFormat
+      | undefined;
+    if (savedFormat) return savedFormat;
+    return initialData
+      ? grokApiFormatFromApiBackend(initialConfig.apiBackend)
+      : "auto";
+  });
   const [anthropicAuthField, setAnthropicAuthField] =
     useState<ClaudeApiKeyField>(
       initialData?.meta?.apiKeyField ?? "ANTHROPIC_AUTH_TOKEN",

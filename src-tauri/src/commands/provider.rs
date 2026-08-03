@@ -645,6 +645,7 @@ fn compensate_failed_direct_provider_add(
     (!errors.is_empty()).then(|| errors.join("；"))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn compensate_failed_provider_add(
     state: &AppState,
     app_type: &AppType,

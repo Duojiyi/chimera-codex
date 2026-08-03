@@ -1,11 +1,19 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { parse as parseToml } from "smol-toml";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GrokBuildProviderForm,
   grokApiBackendFromApiFormat,
 } from "@/components/providers/forms/GrokBuildProviderForm";
+
+const modelFetchApiMock = vi.hoisted(() => ({
+  detectCodexApiFormat: vi.fn(),
+}));
+
+vi.mock("@/lib/api/model-fetch", () => ({
+  detectCodexApiFormat: modelFetchApiMock.detectCodexApiFormat,
+}));
 
 vi.mock("@/components/JsonEditor", () => ({
   default: ({
@@ -24,6 +32,12 @@ vi.mock("@/components/JsonEditor", () => ({
 }));
 
 describe("GrokBuildProviderForm", () => {
+  beforeEach(() => {
+    modelFetchApiMock.detectCodexApiFormat.mockReset();
+    modelFetchApiMock.detectCodexApiFormat.mockResolvedValue({
+      apiFormat: "openai_responses",
+    });
+  });
   it("offers curated Grok Build presets and applies one", async () => {
     const user = userEvent.setup();
     const { container } = render(
@@ -75,7 +89,7 @@ describe("GrokBuildProviderForm", () => {
     });
     await user.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(onSubmit).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     const submitted = onSubmit.mock.calls[0][0];
     expect(submitted.icon).toBe("");
     const settings = JSON.parse(submitted.settingsConfig);
@@ -187,7 +201,7 @@ context_window = 250000
 
     await user.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(onSubmit).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit.mock.calls[0][0].meta.custom_endpoints).toBeUndefined();
   });
 });

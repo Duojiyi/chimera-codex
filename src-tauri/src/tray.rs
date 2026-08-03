@@ -421,7 +421,6 @@ pub fn handle_profile_tray_event(app: &tauri::AppHandle, event_id: &str) -> bool
             return;
         };
         let state = app_state.inner().clone();
-        drop(app_state);
 
         match crate::services::profile::ProfileService::apply(&state, &profile_id, scope).await {
             Ok((warnings, should_stop_proxy)) => {
