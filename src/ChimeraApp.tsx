@@ -1812,7 +1812,7 @@ function NewRuntimeView({
   );
 }
 
-function NewProvidersView({
+export function NewProvidersView({
   providers,
   currentId,
   currentSource,
