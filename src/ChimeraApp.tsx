@@ -1080,6 +1080,7 @@ export default function ChimeraApp() {
                   providerDraft(null, providers.length ? "新线路" : "默认线路"),
                 );
               }}
+              onNavigate={setView}
             />
           )}
           {view === "runtime" && (
@@ -1811,7 +1812,7 @@ function NewRuntimeView({
   );
 }
 
-function NewProvidersView({
+export function NewProvidersView({
   providers,
   currentId,
   currentSource,
@@ -1824,6 +1825,7 @@ function NewProvidersView({
   onSwitch,
   onEdit,
   onAdd,
+  onNavigate,
 }: {
   providers: Provider[];
   currentId: string;
@@ -1837,7 +1839,9 @@ function NewProvidersView({
   onSwitch: (id: string) => Promise<void>;
   onEdit: (provider: Provider) => void;
   onAdd: () => void;
+  onNavigate?: (view: View) => void;
 }) {
+  const { hasUpdate, updateInfo, isDismissed, dismissUpdate } = useUpdate();
   const [managerOpen, setManagerOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [switchingId, setSwitchingId] = useState<string | null>(null);
@@ -1968,6 +1972,30 @@ function NewProvidersView({
                 : "启动 Codex";
   return (
     <section className="route-gate-view route-gate-reference">
+      {hasUpdate && !isDismissed && updateInfo && (
+        <div className="route-update-banner" role="status" aria-live="polite">
+          <i aria-hidden="true" />
+          <div className="route-update-banner-copy">
+            <b>Chimera++ {updateInfo.availableVersion} 可用</b>
+            <small>已通过签名验证，更新后将自动重启。</small>
+          </div>
+          <div className="route-update-banner-actions">
+            <button type="button" onClick={dismissUpdate}>
+              稍后
+            </button>
+            <button
+              type="button"
+              className="primary"
+              onClick={() => {
+                dismissUpdate();
+                onNavigate?.("settings");
+              }}
+            >
+              立即更新
+            </button>
+          </div>
+        </div>
+      )}
       <div className="route-map" aria-label="当前 Codex 连接状态">
         <code className="route-stage-label">{globeStageLabel}</code>
         <div className="route-globe-stage">
