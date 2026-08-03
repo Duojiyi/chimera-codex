@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import JsonEditor from "@/components/JsonEditor";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { providerSchema, type ProviderFormData } from "@/lib/schemas/provider";
+import { detectCodexApiFormat } from "@/lib/api/model-fetch";
 import {
   buildLocalProxyRequestOverrides,
   formatRequestOverrideObject,
@@ -23,6 +24,7 @@ import {
 import type {
   ClaudeApiKeyField,
   CodexApiFormat,
+  CodexApiFormatSelection,
   CodexChatReasoning,
   PromptCacheRoutingMode,
   ProviderCategory,
@@ -73,6 +75,12 @@ export const grokApiBackendFromApiFormat = (format: CodexApiFormat): string => {
   return "responses";
 };
 
+const grokApiFormatFromApiBackend = (backend: string): CodexApiFormat => {
+  if (backend === "chat_completions") return "openai_chat";
+  if (backend === "messages") return "anthropic";
+  return "openai_responses";
+};
+
 export function GrokBuildProviderForm({
   providerId,
   submitLabel,
@@ -116,10 +124,14 @@ export function GrokBuildProviderForm({
   const [rawConfig, setRawConfig] = useState(
     initialConfigText ?? buildGrokBuildConfig(initialConfig),
   );
-  const [apiFormat, setApiFormat] = useState<CodexApiFormat>(
-    (initialData?.meta?.apiFormat as CodexApiFormat | undefined) ??
-      "openai_responses",
-  );
+  const [apiFormat, setApiFormat] = useState<CodexApiFormatSelection>(() => {
+    const savedFormat = initialData?.meta?.apiFormat as
+      CodexApiFormat | undefined;
+    if (savedFormat) return savedFormat;
+    return initialData
+      ? grokApiFormatFromApiBackend(initialConfig.apiBackend)
+      : "auto";
+  });
   const [anthropicAuthField, setAnthropicAuthField] =
     useState<ClaudeApiKeyField>(
       initialData?.meta?.apiKeyField ?? "ANTHROPIC_AUTH_TOKEN",
@@ -354,13 +366,57 @@ export function GrokBuildProviderForm({
       return;
     }
 
+    let resolvedApiFormat: CodexApiFormat =
+      apiFormat === "auto" ? "openai_responses" : apiFormat;
+    let resolvedAnthropicAuthField = anthropicAuthField;
+    let resolvedApiBackend = apiBackend;
+    if (apiFormat === "auto") {
+      try {
+        const detected = await detectCodexApiFormat(
+          baseUrl,
+          apiKey,
+          isFullUrl,
+          upstreamModel.trim() || profile.trim() || undefined,
+          customUserAgent,
+        );
+        resolvedApiFormat = detected.apiFormat;
+        resolvedApiBackend = grokApiBackendFromApiFormat(detected.apiFormat);
+        setApiFormat(detected.apiFormat);
+        setApiBackend(resolvedApiBackend);
+        if (detected.anthropicAuthField) {
+          resolvedAnthropicAuthField = detected.anthropicAuthField;
+          setAnthropicAuthField(detected.anthropicAuthField);
+        }
+        toast.success(
+          t("codexConfig.upstreamFormatDetected", {
+            defaultValue: "已自动识别上游协议：{{format}}",
+            format:
+              detected.apiFormat === "openai_responses"
+                ? "Responses"
+                : detected.apiFormat === "openai_chat"
+                  ? "Chat Completions"
+                  : "Anthropic Messages",
+          }),
+        );
+      } catch (error) {
+        console.warn("[GROKBUILD_API_FORMAT_AUTO_DETECT_FAILED]", error);
+        toast.error(
+          t("codexConfig.upstreamFormatDetectFailed", {
+            defaultValue:
+              "无法自动识别上游 API 协议。请确认端点和 API Key，或在高级设置中手动选择协议。",
+          }),
+        );
+        return;
+      }
+    }
+
     const finalConfig = updateGrokBuildConfig(rawConfig, {
       model: profile,
       upstreamModel,
       baseUrl,
       name,
       apiKey,
-      apiBackend,
+      apiBackend: resolvedApiBackend,
       contextWindow: parsedContextWindow,
     });
     const configError = validateGrokBuildConfig(finalConfig);
@@ -394,8 +450,8 @@ export function GrokBuildProviderForm({
     delete initialMeta.custom_endpoints;
     const meta: ProviderMeta = {
       ...initialMeta,
-      apiFormat,
-      apiKeyField: anthropicAuthField,
+      apiFormat: resolvedApiFormat,
+      apiKeyField: resolvedAnthropicAuthField,
       isFullUrl,
       endpointAutoSelect,
       isPartner,
@@ -539,12 +595,11 @@ export function GrokBuildProviderForm({
                 syncStructuredConfig({ upstreamModel: value });
               }}
               apiFormat={apiFormat}
+              allowAutoApiFormat
               onApiFormatChange={(value) => {
-                // `auto` is only rendered for Codex, which owns the safe
-                // capability probe. Grok Build always persists a concrete format.
+                setApiFormat(value);
                 if (value === "auto") return;
                 const backend = grokApiBackendFromApiFormat(value);
-                setApiFormat(value);
                 setApiBackend(backend);
                 syncStructuredConfig({ apiBackend: backend });
               }}

@@ -416,41 +416,24 @@ pub fn handle_profile_tray_event(app: &tauri::AppHandle, event_id: &str) -> bool
     log::info!("应用项目: {profile_id}（{scope_str} 组）");
     let app_handle = app.clone();
     let profile_id = profile_id.to_string();
-    tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn(async move {
         let Some(app_state) = app_handle.try_state::<AppState>() else {
             return;
         };
-        match crate::services::profile::ProfileService::apply(app_state.inner(), &profile_id, scope)
-        {
+        let state = app_state.inner().clone();
+
+        match crate::services::profile::ProfileService::apply(&state, &profile_id, scope).await {
             Ok((warnings, should_stop_proxy)) => {
                 for warning in &warnings {
                     log::warn!("[Profile] 应用项目 {profile_id} 警告: {warning}");
                 }
 
                 if should_stop_proxy {
-                    let app_handle2 = app_handle.clone();
-                    let proxy_service = app_state.proxy_service.clone();
-                    tauri::async_runtime::spawn(async move {
-                        if let Err(e) = proxy_service.stop().await {
-                            log::warn!("托盘切换项目后停止代理服务失败: {e}");
-                        }
-                        if let Some(state) = app_handle2.try_state::<AppState>() {
-                            crate::commands::emit_profile_apply_events(
-                                &app_handle2,
-                                state.inner(),
-                                &profile_id,
-                                scope,
-                            );
-                        }
-                    });
-                } else {
-                    crate::commands::emit_profile_apply_events(
-                        &app_handle,
-                        app_state.inner(),
-                        &profile_id,
-                        scope,
-                    );
+                    if let Err(e) = state.proxy_service.stop_if_no_takeover().await {
+                        log::warn!("托盘切换项目后停止代理服务失败: {e}");
+                    }
                 }
+                crate::commands::emit_profile_apply_events(&app_handle, &state, &profile_id, scope);
             }
             Err(e) => {
                 log::error!("应用项目 {profile_id} 失败: {e}");

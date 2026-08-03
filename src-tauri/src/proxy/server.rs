@@ -223,34 +223,53 @@ impl ProxyServer {
     }
 
     pub async fn stop(&self) -> Result<(), ProxyError> {
-        // 1. 发送关闭信号
-        if let Some(tx) = self.shutdown_tx.write().await.take() {
-            let _ = tx.send(());
-        } else {
-            return Err(ProxyError::NotRunning);
-        }
+        self.stop_with_timeout(std::time::Duration::from_secs(5))
+            .await
+    }
 
-        // 2. 等待服务器任务结束（带 5 秒超时保护）
-        if let Some(handle) = self.server_handle.write().await.take() {
-            match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
-                Ok(Ok(())) => {
-                    log::info!("[{}] 代理服务器已完全停止", log_srv::STOPPED);
-                    Ok(())
-                }
-                Ok(Err(e)) => {
-                    log::warn!("[{}] 代理服务器任务异常终止: {e}", log_srv::TASK_ERROR);
-                    Err(ProxyError::StopFailed(e.to_string()))
-                }
-                Err(_) => {
-                    log::warn!(
-                        "[{}] 代理服务器停止超时（5秒），强制继续",
-                        log_srv::STOP_TIMEOUT
-                    );
-                    Err(ProxyError::StopTimeout)
-                }
-            }
+    async fn stop_with_timeout(
+        &self,
+        timeout_duration: std::time::Duration,
+    ) -> Result<(), ProxyError> {
+        // 1. 发送关闭信号。若信号已经发出但任务仍在退出，后续 stop() 仍应
+        //    继续等待同一个 JoinHandle，而不是把服务误报为 NotRunning。
+        let shutdown_sent = if let Some(tx) = self.shutdown_tx.write().await.take() {
+            let _ = tx.send(());
+            true
         } else {
-            Ok(())
+            false
+        };
+
+        // 2. 等待服务器任务结束（带 5 秒超时保护）。必须借用 JoinHandle：
+        //    timeout 会取消“等待”，但不会取消服务器任务；如果直接 take 后按值
+        //    传入，超时会丢失唯一句柄，调用方会错误认为代理已经停止。
+        let mut handle_guard = self.server_handle.write().await;
+        let Some(handle) = handle_guard.as_mut() else {
+            return if shutdown_sent {
+                Ok(())
+            } else {
+                Err(ProxyError::NotRunning)
+            };
+        };
+
+        match tokio::time::timeout(timeout_duration, &mut *handle).await {
+            Ok(Ok(())) => {
+                handle_guard.take();
+                log::info!("[{}] 代理服务器已完全停止", log_srv::STOPPED);
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                handle_guard.take();
+                log::warn!("[{}] 代理服务器任务异常终止: {e}", log_srv::TASK_ERROR);
+                Err(ProxyError::StopFailed(e.to_string()))
+            }
+            Err(_) => {
+                log::warn!(
+                    "[{}] 代理服务器停止超时（5秒），保留任务句柄以继续追踪",
+                    log_srv::STOP_TIMEOUT
+                );
+                Err(ProxyError::StopTimeout)
+            }
         }
     }
 
@@ -401,5 +420,38 @@ impl ProxyServer {
             .provider_router
             .reset_provider_breaker(provider_id, app_type)
             .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn stop_timeout_retains_handle_and_later_stop_can_finish() {
+        let db = Arc::new(Database::memory().expect("init db"));
+        let server = ProxyServer::new(ProxyConfig::default(), db, None);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        *server.shutdown_tx.write().await = Some(shutdown_tx);
+        *server.server_handle.write().await = Some(tokio::spawn(async move {
+            let _ = shutdown_rx.await;
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        }));
+
+        let first = server
+            .stop_with_timeout(std::time::Duration::from_millis(1))
+            .await;
+        assert!(matches!(first, Err(ProxyError::StopTimeout)));
+        assert!(
+            server.server_handle.read().await.is_some(),
+            "timeout must retain the task handle"
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        server
+            .stop_with_timeout(std::time::Duration::from_millis(50))
+            .await
+            .expect("second stop should reap the same task");
+        assert!(server.server_handle.read().await.is_none());
     }
 }

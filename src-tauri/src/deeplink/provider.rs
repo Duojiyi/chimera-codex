@@ -7,6 +7,7 @@ use super::DeepLinkImportRequest;
 use crate::error::AppError;
 use crate::provider::{ClaudeDesktopMode, Provider, ProviderMeta, UsageScript};
 use crate::services::ProviderService;
+use crate::settings::CustomEndpoint;
 use crate::store::AppState;
 use crate::AppType;
 use serde_json::json;
@@ -20,7 +21,7 @@ use std::str::FromStr;
 /// 3. Converts it to a Provider structure
 /// 4. Delegates to ProviderService for actual import
 /// 5. Optionally sets as current provider if enabled=true
-pub fn import_provider_from_deeplink(
+pub async fn import_provider_from_deeplink(
     state: &AppState,
     request: DeepLinkImportRequest,
 ) -> Result<String, AppError> {
@@ -95,8 +96,28 @@ pub fn import_provider_from_deeplink(
     let app_type = AppType::from_str(&app_str)
         .map_err(|_| AppError::InvalidInput(format!("Invalid app type: {app_str}")))?;
 
-    // Build provider configuration based on app type
+    // Build provider configuration based on app type.
     let mut provider = build_provider_from_request(&app_type, &merged_request)?;
+    let enabled = merged_request.enabled.unwrap_or(false);
+
+    // An enabled Codex-family deep link must persist the resolved upstream
+    // protocol before the provider is added. Otherwise the generated Codex
+    // config says Responses for every endpoint and the automatic switch path
+    // cannot know that Chat Completions/Anthropic translation is required.
+    if matches!(app_type, AppType::Codex | AppType::GrokBuild) {
+        let detected = crate::services::model_fetch::detect_codex_api_format(
+            primary_endpoint,
+            api_key,
+            false,
+            merged_request.model.as_deref(),
+            None,
+        )
+        .await
+        .map_err(|e| AppError::Message(format!("自动识别上游 API 协议失败: {e}")))?;
+        let meta = provider.meta.get_or_insert_with(ProviderMeta::default);
+        meta.api_format = Some(detected.api_format);
+        meta.api_key_field = detected.anthropic_auth_field;
+    }
 
     // Generate a unique ID for the provider using timestamp + sanitized name
     let timestamp = chrono::Utc::now().timestamp_millis();
@@ -109,31 +130,44 @@ pub fn import_provider_from_deeplink(
 
     let provider_id = provider.id.clone();
 
-    // Use ProviderService to add the provider
-    ProviderService::add(state, app_type.clone(), provider, true)?;
-
-    // Add extra endpoints as custom endpoints (skip first one as it's the primary)
+    // Persist alternate endpoints as part of the provider row itself. This keeps
+    // enabled imports inside one Profile transaction instead of mutating the
+    // staged provider after activation has released profile_apply_lock.
+    let endpoint_added_at = chrono::Utc::now().timestamp_millis();
+    let meta = provider.meta.get_or_insert_with(ProviderMeta::default);
     for ep in all_endpoints.iter().skip(1) {
         let normalized = ep.trim().trim_end_matches('/').to_string();
         if !normalized.is_empty() {
-            if let Err(e) = ProviderService::add_custom_endpoint(
-                state,
-                app_type.clone(),
-                &provider_id,
+            meta.custom_endpoints.insert(
                 normalized.clone(),
-            ) {
-                log::warn!(
-                    "Failed to add custom endpoint '{}': {e}",
-                    crate::url_for_log(&normalized)
-                );
-            }
+                CustomEndpoint {
+                    url: normalized,
+                    added_at: endpoint_added_at,
+                    last_used: None,
+                },
+            );
         }
     }
 
-    // If enabled=true, set as current provider
-    if merged_request.enabled.unwrap_or(false) {
-        ProviderService::switch(state, app_type.clone(), &provider_id)?;
+    if enabled {
+        // Snapshotting, staging, activation and failure compensation for every
+        // app run under the shared profile_apply_lock. Codex-family apps also
+        // hold lifecycle/per-app locks and reconcile automatic routing.
+        crate::add_and_activate_provider_with_automatic_routing_state(
+            state.clone(),
+            app_type.clone(),
+            provider,
+            true,
+        )
+        .await
+        .map_err(AppError::Message)?;
         log::info!("Provider '{provider_id}' set as current for {app_type:?}");
+    } else {
+        // A disabled/default Deep Link is import-only, even in a fresh profile.
+        // ProviderService::add would auto-select the first provider and mutate
+        // Live, violating enabled=false and potentially activating before route
+        // reconciliation. Always stage it as inactive instead.
+        ProviderService::add_inactive(state, app_type.clone(), provider, true)?;
     }
 
     Ok(provider_id)
@@ -392,7 +426,7 @@ fn build_codex_settings(request: &DeepLinkImportRequest) -> serde_json::Value {
     };
 
     // Model name: use deeplink model or default
-    let model_name = request
+    let model_name_raw = request
         .model
         .as_deref()
         .unwrap_or("gpt-5-codex")
@@ -405,7 +439,7 @@ fn build_codex_settings(request: &DeepLinkImportRequest) -> serde_json::Value {
         .to_string();
 
     let provider_display_name = toml_edit::Value::from(provider_display_name.as_str()).to_string();
-    let model_name = toml_edit::Value::from(model_name.as_str()).to_string();
+    let model_name = toml_edit::Value::from(model_name_raw.as_str()).to_string();
     let endpoint = toml_edit::Value::from(endpoint.as_str()).to_string();
 
     // Build config.toml content
@@ -427,7 +461,10 @@ requires_openai_auth = false
         "auth": {
             "OPENAI_API_KEY": request.api_key,
         },
-        "config": config_toml
+        "config": config_toml,
+        "modelCatalog": {
+            "models": [{ "model": model_name_raw }]
+        }
     })
 }
 
@@ -916,6 +953,66 @@ fn extract_codex_base_url(toml_value: &toml::Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{http::StatusCode, response::IntoResponse, routing::post, Json, Router};
+    use serial_test::serial;
+    use std::env;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    struct TempHome {
+        _dir: TempDir,
+        original_home: Option<String>,
+        original_userprofile: Option<String>,
+        original_test_home: Option<String>,
+        #[cfg(windows)]
+        original_local_app_data: Option<String>,
+    }
+
+    impl TempHome {
+        fn new() -> Self {
+            let dir = TempDir::new().expect("create temp home");
+            let original_home = env::var("HOME").ok();
+            let original_userprofile = env::var("USERPROFILE").ok();
+            let original_test_home = env::var("CC_SWITCH_TEST_HOME").ok();
+            #[cfg(windows)]
+            let original_local_app_data = env::var("LOCALAPPDATA").ok();
+
+            env::set_var("HOME", dir.path());
+            env::set_var("USERPROFILE", dir.path());
+            env::set_var("CC_SWITCH_TEST_HOME", dir.path());
+            #[cfg(windows)]
+            env::set_var("LOCALAPPDATA", dir.path().join("AppData").join("Local"));
+
+            Self {
+                _dir: dir,
+                original_home,
+                original_userprofile,
+                original_test_home,
+                #[cfg(windows)]
+                original_local_app_data,
+            }
+        }
+    }
+
+    impl Drop for TempHome {
+        fn drop(&mut self) {
+            for (key, value) in [
+                ("HOME", &self.original_home),
+                ("USERPROFILE", &self.original_userprofile),
+                ("CC_SWITCH_TEST_HOME", &self.original_test_home),
+            ] {
+                match value {
+                    Some(value) => env::set_var(key, value),
+                    None => env::remove_var(key),
+                }
+            }
+            #[cfg(windows)]
+            match &self.original_local_app_data {
+                Some(value) => env::set_var("LOCALAPPDATA", value),
+                None => env::remove_var("LOCALAPPDATA"),
+            }
+        }
+    }
 
     fn hermes_request() -> DeepLinkImportRequest {
         DeepLinkImportRequest {
@@ -1024,6 +1121,577 @@ mod tests {
                 .get("requires_openai_auth")
                 .and_then(|value| value.as_bool()),
             Some(false)
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn first_unlogged_enabled_codex_chat_import_establishes_direct_baseline() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(crate::database::Database::memory().expect("create memory db"));
+        let proxy_listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("reserve proxy port");
+        let proxy_port = proxy_listener.local_addr().expect("proxy addr").port();
+        drop(proxy_listener);
+        db.update_proxy_config(crate::proxy::types::ProxyConfig {
+            listen_port: proxy_port,
+            ..Default::default()
+        })
+        .await
+        .expect("set proxy port");
+        let state = crate::store::AppState::new(db.clone());
+
+        async fn unsupported() -> impl IntoResponse {
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "not found"})),
+            )
+        }
+        async fn chat_validation() -> impl IntoResponse {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": {"message": "max_tokens must be an integer for chat/completions"}
+                })),
+            )
+        }
+        let probe_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind probe server");
+        let probe_addr = probe_listener.local_addr().expect("probe addr");
+        let probe_server = tokio::spawn(async move {
+            axum::serve(
+                probe_listener,
+                Router::new()
+                    .route("/v1/responses", post(unsupported))
+                    .route("/v1/chat/completions", post(chat_validation))
+                    .route("/v1/messages", post(unsupported)),
+            )
+            .await
+            .expect("serve probe routes");
+        });
+
+        let endpoint = format!("http://{probe_addr}/v1");
+        let request = DeepLinkImportRequest {
+            resource: "provider".to_string(),
+            app: Some("codex".to_string()),
+            name: Some("Fresh Chat Import".to_string()),
+            enabled: Some(true),
+            endpoint: Some(endpoint.clone()),
+            api_key: Some("test-only-key".to_string()),
+            model: Some("claude-test".to_string()),
+            ..Default::default()
+        };
+
+        let provider_id = import_provider_from_deeplink(&state, request)
+            .await
+            .expect("first enabled Codex import");
+        assert_eq!(
+            db.get_current_provider("codex")
+                .expect("db current")
+                .as_deref(),
+            Some(provider_id.as_str())
+        );
+        assert!(
+            db.get_proxy_config_for_app("codex")
+                .await
+                .expect("routing")
+                .enabled
+        );
+        assert!(state.proxy_service.is_running().await);
+        let takeover =
+            std::fs::read_to_string(crate::get_codex_config_path()).expect("read takeover config");
+        assert!(takeover.contains("127.0.0.1"));
+
+        state
+            .proxy_service
+            .set_takeover_for_app("codex", false)
+            .await
+            .expect("disable takeover");
+        let direct =
+            std::fs::read_to_string(crate::get_codex_config_path()).expect("read direct config");
+        assert!(direct.contains(&endpoint));
+        assert!(!direct.contains(&format!("127.0.0.1:{proxy_port}")));
+        probe_server.abort();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn disabled_codex_deeplink_stays_inactive_and_persists_detected_protocol() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(crate::database::Database::memory().expect("create memory db"));
+        let state = crate::store::AppState::new(db.clone());
+
+        async fn unsupported() -> impl IntoResponse {
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "not found"})),
+            )
+        }
+        async fn chat_validation() -> impl IntoResponse {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": {"message": "max_tokens must be an integer for chat/completions"}
+                })),
+            )
+        }
+        let probe_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind probe server");
+        let probe_addr = probe_listener.local_addr().expect("probe addr");
+        let probe_server = tokio::spawn(async move {
+            axum::serve(
+                probe_listener,
+                Router::new()
+                    .route("/v1/responses", post(unsupported))
+                    .route("/v1/chat/completions", post(chat_validation))
+                    .route("/v1/messages", post(unsupported)),
+            )
+            .await
+            .expect("serve probe routes");
+        });
+
+        let endpoint = format!("http://{probe_addr}/v1");
+        let request = DeepLinkImportRequest {
+            resource: "provider".to_string(),
+            app: Some("codex".to_string()),
+            name: Some("Disabled Chat Import".to_string()),
+            enabled: Some(false),
+            endpoint: Some(endpoint),
+            api_key: Some("test-only-key".to_string()),
+            model: Some("claude-disabled".to_string()),
+            ..Default::default()
+        };
+        let provider_id = import_provider_from_deeplink(&state, request)
+            .await
+            .expect("disabled import must be staged");
+
+        let stored = db
+            .get_provider_by_id(&provider_id, "codex")
+            .expect("read imported provider")
+            .expect("provider exists");
+        assert_eq!(
+            stored
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.api_format.as_deref()),
+            Some("openai_chat")
+        );
+        assert_eq!(db.get_current_provider("codex").expect("db current"), None);
+        assert_eq!(crate::settings::get_current_provider(&AppType::Codex), None);
+        assert!(!crate::get_codex_auth_path().exists());
+        assert!(!crate::get_codex_config_path().exists());
+        assert!(!crate::codex_config::get_codex_model_catalog_path().exists());
+        assert!(
+            !db.get_proxy_config_for_app("codex")
+                .await
+                .expect("routing")
+                .enabled
+        );
+        assert!(!state.proxy_service.is_running().await);
+        assert!(db.get_live_backup("codex").await.expect("backup").is_none());
+        probe_server.abort();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn enabled_codex_import_activates_even_when_a_current_provider_exists() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(crate::database::Database::memory().expect("create memory db"));
+        let proxy_listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("reserve proxy port");
+        let proxy_port = proxy_listener.local_addr().expect("proxy addr").port();
+        drop(proxy_listener);
+        db.update_proxy_config(crate::proxy::types::ProxyConfig {
+            listen_port: proxy_port,
+            ..Default::default()
+        })
+        .await
+        .expect("set proxy port");
+        let state = crate::store::AppState::new(db.clone());
+
+        let mut existing = Provider::with_id(
+            "existing".to_string(),
+            "Existing".to_string(),
+            serde_json::json!({
+                "auth": {"OPENAI_API_KEY": "existing-test-key"},
+                "config": "model_provider = \"existing\"\nmodel = \"gpt-existing\"\n[model_providers.existing]\nname = \"Existing\"\nbase_url = \"https://existing.example.invalid/v1\"\nwire_api = \"responses\"\n",
+                "modelCatalog": {"models": [{"model": "gpt-existing", "displayName": "Existing"}]}
+            }),
+            None,
+        );
+        existing.meta = Some(ProviderMeta {
+            api_format: Some("openai_responses".to_string()),
+            ..ProviderMeta::default()
+        });
+        crate::add_provider_with_automatic_routing_state(
+            state.clone(),
+            AppType::Codex,
+            existing,
+            true,
+        )
+        .await
+        .expect("activate existing provider");
+
+        async fn unsupported() -> impl IntoResponse {
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "not found"})),
+            )
+        }
+        async fn chat_validation() -> impl IntoResponse {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": {"message": "max_tokens must be an integer for chat/completions"}
+                })),
+            )
+        }
+        let probe_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind probe server");
+        let probe_addr = probe_listener.local_addr().expect("probe addr");
+        let probe_server = tokio::spawn(async move {
+            axum::serve(
+                probe_listener,
+                Router::new()
+                    .route("/v1/responses", post(unsupported))
+                    .route("/v1/chat/completions", post(chat_validation))
+                    .route("/v1/messages", post(unsupported)),
+            )
+            .await
+            .expect("serve probe routes");
+        });
+
+        let endpoint = format!("http://{probe_addr}/v1");
+        let request = DeepLinkImportRequest {
+            resource: "provider".to_string(),
+            app: Some("codex".to_string()),
+            name: Some("Enabled Chat Import".to_string()),
+            enabled: Some(true),
+            endpoint: Some(endpoint.clone()),
+            api_key: Some("import-test-key".to_string()),
+            model: Some("claude-imported".to_string()),
+            ..Default::default()
+        };
+        let imported_id = import_provider_from_deeplink(&state, request)
+            .await
+            .expect("enabled import must activate");
+
+        assert_eq!(
+            db.get_current_provider("codex")
+                .expect("db current")
+                .as_deref(),
+            Some(imported_id.as_str())
+        );
+        assert_eq!(
+            crate::settings::get_current_provider(&AppType::Codex).as_deref(),
+            Some(imported_id.as_str())
+        );
+        assert!(
+            db.get_proxy_config_for_app("codex")
+                .await
+                .expect("routing")
+                .enabled
+        );
+        let live = std::fs::read_to_string(crate::get_codex_config_path())
+            .expect("read imported takeover");
+        assert!(live.contains(&format!("127.0.0.1:{proxy_port}")));
+
+        state
+            .proxy_service
+            .set_takeover_for_app("codex", false)
+            .await
+            .expect("disable takeover");
+        let restored = std::fs::read_to_string(crate::get_codex_config_path())
+            .expect("read imported direct config");
+        assert!(restored.contains(&endpoint));
+        assert!(!restored.contains("https://existing.example.invalid/v1"));
+        assert!(!restored.contains(&format!("127.0.0.1:{proxy_port}")));
+        probe_server.abort();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn enabled_non_codex_import_waits_for_profile_and_rolls_back_to_latest_live() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(crate::database::Database::memory().expect("create memory db"));
+        let state = crate::store::AppState::new(db.clone());
+
+        let provider_a = Provider::with_id(
+            "claude-a".to_string(),
+            "Claude A".to_string(),
+            json!({
+                "env": {
+                    "ANTHROPIC_AUTH_TOKEN": "test-a",
+                    "ANTHROPIC_BASE_URL": "https://a.example.invalid"
+                }
+            }),
+            None,
+        );
+        let provider_b = Provider::with_id(
+            "claude-b".to_string(),
+            "Claude B".to_string(),
+            json!({
+                "env": {
+                    "ANTHROPIC_AUTH_TOKEN": "test-b",
+                    "ANTHROPIC_BASE_URL": "https://b.example.invalid"
+                }
+            }),
+            None,
+        );
+        db.save_provider("claude", &provider_a)
+            .expect("save provider A");
+        db.save_provider("claude", &provider_b)
+            .expect("save provider B");
+        ProviderService::switch(&state, AppType::Claude, "claude-a").expect("activate provider A");
+
+        // Model the complete Profile Apply transaction. The enabled Deep Link
+        // may parse/build its provider concurrently, but it must not snapshot or
+        // stage anything until the Profile transaction has committed provider B.
+        let profile_lock = state.profile_apply_lock.clone();
+        let profile_guard = profile_lock.lock().await;
+        let import_state = state.clone();
+        let import_task = tokio::spawn(async move {
+            import_provider_from_deeplink(
+                &import_state,
+                DeepLinkImportRequest {
+                    resource: "provider".to_string(),
+                    app: Some("claude".to_string()),
+                    name: Some("Transactional Import".to_string()),
+                    enabled: Some(true),
+                    homepage: Some("https://example.com".to_string()),
+                    endpoint: Some("https://c.example.invalid".to_string()),
+                    api_key: Some("test-c".to_string()),
+                    model: Some("claude-test".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            db.get_all_providers("claude")
+                .expect("read providers while profile lock held")
+                .len(),
+            2,
+            "enabled import must not stage outside profile_apply_lock"
+        );
+
+        crate::switch_provider_with_automatic_routing_profile_lock_held_state(
+            state.clone(),
+            AppType::Claude,
+            "claude-b".to_string(),
+        )
+        .await
+        .expect("commit Profile provider B");
+
+        {
+            let conn = db.conn.lock().expect("lock database");
+            conn.execute_batch(
+                "CREATE TRIGGER reject_imported_claude_current_update
+                 BEFORE UPDATE OF is_current ON providers
+                 WHEN NEW.app_type = 'claude'
+                   AND NEW.id LIKE 'transactionalimport-%'
+                   AND NEW.is_current = 1
+                 BEGIN
+                   SELECT RAISE(ABORT, 'forced concurrent enabled-import failure');
+                 END;",
+            )
+            .expect("install imported-provider failure trigger");
+        }
+        drop(profile_guard);
+
+        let error = import_task
+            .await
+            .expect("join enabled import")
+            .expect_err("forced provider switch failure must abort import");
+        assert!(error
+            .to_string()
+            .contains("forced concurrent enabled-import failure"));
+
+        let providers = db
+            .get_all_providers("claude")
+            .expect("read providers after rollback");
+        assert_eq!(providers.len(), 2);
+        assert!(!providers
+            .keys()
+            .any(|id| id.starts_with("transactionalimport-")));
+        assert_eq!(
+            db.get_current_provider("claude")
+                .expect("read db current after rollback")
+                .as_deref(),
+            Some("claude-b")
+        );
+        assert_eq!(
+            crate::settings::get_current_provider(&AppType::Claude).as_deref(),
+            Some("claude-b")
+        );
+        let live = std::fs::read_to_string(crate::config::get_claude_settings_path())
+            .expect("read Claude Live after rollback");
+        assert!(live.contains("https://b.example.invalid"));
+        assert!(!live.contains("https://a.example.invalid"));
+        assert!(!live.contains("https://c.example.invalid"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn enabled_claude_desktop_import_failure_restores_all_live_files() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+        if crate::claude_desktop_config::capture_live_snapshot()
+            .expect("probe Claude Desktop snapshot support")
+            .is_none()
+        {
+            return;
+        }
+
+        let db = Arc::new(crate::database::Database::memory().expect("create memory db"));
+        let state = crate::store::AppState::new(db.clone());
+        let current_id = import_provider_from_deeplink(
+            &state,
+            DeepLinkImportRequest {
+                resource: "provider".to_string(),
+                app: Some("claude-desktop".to_string()),
+                name: Some("Desktop A".to_string()),
+                enabled: Some(true),
+                endpoint: Some("https://desktop-a.example.invalid/v1".to_string()),
+                api_key: Some("desktop-a-test-key".to_string()),
+                model: Some("claude-a".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("activate initial Claude Desktop provider");
+
+        let before = crate::claude_desktop_config::capture_live_snapshot()
+            .expect("capture initial Claude Desktop Live")
+            .expect("supported platform snapshot");
+        assert!(before.has_live_data());
+
+        {
+            let conn = db.conn.lock().expect("lock database");
+            conn.execute_batch(
+                "CREATE TRIGGER reject_imported_claude_desktop_current_update
+                 BEFORE UPDATE OF is_current ON providers
+                 WHEN NEW.app_type = 'claude-desktop'
+                   AND NEW.id LIKE 'desktopc-%'
+                   AND NEW.is_current = 1
+                 BEGIN
+                   SELECT RAISE(ABORT, 'forced Claude Desktop enabled-import failure');
+                 END;",
+            )
+            .expect("install Claude Desktop failure trigger");
+        }
+
+        let error = import_provider_from_deeplink(
+            &state,
+            DeepLinkImportRequest {
+                resource: "provider".to_string(),
+                app: Some("claude-desktop".to_string()),
+                name: Some("Desktop C".to_string()),
+                enabled: Some(true),
+                endpoint: Some("https://desktop-c.example.invalid/v1".to_string()),
+                api_key: Some("desktop-c-test-key".to_string()),
+                model: Some("claude-c".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("forced current commit failure must abort import");
+        assert!(error
+            .to_string()
+            .contains("forced Claude Desktop enabled-import failure"));
+
+        let providers = db
+            .get_all_providers("claude-desktop")
+            .expect("read Claude Desktop providers after rollback");
+        assert_eq!(providers.len(), 1);
+        assert!(providers.contains_key(&current_id));
+        assert!(!providers.keys().any(|id| id.starts_with("desktopc-")));
+        assert_eq!(
+            db.get_current_provider("claude-desktop")
+                .expect("read DB current after rollback")
+                .as_deref(),
+            Some(current_id.as_str())
+        );
+        assert_eq!(
+            crate::settings::get_current_provider(&AppType::ClaudeDesktop).as_deref(),
+            Some(current_id.as_str())
+        );
+
+        let after = crate::claude_desktop_config::capture_live_snapshot()
+            .expect("capture rolled-back Claude Desktop Live")
+            .expect("supported platform snapshot");
+        assert_eq!(
+            after, before,
+            "deployment configs, generated profile, and metadata must all roll back"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn enabled_import_removes_staged_provider_when_switch_fails() {
+        let _home = TempHome::new();
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(crate::database::Database::memory().expect("create memory db"));
+        let state = crate::store::AppState::new(db.clone());
+
+        {
+            let conn = db.conn.lock().expect("lock database");
+            conn.execute_batch(
+                "CREATE TRIGGER reject_claude_current_update
+                 BEFORE UPDATE OF is_current ON providers
+                 WHEN NEW.app_type = 'claude'
+                 BEGIN
+                   SELECT RAISE(ABORT, 'forced enabled-import switch failure');
+                 END;",
+            )
+            .expect("install failure trigger");
+        }
+
+        let request = DeepLinkImportRequest {
+            resource: "provider".to_string(),
+            app: Some("claude".to_string()),
+            name: Some("Transactional Import".to_string()),
+            enabled: Some(true),
+            homepage: Some("https://example.com".to_string()),
+            endpoint: Some("https://api.example.com/v1".to_string()),
+            api_key: Some("test-key".to_string()),
+            model: Some("claude-test".to_string()),
+            ..Default::default()
+        };
+
+        let error = import_provider_from_deeplink(&state, request)
+            .await
+            .expect_err("forced provider switch failure must abort import");
+        assert!(error
+            .to_string()
+            .contains("forced enabled-import switch failure"));
+        assert!(
+            db.get_all_providers("claude")
+                .expect("read providers after rollback")
+                .is_empty(),
+            "failed enabled import must not leave the staged provider"
+        );
+        assert_eq!(
+            db.get_current_provider("claude")
+                .expect("read db current after rollback"),
+            None
+        );
+        assert_eq!(
+            crate::settings::get_current_provider(&AppType::Claude),
+            None
+        );
+        assert!(
+            !crate::config::get_claude_settings_path().exists(),
+            "failed enabled import must restore the missing Live config"
         );
     }
 

@@ -33,7 +33,7 @@ pub(crate) use live::sanitize_claude_settings_for_live;
 pub(crate) use live::{
     build_effective_settings_with_common_config, normalize_provider_common_config_for_storage,
     provider_exists_in_live_config, strip_common_config_from_live_settings,
-    sync_current_provider_for_app_to_live, write_live_with_common_config,
+    sync_current_provider_for_app_to_live, write_live_with_common_config, LiveSnapshot,
 };
 
 // Internal re-exports
@@ -2088,6 +2088,30 @@ impl ProviderService {
             .map(|opt| opt.unwrap_or_default())
     }
 
+    /// Persist a provider without selecting it or mutating Live config.
+    ///
+    /// Used by multi-step transactions (for example enabled deep-link imports)
+    /// that must not expose a provider until routing and Live reconciliation can
+    /// commit successfully. The caller is responsible for deleting the staged
+    /// row if the later transaction fails.
+    pub(crate) fn add_inactive(
+        state: &AppState,
+        app_type: AppType,
+        provider: Provider,
+        intended_live_enabled: bool,
+    ) -> Result<bool, AppError> {
+        let mut provider = provider;
+        Self::normalize_provider_if_claude(&app_type, &mut provider);
+        Self::validate_provider_settings(&app_type, &provider)?;
+        normalize_provider_common_config_for_storage(state.db.as_ref(), &app_type, &mut provider)?;
+        Self::normalize_usage_script_credential_overrides(&app_type, &mut provider);
+        if app_type.is_additive_mode() {
+            Self::set_provider_live_config_managed(&mut provider, intended_live_enabled);
+        }
+        state.db.save_provider(app_type.as_str(), &provider)?;
+        Ok(true)
+    }
+
     /// Add a new provider
     pub fn add(
         state: &AppState,
@@ -2138,12 +2162,34 @@ impl ProviderService {
         Ok(true)
     }
 
-    /// Update a provider
+    /// Update a provider.
     pub fn update(
         state: &AppState,
         app_type: AppType,
         original_id: Option<&str>,
         provider: Provider,
+    ) -> Result<bool, AppError> {
+        Self::update_internal(state, app_type, original_id, provider, false)
+    }
+
+    /// Update while the caller already owns the per-app provider/proxy switch
+    /// lock. This avoids recursively acquiring that same lock when a current,
+    /// takeover-owned provider refreshes its direct Live backup.
+    pub(crate) fn update_with_app_lock_held(
+        state: &AppState,
+        app_type: AppType,
+        original_id: Option<&str>,
+        provider: Provider,
+    ) -> Result<bool, AppError> {
+        Self::update_internal(state, app_type, original_id, provider, true)
+    }
+
+    fn update_internal(
+        state: &AppState,
+        app_type: AppType,
+        original_id: Option<&str>,
+        provider: Provider,
+        app_lock_held: bool,
     ) -> Result<bool, AppError> {
         let mut provider = provider;
         let original_id = original_id.unwrap_or(provider.id.as_str()).to_string();
@@ -2316,12 +2362,22 @@ impl ProviderService {
                 if matches!(app_type, AppType::ClaudeDesktop) {
                     write_live_with_common_config(state.db.as_ref(), &app_type, &provider)?;
                 } else {
-                    futures::executor::block_on(
-                        state
-                            .proxy_service
-                            .update_live_backup_from_provider(app_type.as_str(), &provider),
-                    )
-                    .map_err(|e| AppError::Message(format!("更新 Live 备份失败: {e}")))?;
+                    let backup_update = if app_lock_held {
+                        futures::executor::block_on(
+                            state.proxy_service.update_live_backup_from_provider_inner(
+                                app_type.as_str(),
+                                &provider,
+                            ),
+                        )
+                    } else {
+                        futures::executor::block_on(
+                            state
+                                .proxy_service
+                                .update_live_backup_from_provider(app_type.as_str(), &provider),
+                        )
+                    };
+                    backup_update
+                        .map_err(|e| AppError::Message(format!("更新 Live 备份失败: {e}")))?;
                 }
 
                 if futures::executor::block_on(state.proxy_service.is_running()) {
@@ -2505,6 +2561,26 @@ impl ProviderService {
     ///    d. Write target provider config to live files
     ///    e. Sync MCP configuration
     pub fn switch(state: &AppState, app_type: AppType, id: &str) -> Result<SwitchResult, AppError> {
+        Self::switch_impl(state, app_type, id, true)
+    }
+
+    /// Switch while the caller already owns ProxyService's per-app switch lock.
+    /// Used by the automatic-routing command so route reconciliation and the
+    /// provider commit form one serialized transaction.
+    pub(crate) fn switch_with_app_lock_held(
+        state: &AppState,
+        app_type: AppType,
+        id: &str,
+    ) -> Result<SwitchResult, AppError> {
+        Self::switch_impl(state, app_type, id, false)
+    }
+
+    fn switch_impl(
+        state: &AppState,
+        app_type: AppType,
+        id: &str,
+        acquire_app_lock: bool,
+    ) -> Result<SwitchResult, AppError> {
         // Check if provider exists
         let providers = state.db.get_all_providers(app_type.as_str())?;
         let _provider = providers
@@ -2531,10 +2607,11 @@ impl ProviderService {
         // restore backup. Serialize them per app, then decide from the locked
         // current state so a just-started takeover cannot be overwritten by a
         // normal live write.
-        let _switch_guard = if matches!(
-            app_type,
-            AppType::Claude | AppType::Codex | AppType::Gemini | AppType::GrokBuild
-        ) {
+        let _switch_guard = if acquire_app_lock
+            && matches!(
+                app_type,
+                AppType::Claude | AppType::Codex | AppType::Gemini | AppType::GrokBuild
+            ) {
             Some(futures::executor::block_on(
                 state.proxy_service.lock_switch_for_app(app_type.as_str()),
             ))
@@ -2671,17 +2748,80 @@ impl ProviderService {
             }
         }
 
-        // Additive mode apps skip setting is_current (no such concept)
+        // Exclusive-mode switches are committed transactionally: capture the
+        // exact Live files, write the target Live first, and only then advance
+        // local/DB current-provider pointers. Any pointer failure restores Live
+        // and the previous logical selection so UI, DB and client config cannot
+        // split into different providers.
         if !app_type.is_additive_mode() {
-            // Update local settings (device-level, takes priority)
-            crate::settings::set_current_provider(&app_type, Some(id))?;
+            let previous_local = crate::settings::get_current_provider(&app_type);
+            let previous_db = state.db.get_current_provider(app_type.as_str())?;
+            let live_snapshot = LiveSnapshot::capture(&app_type)?;
 
-            // Update database is_current (as default for new devices)
-            state.db.set_current_provider(app_type.as_str(), id)?;
+            if let Err(error) =
+                write_live_with_common_config(state.db.as_ref(), &app_type, provider)
+            {
+                let rollback = live_snapshot
+                    .as_ref()
+                    .map(LiveSnapshot::restore)
+                    .transpose()
+                    .err();
+                return match rollback {
+                    Some(rollback_error) => Err(AppError::Message(format!(
+                        "写入目标 Live 配置失败: {error}；恢复原 Live 配置失败: {rollback_error}"
+                    ))),
+                    None => Err(error),
+                };
+            }
+
+            if let Err(error) = crate::settings::set_current_provider(&app_type, Some(id)) {
+                let rollback = live_snapshot
+                    .as_ref()
+                    .map(LiveSnapshot::restore)
+                    .transpose()
+                    .err();
+                return match rollback {
+                    Some(rollback_error) => Err(AppError::Message(format!(
+                        "更新本地当前供应商失败: {error}；恢复原 Live 配置失败: {rollback_error}"
+                    ))),
+                    None => Err(error),
+                };
+            }
+
+            if let Err(error) = state.db.set_current_provider(app_type.as_str(), id) {
+                let mut rollback_errors = Vec::new();
+                if let Err(rollback_error) =
+                    crate::settings::set_current_provider(&app_type, previous_local.as_deref())
+                {
+                    rollback_errors.push(format!("恢复本地当前供应商失败: {rollback_error}"));
+                }
+                if let Some(previous_db) = previous_db.as_deref() {
+                    if let Err(rollback_error) = state
+                        .db
+                        .set_current_provider(app_type.as_str(), previous_db)
+                    {
+                        rollback_errors.push(format!("恢复数据库当前供应商失败: {rollback_error}"));
+                    }
+                }
+                if let Some(snapshot) = live_snapshot.as_ref() {
+                    if let Err(rollback_error) = snapshot.restore() {
+                        rollback_errors.push(format!("恢复原 Live 配置失败: {rollback_error}"));
+                    }
+                }
+                return if rollback_errors.is_empty() {
+                    Err(error)
+                } else {
+                    Err(AppError::Message(format!(
+                        "更新当前供应商失败: {error}；回滚失败: {}",
+                        rollback_errors.join("；")
+                    )))
+                };
+            }
+        } else {
+            // Additive apps merge providers into a shared Live file and keep
+            // their existing specialized rollback path below.
+            write_live_with_common_config(state.db.as_ref(), &app_type, provider)?;
         }
-
-        // Sync to live (write_gemini_live handles security flag internally for Gemini)
-        write_live_with_common_config(state.db.as_ref(), &app_type, provider)?;
 
         // Hermes is additive, so "switching" doesn't overwrite a live config file
         // — we instead update the top-level `model:` section to point at this

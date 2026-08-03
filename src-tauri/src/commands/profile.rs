@@ -160,18 +160,19 @@ pub fn clear_current_profile(state: State<'_, AppState>, scope: String) -> Resul
 
 /// 应用项目快照（只作用于发起页所属分组内的应用）。
 ///
-/// 注意：必须保持同步命令（跑在 Tauri 线程池）——`ProviderService::switch`
-/// 内部使用 block_on 获取切换锁，放进 async 命令会在运行时线程上 panic。
+/// 供应商切换复用异步自动路由事务，因此命令本身也必须是 async。
 #[tauri::command]
-pub fn apply_profile(
+pub async fn apply_profile(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     id: String,
     scope: String,
 ) -> Result<Vec<String>, String> {
     let scope = ProfileScope::parse(&scope).map_err(|e| e.to_string())?;
-    let (warnings, should_stop_proxy) =
-        ProfileService::apply(&state, &id, scope).map_err(|e| e.to_string())?;
+    let state = state.inner().clone();
+    let (warnings, should_stop_proxy) = ProfileService::apply(&state, &id, scope)
+        .await
+        .map_err(|e| e.to_string())?;
 
     if should_stop_proxy {
         // sync 命令线程没有 Tokio runtime，无法直接 await stop()；
@@ -180,7 +181,7 @@ pub fn apply_profile(
         let profile_id = id.clone();
         let proxy_service = state.proxy_service.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(e) = proxy_service.stop().await {
+            if let Err(e) = proxy_service.stop_if_no_takeover().await {
                 log::warn!("切换项目后停止代理服务失败: {e}");
             }
             if let Some(app_state) = app_handle.try_state::<AppState>() {

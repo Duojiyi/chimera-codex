@@ -1369,6 +1369,7 @@ function ProviderFormFull({
 
     let resolvedCodexApiFormat: CodexApiFormat =
       localCodexApiFormat === "auto" ? "openai_responses" : localCodexApiFormat;
+    let resolvedCodexAnthropicAuthField = localCodexAnthropicAuthField;
     if (
       appId === "codex" &&
       category !== "official" &&
@@ -1392,6 +1393,7 @@ function ProviderFormFull({
         resolvedCodexApiFormat = detected.apiFormat;
         setLocalCodexApiFormat(detected.apiFormat);
         if (detected.anthropicAuthField) {
+          resolvedCodexAnthropicAuthField = detected.anthropicAuthField;
           setLocalCodexAnthropicAuthField(detected.anthropicAuthField);
         }
         toast.success(
@@ -1678,8 +1680,8 @@ function ProviderFormFull({
           : appId === "codex" &&
               category !== "official" &&
               resolvedCodexApiFormat === "anthropic" &&
-              localCodexAnthropicAuthField !== "ANTHROPIC_AUTH_TOKEN"
-            ? localCodexAnthropicAuthField
+              resolvedCodexAnthropicAuthField !== "ANTHROPIC_AUTH_TOKEN"
+            ? resolvedCodexAnthropicAuthField
             : undefined,
       // Off by default; persist true only for codex+anthropic when the user explicitly enables it
       impersonateClaudeCode:

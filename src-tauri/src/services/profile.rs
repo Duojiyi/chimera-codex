@@ -6,7 +6,7 @@
 //! （各在各的项目里），因此各组独立指向自己的当前项目、只拍/只应用组内
 //! 槽位，互不牵连；重命名/删除作用于共享实体本身。
 //! 应用（apply）时复用现有切换原语批量落地：
-//! - 供应商：`ProviderService::switch`（内建代理接管热切换与接管下禁切官方）
+//! - 供应商：统一自动路由切换（按目标协议自动开关 Codex/GrokBuild 本地接管）
 //! - MCP：`McpService::toggle_app`（改标志 + 单 server 物化）
 //! - Skills：`SkillService::toggle_app`（改标志 + 单 skill 物化）
 //! - Prompt：`PromptService::enable_prompt`（互斥激活 + 原子写 live）
@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::app_config::AppType;
 use crate::database::Profile;
 use crate::error::AppError;
-use crate::services::{McpService, PromptService, ProviderService, SkillService};
+use crate::services::{McpService, PromptService, SkillService};
 use crate::store::AppState;
 
 /// Profile 操作的应用分组：项目实体全应用共享，但快照/应用/当前指针按组进行。
@@ -327,11 +327,16 @@ impl ProfileService {
     /// 返回 `(warnings, should_stop_proxy)`：当当前分组内所有接管都被关闭、且
     /// 其它应用也没有接管时，建议调用者停止代理服务，以便 Claude Desktop 的
     /// "本地路由"总开关同步显示为关闭。
-    pub fn apply(
+    pub async fn apply(
         state: &AppState,
         profile_id: &str,
         scope: ProfileScope,
     ) -> Result<(Vec<String>, bool), AppError> {
+        // Hold one shared guard for the complete transaction. Per-app provider
+        // locks are intentionally acquired later by the routing primitive, so
+        // lock order remains profile -> lifecycle -> app and cannot interleave
+        // two profiles into a mixed final state.
+        let _profile_guard = state.profile_apply_lock.lock().await;
         let mut warnings = Vec::new();
 
         // 自动保存旧项目当前状态（仅当前分组），失败不阻塞切换
@@ -362,16 +367,8 @@ impl ProfileService {
         for app in scope.apps().iter() {
             let app_str = app.as_str();
 
-            // 1. 切换项目前无条件关闭当前应用的代理接管。
-            // 接管态下 live 文件属于代理；用户希望切换工作目录时总是退出当前
-            // 代理环境，再按快照写入真实供应商配置。
-            if let Err(e) = state.proxy_service.disable_takeover_for_app_sync(app) {
-                warnings.push(format!(
-                    "[{app_str}] auto-disable proxy takeover before profile switch failed: {e}"
-                ));
-            }
-
-            // 2. 供应商
+            // 1. 供应商。复用与主界面相同的自动路由事务：Codex/GrokBuild
+            // 会根据目标协议自动开启或关闭接管，并在失败时回滚路由和供应商状态。
             if let Some(Some(target_pid)) = payload.providers.get(app) {
                 let providers = state.db.get_all_providers(app_str)?;
                 if !providers.contains_key(target_pid) {
@@ -379,19 +376,22 @@ impl ProfileService {
                         "[{app_str}] provider '{target_pid}' no longer exists, skipped"
                     ));
                 } else {
-                    let current = crate::settings::get_effective_current_provider(&state.db, app)?;
-                    if current.as_deref() != Some(target_pid.as_str()) {
-                        match ProviderService::switch(state, app.clone(), target_pid) {
-                            Ok(result) => warnings.extend(result.warnings),
-                            Err(e) => warnings.push(format!(
-                                "[{app_str}] switch provider '{target_pid}' failed: {e}"
-                            )),
-                        }
+                    match crate::commands::switch_provider_with_automatic_routing_profile_lock_held_state(
+                        state.clone(),
+                        app.clone(),
+                        target_pid.clone(),
+                    )
+                    .await
+                    {
+                        Ok(result) => warnings.extend(result.warnings),
+                        Err(e) => warnings.push(format!(
+                            "[{app_str}] switch provider '{target_pid}' failed: {e}"
+                        )),
                     }
                 }
             }
 
-            // 3. MCP diff（最小 toggle：仅动目标态≠当前态的条目；None = 该侧未拍过，不动）
+            // 2. MCP diff（最小 toggle：仅动目标态≠当前态的条目；None = 该侧未拍过，不动）
             if let Some(Some(target_ids)) = payload.mcp.get(app) {
                 let servers = state.db.get_all_mcp_servers()?;
                 let current: Vec<(String, bool)> = servers
@@ -411,7 +411,7 @@ impl ProfileService {
                 }
             }
 
-            // 4. Skills diff（SkillService 返回 anyhow::Result，收进 warning）
+            // 3. Skills diff（SkillService 返回 anyhow::Result，收进 warning）
             if let Some(Some(target_ids)) = payload.skills.get(app) {
                 let skills = state.db.get_all_installed_skills()?;
                 let current: Vec<(String, bool)> = skills
@@ -433,7 +433,7 @@ impl ProfileService {
                 }
             }
 
-            // 5. Prompt（None = 不动；已激活则幂等跳过，避免无谓的文件写与备份）
+            // 4. Prompt（None = 不动；已激活则幂等跳过，避免无谓的文件写与备份）
             if let Some(Some(target_prompt)) = payload.prompts.get(app) {
                 let prompts = state.db.get_prompts(app_str)?;
                 match prompts.get(target_prompt) {

@@ -918,7 +918,7 @@ jobs:
             --arg version "$VERSION" \
             --arg minimum "1.2.42-chimera.1" \
             --arg release_url "https://github.com/$REPO/releases/tag/$TAG" \
-            --arg body "Chimera++ v2.1.0 release" \
+            --arg body "Chimera++ $TAG release" \
             --arg notes "Release $TAG" \
             --arg pub_date "$PUB_DATE" \
             --argjson platforms "$platform_json" \

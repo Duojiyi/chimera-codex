@@ -87,10 +87,30 @@ pub struct DirectGatewayCredentials {
     pub api_key: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct FileSnapshot {
     path: PathBuf,
     content: Option<Vec<u8>>,
+}
+
+/// Opaque snapshot of every Claude Desktop file mutated by provider switching.
+///
+/// Keeping path resolution in this module ensures rollback covers the normal
+/// deployment config, the 3P deployment config, the generated gateway profile,
+/// and its metadata as one unit on both Windows and macOS.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClaudeDesktopLiveSnapshot {
+    files: Vec<FileSnapshot>,
+}
+
+impl ClaudeDesktopLiveSnapshot {
+    pub(crate) fn has_live_data(&self) -> bool {
+        self.files.iter().any(|snapshot| snapshot.content.is_some())
+    }
+
+    pub(crate) fn restore(&self) -> Result<(), AppError> {
+        restore_snapshots(&self.files)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -128,6 +148,17 @@ struct InferenceModelSpec {
 pub fn apply_provider(db: &Database, provider: &Provider) -> Result<(), AppError> {
     let paths = current_platform_paths()?;
     apply_provider_to_paths(db, provider, &paths)
+}
+
+pub(crate) fn capture_live_snapshot() -> Result<Option<ClaudeDesktopLiveSnapshot>, AppError> {
+    if !is_supported_platform() {
+        return Ok(None);
+    }
+
+    let paths = current_platform_paths()?;
+    Ok(Some(ClaudeDesktopLiveSnapshot {
+        files: snapshot_files(&paths)?,
+    }))
 }
 
 pub fn get_status(db: &Database, proxy_running: bool) -> Result<ClaudeDesktopStatus, AppError> {
@@ -1082,20 +1113,35 @@ fn snapshot_files(paths: &ClaudeDesktopPaths) -> Result<Vec<FileSnapshot>, AppEr
 }
 
 fn restore_snapshots(snapshots: &[FileSnapshot]) -> Result<(), AppError> {
+    let mut errors = Vec::new();
+
+    // These files jointly describe one Claude Desktop deployment. Restore every
+    // component independently so a locked/permission-denied config file cannot
+    // prevent the gateway profile and metadata from returning to the old SSOT.
     for snapshot in snapshots {
-        match &snapshot.content {
-            Some(content) => {
+        let result = match &snapshot.content {
+            Some(content) => (|| {
                 if let Some(parent) = snapshot.path.parent() {
                     fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
                 }
-                atomic_write(&snapshot.path, content)?;
-            }
-            None => {
-                delete_file(&snapshot.path)?;
-            }
+                atomic_write(&snapshot.path, content)
+            })(),
+            None => delete_file(&snapshot.path),
+        };
+
+        if let Err(error) = result {
+            errors.push(format!("{}: {error}", snapshot.path.display()));
         }
     }
-    Ok(())
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(AppError::Message(format!(
+            "Failed to restore Claude Desktop snapshot: {}",
+            errors.join("; ")
+        )))
+    }
 }
 
 fn write_deployment_mode(path: &Path, mode: &str) -> Result<(), AppError> {
@@ -2078,6 +2124,64 @@ mod tests {
         assert!(!is_claude_safe_model_id("anthropic/claude-haiku-"));
         assert!(is_claude_safe_model_id("  claude-sonnet-4-6  "));
         assert!(is_claude_safe_model_id("anthropic/claude-opus-4-8"));
+    }
+
+    #[test]
+    fn claude_desktop_snapshot_restore_attempts_later_files_after_first_error() {
+        let temp = TempDir::new().expect("tempdir");
+        let paths = test_paths(temp.path());
+        let originals = [
+            (
+                &paths.normal_config_path,
+                br#"{"deploymentMode":"1p","normal":"old"}"#.as_slice(),
+            ),
+            (
+                &paths.threep_config_path,
+                br#"{"deploymentMode":"1p","threep":"old"}"#.as_slice(),
+            ),
+            (&paths.profile_path, br#"{"profile":"old"}"#.as_slice()),
+            (&paths.meta_path, br#"{"appliedId":"old"}"#.as_slice()),
+        ];
+
+        for (path, content) in originals {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create snapshot parent");
+            }
+            fs::write(path, content).expect("write original snapshot file");
+        }
+        let snapshots = snapshot_files(&paths).expect("capture original files");
+
+        for path in [
+            &paths.normal_config_path,
+            &paths.threep_config_path,
+            &paths.profile_path,
+            &paths.meta_path,
+        ] {
+            fs::write(path, br#"{"state":"new"}"#).expect("write target provider file");
+        }
+
+        // Make the first restore fail deterministically. The other three files
+        // must still be attempted and restored to their original bytes.
+        fs::remove_file(&paths.normal_config_path).expect("remove normal config");
+        fs::create_dir(&paths.normal_config_path).expect("block normal config restore with dir");
+
+        let error = restore_snapshots(&snapshots).expect_err("first file restore must fail");
+        assert!(error
+            .to_string()
+            .contains(&paths.normal_config_path.display().to_string()));
+        assert!(paths.normal_config_path.is_dir());
+        assert_eq!(
+            fs::read(&paths.threep_config_path).expect("read restored 3P config"),
+            br#"{"deploymentMode":"1p","threep":"old"}"#
+        );
+        assert_eq!(
+            fs::read(&paths.profile_path).expect("read restored profile"),
+            br#"{"profile":"old"}"#
+        );
+        assert_eq!(
+            fs::read(&paths.meta_path).expect("read restored metadata"),
+            br#"{"appliedId":"old"}"#
+        );
     }
 
     #[test]

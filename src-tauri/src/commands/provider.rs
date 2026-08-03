@@ -5,6 +5,7 @@ use crate::app_config::AppType;
 use crate::commands::copilot::CopilotAuthState;
 use crate::error::AppError;
 use crate::provider::{ClaudeDesktopMode, Provider};
+use crate::services::provider::LiveSnapshot;
 use crate::services::{
     EndpointLatency, ProviderService, ProviderSortUpdate, SpeedtestService, SwitchResult,
 };
@@ -35,27 +36,254 @@ pub fn get_current_provider(state: State<'_, AppState>, app: String) -> Result<S
 }
 
 #[tauri::command]
-pub fn add_provider(
+pub async fn add_provider(
     state: State<'_, AppState>,
     app: String,
     provider: Provider,
     #[allow(non_snake_case)] addToLive: Option<bool>,
 ) -> Result<bool, String> {
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    ProviderService::add(state.inner(), app_type, provider, addToLive.unwrap_or(true))
-        .map_err(|e| e.to_string())
+    add_provider_with_automatic_routing_state(
+        state.inner().clone(),
+        app_type,
+        provider,
+        addToLive.unwrap_or(true),
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn update_provider(
+pub async fn update_provider(
     state: State<'_, AppState>,
     app: String,
     provider: Provider,
     #[allow(non_snake_case)] originalId: Option<String>,
 ) -> Result<bool, String> {
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    ProviderService::update(state.inner(), app_type, originalId.as_deref(), provider)
+    update_provider_with_automatic_routing_state(
+        state.inner().clone(),
+        app_type,
+        originalId,
+        provider,
+    )
+    .await
+}
+
+/// Update a provider and atomically reconcile Codex-family routing when the
+/// edited row is current. The old provider row, current pointers, Live files,
+/// takeover backup and route/process state are captured under the same locks so
+/// a failed Live write or protocol transition cannot leave DB and Live split.
+pub(crate) async fn update_provider_with_automatic_routing_state(
+    state: AppState,
+    app_type: AppType,
+    original_id: Option<String>,
+    provider: Provider,
+) -> Result<bool, String> {
+    // Profile application owns this lock for its complete multi-resource
+    // transaction. Provider edits must wait until that transaction commits so
+    // they cannot leave the current Profile marker pointing at mixed state.
+    let _profile_guard = state.profile_apply_lock.lock().await;
+    let auto_manage_routing = matches!(app_type, AppType::Codex | AppType::GrokBuild);
+    if !auto_manage_routing {
+        return ProviderService::update(&state, app_type, original_id.as_deref(), provider)
+            .map_err(|e| e.to_string());
+    }
+
+    let proxy_service = state.proxy_service.clone();
+    let _lifecycle_guard = proxy_service.lock_lifecycle().await;
+    let _switch_guard = proxy_service.lock_switch_for_app(app_type.as_str()).await;
+    let original_id = original_id.unwrap_or_else(|| provider.id.clone());
+    let updated_id = provider.id.clone();
+    let previous_provider = state
+        .db
+        .get_provider_by_id(&original_id, app_type.as_str())
+        .map_err(|e| format!("读取 {} 原供应商失败: {e}", app_type.as_str()))?;
+    let previous_current = crate::settings::get_effective_current_provider(&state.db, &app_type)
+        .map_err(|e| format!("读取 {} 当前供应商失败: {e}", app_type.as_str()))?;
+    let is_current = previous_current.as_deref() == Some(original_id.as_str());
+
+    // Editing an inactive provider does not affect Live or route ownership, but
+    // it is still serialized with current switches to avoid it becoming current
+    // between the current check and the DB update.
+    if !is_current {
+        return ProviderService::update(&state, app_type, Some(&original_id), provider)
+            .map_err(|e| e.to_string());
+    }
+
+    let previous_local = crate::settings::get_current_provider(&app_type);
+    let previous_db = state
+        .db
+        .get_current_provider(app_type.as_str())
+        .map_err(|e| format!("读取 {} 数据库当前供应商失败: {e}", app_type.as_str()))?;
+    let previous_live = LiveSnapshot::capture(&app_type)
+        .map_err(|e| format!("读取 {} 原 Live 配置失败: {e}", app_type.as_str()))?;
+    let previous_backup = state
+        .db
+        .get_live_backup(app_type.as_str())
+        .await
+        .map_err(|e| format!("读取 {} 原 Live 备份失败: {e}", app_type.as_str()))?;
+    let previous_routing_enabled = state
+        .db
+        .get_proxy_config_for_app(app_type.as_str())
+        .await
+        .map_err(|e| format!("读取 {} 原路由状态失败: {e}", app_type.as_str()))?
+        .enabled;
+    let previous_proxy_running = proxy_service.is_running().await;
+    let previous_global_proxy_config = state
+        .db
+        .get_global_proxy_config()
+        .await
+        .map_err(|e| format!("读取原代理全局配置失败: {e}"))?;
+
+    // ProviderService::update is synchronous but may bridge into async proxy
+    // backup refreshes when Live is currently taken over. Run it on a blocking
+    // worker so those bridges cannot starve/deadlock the Tauri Tokio runtime.
+    let update_state = state.clone();
+    let update_app_type = app_type.clone();
+    let update_original_id = original_id.clone();
+    let update_result = tauri::async_runtime::spawn_blocking(move || {
+        ProviderService::update_with_app_lock_held(
+            &update_state,
+            update_app_type,
+            Some(&update_original_id),
+            provider,
+        )
         .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("供应商更新任务执行失败: {e}"))
+    .and_then(|result| result);
+
+    if let Err(error) = update_result {
+        let rollback = compensate_failed_current_provider_update(
+            &state,
+            &app_type,
+            &updated_id,
+            previous_provider.as_ref(),
+            previous_local.as_deref(),
+            previous_db.as_deref(),
+            previous_live.as_ref(),
+            previous_backup.as_ref(),
+            previous_routing_enabled,
+            previous_proxy_running,
+            &previous_global_proxy_config,
+        )
+        .await;
+        return Err(match rollback {
+            Some(rollback_error) => {
+                format!("更新当前供应商失败: {error}；回滚失败: {rollback_error}")
+            }
+            None => format!("更新当前供应商失败: {error}"),
+        });
+    }
+
+    match switch_provider_with_automatic_routing_locked(
+        &state,
+        app_type.clone(),
+        updated_id.clone(),
+        true,
+    )
+    .await
+    {
+        Ok(_) => Ok(true),
+        Err(error) => {
+            let rollback = compensate_failed_current_provider_update(
+                &state,
+                &app_type,
+                &updated_id,
+                previous_provider.as_ref(),
+                previous_local.as_deref(),
+                previous_db.as_deref(),
+                previous_live.as_ref(),
+                previous_backup.as_ref(),
+                previous_routing_enabled,
+                previous_proxy_running,
+                &previous_global_proxy_config,
+            )
+            .await;
+            Err(match rollback {
+                Some(rollback_error) => {
+                    format!("{error}；更新当前供应商回滚失败: {rollback_error}")
+                }
+                None => error,
+            })
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn compensate_failed_current_provider_update(
+    state: &AppState,
+    app_type: &AppType,
+    updated_id: &str,
+    previous_provider: Option<&Provider>,
+    previous_local: Option<&str>,
+    previous_db: Option<&str>,
+    previous_live: Option<&LiveSnapshot>,
+    previous_backup: Option<&crate::proxy::types::LiveBackup>,
+    previous_routing_enabled: bool,
+    previous_proxy_running: bool,
+    previous_global_proxy_config: &crate::proxy::types::GlobalProxyConfig,
+) -> Option<String> {
+    let mut errors = Vec::new();
+
+    if previous_provider.is_none() {
+        if let Err(error) = state.db.delete_provider(app_type.as_str(), updated_id) {
+            errors.push(format!("删除更新后的供应商失败: {error}"));
+        }
+    } else if let Some(previous_provider) = previous_provider {
+        if previous_provider.id != updated_id {
+            if let Err(error) = state.db.delete_provider(app_type.as_str(), updated_id) {
+                errors.push(format!("删除改名后的供应商失败: {error}"));
+            }
+        }
+        if let Err(error) = state.db.save_provider(app_type.as_str(), previous_provider) {
+            errors.push(format!("恢复原供应商记录失败: {error}"));
+        }
+    }
+    if let Some(previous_db) = previous_db {
+        if let Err(error) = state
+            .db
+            .set_current_provider(app_type.as_str(), previous_db)
+        {
+            errors.push(format!("恢复数据库当前供应商失败: {error}"));
+        }
+    }
+    if let Err(error) = crate::settings::set_current_provider(app_type, previous_local) {
+        errors.push(format!("恢复本地当前供应商失败: {error}"));
+    }
+
+    if let Some(error) = rollback_automatic_routing(
+        &state.proxy_service,
+        app_type,
+        previous_routing_enabled,
+        previous_proxy_running,
+        previous_global_proxy_config,
+    )
+    .await
+    {
+        errors.push(format!("恢复原路由状态失败: {error}"));
+    }
+
+    let backup_result = match previous_backup {
+        Some(backup) => {
+            state
+                .db
+                .save_live_backup(app_type.as_str(), &backup.original_config)
+                .await
+        }
+        None => state.db.delete_live_backup(app_type.as_str()).await,
+    };
+    if let Err(error) = backup_result {
+        errors.push(format!("恢复原 Live 备份失败: {error}"));
+    }
+    if let Some(previous_live) = previous_live {
+        if let Err(error) = previous_live.restore() {
+            errors.push(format!("恢复原 Live 配置失败: {error}"));
+        }
+    }
+
+    (!errors.is_empty()).then(|| errors.join("；"))
 }
 
 #[tauri::command]
@@ -90,6 +318,14 @@ fn switch_provider_internal(
     ProviderService::switch(state, app_type, id)
 }
 
+fn switch_provider_with_app_lock_held_internal(
+    state: &AppState,
+    app_type: AppType,
+    id: &str,
+) -> Result<SwitchResult, AppError> {
+    ProviderService::switch_with_app_lock_held(state, app_type, id)
+}
+
 /// Codex-family clients speak Responses natively. Chat Completions, Anthropic
 /// Messages, full endpoint URLs, and managed OAuth credentials require the
 /// local router to translate or inject authentication.
@@ -114,32 +350,28 @@ fn provider_requires_automatic_routing(app_type: &AppType, provider: &Provider) 
 
 async fn rollback_automatic_routing(
     proxy_service: &crate::services::ProxyService,
-    db: &crate::database::Database,
     app_type: &AppType,
     previous_enabled: bool,
     previous_proxy_running: bool,
+    previous_global_proxy_config: &crate::proxy::types::GlobalProxyConfig,
 ) -> Option<String> {
     let mut errors = Vec::new();
     if let Err(error) = proxy_service
-        .set_takeover_for_app(app_type.as_str(), previous_enabled)
+        .set_takeover_for_app_inner(app_type, previous_enabled)
         .await
     {
         errors.push(error);
     }
 
-    // set_takeover_for_app(false) is intentionally idempotent and returns early
-    // when takeover was never committed. If enabling failed after start(), clean
-    // up that newly-started server only when no application is using it.
-    if !previous_proxy_running && proxy_service.is_running().await {
-        match db.is_live_takeover_active().await {
-            Ok(false) => {
-                if let Err(error) = proxy_service.stop().await {
-                    errors.push(error);
-                }
-            }
-            Ok(true) => {}
-            Err(error) => errors.push(format!("检查接管状态失败: {error}")),
-        }
+    // Route ownership and process lifetime are separate pieces of state. An
+    // enabled takeover can legitimately have a stopped process after an abnormal
+    // exit; compensation must reproduce that exact snapshot rather than starting
+    // the server as an accidental side effect of set_takeover_for_app_inner(true).
+    if let Err(error) = proxy_service
+        .restore_runtime_state_inner(previous_proxy_running, previous_global_proxy_config)
+        .await
+    {
+        errors.push(error);
     }
 
     (!errors.is_empty()).then(|| errors.join("；"))
@@ -152,6 +384,336 @@ pub fn switch_provider_test_hook(
     id: &str,
 ) -> Result<SwitchResult, AppError> {
     switch_provider_internal(state, app_type, id)
+}
+
+/// Add a provider and, when it becomes the first selected Codex-family
+/// provider, activate it through the same automatic routing transaction as a
+/// normal switch. This is the fresh/unlogged-in path where no official current
+/// provider exists yet.
+pub(crate) async fn add_provider_with_automatic_routing_state(
+    state: AppState,
+    app_type: AppType,
+    provider: Provider,
+    add_to_live: bool,
+) -> Result<bool, String> {
+    add_provider_with_automatic_routing_mode(state, app_type, provider, add_to_live, false).await
+}
+
+/// Atomically stage and activate an enabled Codex-family provider import.
+/// Snapshotting, first-provider detection, switching and compensation all run
+/// under the same lifecycle/per-app locks so concurrent switches cannot be
+/// overwritten by a stale Deep Link snapshot.
+pub(crate) async fn add_and_activate_provider_with_automatic_routing_state(
+    state: AppState,
+    app_type: AppType,
+    provider: Provider,
+    add_to_live: bool,
+) -> Result<bool, String> {
+    add_provider_with_automatic_routing_mode(state, app_type, provider, add_to_live, true).await
+}
+
+async fn add_provider_with_automatic_routing_mode(
+    state: AppState,
+    app_type: AppType,
+    provider: Provider,
+    add_to_live: bool,
+    activate_when_current_exists: bool,
+) -> Result<bool, String> {
+    // Keep Deep Link/UI imports outside an in-flight Profile transaction. Lock
+    // order is always profile -> lifecycle -> per-app.
+    let _profile_guard = state.profile_apply_lock.lock().await;
+    let auto_manage_routing = matches!(app_type, AppType::Codex | AppType::GrokBuild);
+    if !auto_manage_routing {
+        if !activate_when_current_exists {
+            return ProviderService::add(&state, app_type, provider, add_to_live)
+                .map_err(|e| e.to_string());
+        }
+
+        // Enabled Deep Link imports for every other app use the same complete
+        // Profile transaction boundary as UI/tray switches. Capture, staging,
+        // activation and compensation all happen while profile_apply_lock is
+        // held, so a Profile Apply cannot advance current/Live between them.
+        let previous_local = crate::settings::get_current_provider(&app_type);
+        let previous_db = state
+            .db
+            .get_current_provider(app_type.as_str())
+            .map_err(|e| format!("读取 {} 数据库当前供应商失败: {e}", app_type.as_str()))?;
+        let previous_live = LiveSnapshot::capture(&app_type)
+            .map_err(|e| format!("读取 {} 原 Live 配置失败: {e}", app_type.as_str()))?;
+        let previous_provider = state
+            .db
+            .get_provider_by_id(&provider.id, app_type.as_str())
+            .map_err(|e| e.to_string())?;
+        let provider_id = provider.id.clone();
+
+        ProviderService::add_inactive(&state, app_type.clone(), provider, add_to_live)
+            .map_err(|e| e.to_string())?;
+
+        let switch_state = state.clone();
+        let switch_app = app_type.clone();
+        let switch_id = provider_id.clone();
+        let switched = tauri::async_runtime::spawn_blocking(move || {
+            switch_provider_internal(&switch_state, switch_app, &switch_id)
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| format!("供应商启用任务执行失败: {e}"))
+        .and_then(|result| result.map(|_| ()));
+
+        return match switched {
+            Ok(()) => Ok(true),
+            Err(error) => {
+                let rollback = compensate_failed_direct_provider_add(
+                    &state,
+                    &app_type,
+                    &provider_id,
+                    previous_provider.as_ref(),
+                    previous_local.as_deref(),
+                    previous_db.as_deref(),
+                    previous_live.as_ref(),
+                );
+                Err(match rollback {
+                    Some(rollback_error) => {
+                        format!("{error}；添加供应商回滚失败: {rollback_error}")
+                    }
+                    None => error,
+                })
+            }
+        };
+    }
+
+    let proxy_service = state.proxy_service.clone();
+    let _lifecycle_guard = proxy_service.lock_lifecycle().await;
+    let _switch_guard = proxy_service.lock_switch_for_app(app_type.as_str()).await;
+    let previous_current = crate::settings::get_effective_current_provider(&state.db, &app_type)
+        .map_err(|e| format!("读取 {} 当前供应商失败: {e}", app_type.as_str()))?;
+    let previous_local = crate::settings::get_current_provider(&app_type);
+    let previous_db = state
+        .db
+        .get_current_provider(app_type.as_str())
+        .map_err(|e| format!("读取 {} 数据库当前供应商失败: {e}", app_type.as_str()))?;
+    let previous_live = LiveSnapshot::capture(&app_type)
+        .map_err(|e| format!("读取 {} 原 Live 配置失败: {e}", app_type.as_str()))?;
+    let previous_backup = state
+        .db
+        .get_live_backup(app_type.as_str())
+        .await
+        .map_err(|e| format!("读取 {} 原 Live 备份失败: {e}", app_type.as_str()))?;
+    let previous_routing_enabled = state
+        .db
+        .get_proxy_config_for_app(app_type.as_str())
+        .await
+        .map_err(|e| format!("读取 {} 原路由状态失败: {e}", app_type.as_str()))?
+        .enabled;
+    let previous_proxy_running = proxy_service.is_running().await;
+    let previous_global_proxy_config = state
+        .db
+        .get_global_proxy_config()
+        .await
+        .map_err(|e| format!("读取原代理全局配置失败: {e}"))?;
+    let previous_provider = state
+        .db
+        .get_provider_by_id(&provider.id, app_type.as_str())
+        .map_err(|e| e.to_string())?;
+    let provider_id = provider.id.clone();
+
+    ProviderService::add_inactive(&state, app_type.clone(), provider, add_to_live)
+        .map_err(|e| e.to_string())?;
+    if previous_current.is_some() && !activate_when_current_exists {
+        return Ok(true);
+    }
+
+    let target = state
+        .db
+        .get_provider_by_id(&provider_id, app_type.as_str())
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("暂存供应商 {provider_id} 后无法读取"))?;
+
+    // A fresh/unlogged-in Codex installation has no auth.json/config.toml to
+    // back up. Establish the first provider's normal direct Live projection and
+    // logical current pointer before takeover. The takeover can then preserve
+    // that direct projection as its restore baseline, so disabling routing later
+    // returns to a usable third-party configuration rather than an empty client.
+    if provider_requires_automatic_routing(&app_type, &target) {
+        let activate_state = state.clone();
+        let activate_app = app_type.clone();
+        let activate_id = provider_id.clone();
+        let activation = tauri::async_runtime::spawn_blocking(move || {
+            switch_provider_with_app_lock_held_internal(&activate_state, activate_app, &activate_id)
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| format!("首次供应商直连初始化任务执行失败: {e}"))
+        .and_then(|result| result.map(|_| ()));
+
+        if let Err(error) = activation {
+            let rollback = compensate_failed_provider_add(
+                &state,
+                &app_type,
+                &provider_id,
+                previous_provider.as_ref(),
+                previous_local.as_deref(),
+                previous_db.as_deref(),
+                previous_live.as_ref(),
+                previous_backup.as_ref(),
+                previous_routing_enabled,
+                previous_proxy_running,
+                &previous_global_proxy_config,
+            )
+            .await;
+            return Err(match rollback {
+                Some(rollback_error) => {
+                    format!("首次供应商直连初始化失败: {error}；回滚失败: {rollback_error}")
+                }
+                None => format!("首次供应商直连初始化失败: {error}"),
+            });
+        }
+    }
+
+    match switch_provider_with_automatic_routing_locked(
+        &state,
+        app_type.clone(),
+        provider_id.clone(),
+        true,
+    )
+    .await
+    {
+        Ok(_) => Ok(true),
+        Err(error) => {
+            let rollback = compensate_failed_provider_add(
+                &state,
+                &app_type,
+                &provider_id,
+                previous_provider.as_ref(),
+                previous_local.as_deref(),
+                previous_db.as_deref(),
+                previous_live.as_ref(),
+                previous_backup.as_ref(),
+                previous_routing_enabled,
+                previous_proxy_running,
+                &previous_global_proxy_config,
+            )
+            .await;
+            Err(match rollback {
+                Some(rollback_error) => {
+                    format!("{error}；添加供应商回滚失败: {rollback_error}")
+                }
+                None => error,
+            })
+        }
+    }
+}
+
+fn compensate_failed_direct_provider_add(
+    state: &AppState,
+    app_type: &AppType,
+    provider_id: &str,
+    previous_provider: Option<&Provider>,
+    previous_local: Option<&str>,
+    previous_db: Option<&str>,
+    previous_live: Option<&LiveSnapshot>,
+) -> Option<String> {
+    let mut errors = Vec::new();
+
+    // Keep compensation inside profile_apply_lock. Delete the staged row first
+    // so restoring an overwritten provider cannot inherit its is_current flag.
+    if let Err(error) = state.db.delete_provider(app_type.as_str(), provider_id) {
+        errors.push(format!("删除暂存供应商失败: {error}"));
+    }
+    if let Some(previous_provider) = previous_provider {
+        if let Err(error) = state.db.save_provider(app_type.as_str(), previous_provider) {
+            errors.push(format!("恢复原供应商记录失败: {error}"));
+        }
+    }
+    if let Some(previous_db) = previous_db {
+        if let Err(error) = state
+            .db
+            .set_current_provider(app_type.as_str(), previous_db)
+        {
+            errors.push(format!("恢复数据库当前供应商失败: {error}"));
+        }
+    }
+    if let Err(error) = crate::settings::set_current_provider(app_type, previous_local) {
+        errors.push(format!("恢复本地当前供应商失败: {error}"));
+    }
+    if let Some(previous_live) = previous_live {
+        if let Err(error) = previous_live.restore() {
+            errors.push(format!("恢复原 Live 配置失败: {error}"));
+        }
+    }
+
+    (!errors.is_empty()).then(|| errors.join("；"))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn compensate_failed_provider_add(
+    state: &AppState,
+    app_type: &AppType,
+    provider_id: &str,
+    previous_provider: Option<&Provider>,
+    previous_local: Option<&str>,
+    previous_db: Option<&str>,
+    previous_live: Option<&LiveSnapshot>,
+    previous_backup: Option<&crate::proxy::types::LiveBackup>,
+    previous_routing_enabled: bool,
+    previous_proxy_running: bool,
+    previous_global_proxy_config: &crate::proxy::types::GlobalProxyConfig,
+) -> Option<String> {
+    let mut errors = Vec::new();
+
+    // Delete first so restoring an overwritten provider cannot inherit the
+    // staged row's is_current flag from Database::save_provider.
+    if let Err(error) = state.db.delete_provider(app_type.as_str(), provider_id) {
+        errors.push(format!("删除暂存供应商失败: {error}"));
+    }
+    if let Some(previous_provider) = previous_provider {
+        if let Err(error) = state.db.save_provider(app_type.as_str(), previous_provider) {
+            errors.push(format!("恢复原供应商记录失败: {error}"));
+        }
+    }
+    if let Some(previous_db) = previous_db {
+        if let Err(error) = state
+            .db
+            .set_current_provider(app_type.as_str(), previous_db)
+        {
+            errors.push(format!("恢复数据库当前供应商失败: {error}"));
+        }
+    }
+    if let Err(error) = crate::settings::set_current_provider(app_type, previous_local) {
+        errors.push(format!("恢复本地当前供应商失败: {error}"));
+    }
+
+    if let Some(error) = rollback_automatic_routing(
+        &state.proxy_service,
+        app_type,
+        previous_routing_enabled,
+        previous_proxy_running,
+        previous_global_proxy_config,
+    )
+    .await
+    {
+        errors.push(format!("恢复原路由状态失败: {error}"));
+    }
+
+    let backup_result = match previous_backup {
+        Some(backup) => {
+            state
+                .db
+                .save_live_backup(app_type.as_str(), &backup.original_config)
+                .await
+        }
+        None => state.db.delete_live_backup(app_type.as_str()).await,
+    };
+    if let Err(error) = backup_result {
+        errors.push(format!("恢复原 Live 备份失败: {error}"));
+    }
+    if let Some(previous_live) = previous_live {
+        if let Err(error) = previous_live.restore() {
+            errors.push(format!("恢复原 Live 配置失败: {error}"));
+        }
+    }
+
+    (!errors.is_empty()).then(|| errors.join("；"))
 }
 
 #[tauri::command]
@@ -172,28 +734,73 @@ pub(crate) async fn switch_provider_with_automatic_routing(
     app_type: AppType,
     id: String,
 ) -> Result<SwitchResult, String> {
-    // Resolve the target before touching Live state. This makes a missing/stale
-    // provider fail without starting or stopping the local router.
-    let target = {
-        let state = app_handle
-            .try_state::<AppState>()
-            .ok_or_else(|| "应用状态不可用".to_string())?;
-        state
-            .db
-            .get_provider_by_id(&id, app_type.as_str())
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("供应商 {id} 不存在"))?
-    };
+    let state = app_handle
+        .try_state::<AppState>()
+        .ok_or_else(|| "应用状态不可用".to_string())?
+        .inner()
+        .clone();
+    switch_provider_with_automatic_routing_state(state, app_type, id).await
+}
 
+/// State-based automatic routing transaction reused by UI, tray, Profile and
+/// import paths. All Codex-family switches must pass through this function.
+pub(crate) async fn switch_provider_with_automatic_routing_state(
+    state: AppState,
+    app_type: AppType,
+    id: String,
+) -> Result<SwitchResult, String> {
+    let profile_lock = state.profile_apply_lock.clone();
+    let _profile_guard = profile_lock.lock().await;
+    switch_provider_with_automatic_routing_profile_lock_held_state(state, app_type, id).await
+}
+
+/// ProfileService already owns `profile_apply_lock` for its complete Provider +
+/// MCP + Skills + Prompt transaction. This lock-held entry avoids re-entering
+/// the non-reentrant mutex while preserving profile -> lifecycle -> app order.
+pub(crate) async fn switch_provider_with_automatic_routing_profile_lock_held_state(
+    state: AppState,
+    app_type: AppType,
+    id: String,
+) -> Result<SwitchResult, String> {
     let auto_manage_routing = matches!(app_type, AppType::Codex | AppType::GrokBuild);
-    let routing_required = provider_requires_automatic_routing(&app_type, &target);
-    let (proxy_service, db) = {
-        let state = app_handle
-            .try_state::<AppState>()
-            .ok_or_else(|| "应用状态不可用".to_string())?;
-        (state.proxy_service.clone(), state.db.clone())
+    let proxy_service = state.proxy_service.clone();
+
+    // Hold the same per-app lock from the first state read through routing
+    // reconciliation, provider commit, and rollback. ProviderService uses its
+    // lock-free inner path below, so concurrent UI/tray switches cannot slip
+    // between the routing and provider phases.
+    let _lifecycle_guard = if auto_manage_routing {
+        Some(proxy_service.lock_lifecycle().await)
+    } else {
+        None
+    };
+    let _switch_guard = if auto_manage_routing {
+        Some(proxy_service.lock_switch_for_app(app_type.as_str()).await)
+    } else {
+        None
     };
 
+    switch_provider_with_automatic_routing_locked(&state, app_type, id, auto_manage_routing).await
+}
+
+/// Execute the routing/provider transaction while the caller owns the lifecycle
+/// and per-app locks for Codex-family apps.
+async fn switch_provider_with_automatic_routing_locked(
+    state: &AppState,
+    app_type: AppType,
+    id: String,
+    auto_manage_routing: bool,
+) -> Result<SwitchResult, String> {
+    let proxy_service = state.proxy_service.clone();
+    let db = state.db.clone();
+
+    // Resolve the target only after acquiring the transaction lock. This makes
+    // all routing decisions use a current, serialized provider snapshot.
+    let target = db
+        .get_provider_by_id(&id, app_type.as_str())
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("供应商 {id} 不存在"))?;
+    let routing_required = provider_requires_automatic_routing(&app_type, &target);
     let previous_routing_enabled = if auto_manage_routing {
         db.get_proxy_config_for_app(app_type.as_str())
             .await
@@ -203,6 +810,21 @@ pub(crate) async fn switch_provider_with_automatic_routing(
         false
     };
     let previous_proxy_running = proxy_service.is_running().await;
+    let previous_global_proxy_config = if auto_manage_routing {
+        Some(
+            db.get_global_proxy_config()
+                .await
+                .map_err(|e| format!("读取原代理全局配置失败: {e}"))?,
+        )
+    } else {
+        None
+    };
+    let previous_provider_id = if auto_manage_routing {
+        crate::settings::get_effective_current_provider(db.as_ref(), &app_type)
+            .map_err(|e| format!("读取 {} 当前供应商失败: {e}", app_type.as_str()))?
+    } else {
+        None
+    };
 
     // Do not turn off an active takeover merely to bypass the official-provider
     // safety policy. Only the built-in Codex official entry is explicitly
@@ -219,21 +841,65 @@ pub(crate) async fn switch_provider_with_automatic_routing(
     }
 
     let routing_changed = auto_manage_routing && previous_routing_enabled != routing_required;
-
-    if routing_changed {
-        if let Err(error) = proxy_service
-            .set_takeover_for_app(app_type.as_str(), routing_required)
+    let routing_reconciliation_required = if auto_manage_routing {
+        let has_backup = db
+            .get_live_backup(app_type.as_str())
+            .await
+            .map_err(|e| format!("读取 {} Live 备份失败: {e}", app_type.as_str()))?
+            .is_some();
+        let live_taken_over = proxy_service.detect_takeover_in_live_config_for_app(&app_type);
+        let live_matches_current_proxy = match proxy_service
+            .live_takeover_matches_current_proxy(&app_type)
             .await
         {
-            // Enabling takeover can start the server before a later Live-config
-            // step fails. Reconcile back to the previous state so an unused
-            // proxy is not left running.
+            Ok(matches) => matches,
+            Err(error) if !previous_routing_enabled && !has_backup && !live_taken_over => {
+                // Fresh/unlogged-in installs legitimately have no Live files yet.
+                // The takeover transaction below will create them; absence is
+                // not an ownership failure and must not block the first provider.
+                log::debug!(
+                    "{} 尚无可核对的 Live 路由，将按首次接管创建: {error}",
+                    app_type.as_str()
+                );
+                false
+            }
+            Err(error) => {
+                return Err(format!(
+                    "核对 {} Live 路由所有权失败: {error}",
+                    app_type.as_str()
+                ));
+            }
+        };
+        if routing_required {
+            // enabled=true is not sufficient: backup/live can be missing or can
+            // point at a stale proxy port. Reconcile unless the full route is
+            // owned by the currently configured local proxy endpoint.
+            !previous_routing_enabled || !has_backup || !live_matches_current_proxy
+        } else {
+            // When disabling, also clean a stale owned route left on another
+            // local port; the recovery helper protects unrelated user config.
+            previous_routing_enabled || has_backup || live_taken_over
+        }
+    } else {
+        false
+    };
+
+    // Always reconcile Codex-family routing under the transaction lock. The
+    // inner operation is idempotent and repairs both split-brain directions:
+    // DB=false with stale Live, and DB=true with missing/stale takeover.
+    if auto_manage_routing {
+        if let Err(error) = proxy_service
+            .set_takeover_for_app_inner(&app_type, routing_required)
+            .await
+        {
             let rollback = rollback_automatic_routing(
                 &proxy_service,
-                db.as_ref(),
                 &app_type,
                 previous_routing_enabled,
                 previous_proxy_running,
+                previous_global_proxy_config
+                    .as_ref()
+                    .expect("Codex-family transaction captured global proxy config"),
             )
             .await;
             return Err(match rollback {
@@ -251,20 +917,24 @@ pub(crate) async fn switch_provider_with_automatic_routing(
 
     let switch_app_type = app_type.clone();
     let switch_id = id.clone();
-    let switch_handle = app_handle.clone();
-    let switch_result = tauri::async_runtime::spawn_blocking(move || {
-        let state = switch_handle
-            .try_state::<AppState>()
-            .ok_or_else(|| "应用状态不可用".to_string())?;
-        switch_provider_internal(state.inner(), switch_app_type, &switch_id)
-            .map_err(|e| e.to_string())
+    let switch_state = state.clone();
+    let switch_result = match tauri::async_runtime::spawn_blocking(move || {
+        if auto_manage_routing {
+            switch_provider_with_app_lock_held_internal(&switch_state, switch_app_type, &switch_id)
+        } else {
+            switch_provider_internal(&switch_state, switch_app_type, &switch_id)
+        }
+        .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| format!("供应商切换任务执行失败: {e}"))?;
+    {
+        Ok(result) => result,
+        Err(error) => Err(format!("供应商切换任务执行失败: {error}")),
+    };
 
     match switch_result {
         Ok(mut result) => {
-            result.routing_changed = routing_changed;
+            result.routing_changed = routing_changed || routing_reconciliation_required;
             result.routing_enabled = auto_manage_routing.then_some(routing_required);
             Ok(result)
         }
@@ -272,14 +942,71 @@ pub(crate) async fn switch_provider_with_automatic_routing(
             if routing_changed {
                 let rollback = rollback_automatic_routing(
                     &proxy_service,
-                    db.as_ref(),
                     &app_type,
                     previous_routing_enabled,
                     previous_proxy_running,
+                    previous_global_proxy_config
+                        .as_ref()
+                        .expect("Codex-family transaction captured global proxy config"),
                 )
                 .await;
                 if let Some(rollback_error) = rollback {
                     return Err(format!("{error}；本地路由回滚失败: {rollback_error}"));
+                }
+            } else {
+                let mut compensation_errors = Vec::new();
+                if routing_reconciliation_required {
+                    // Reconciliation intentionally does not restore a stale Live
+                    // takeover. Normalize the previously selected provider in the
+                    // repaired route mode so a failed target commit cannot leave
+                    // Live split from SSOT.
+                    if let Some(previous_id) = previous_provider_id.as_deref() {
+                        let rollback_app_type = app_type.clone();
+                        let rollback_id = previous_id.to_string();
+                        let rollback_state = state.clone();
+                        let rollback = match tauri::async_runtime::spawn_blocking(move || {
+                            switch_provider_with_app_lock_held_internal(
+                                &rollback_state,
+                                rollback_app_type,
+                                &rollback_id,
+                            )
+                            .map_err(|e| e.to_string())
+                        })
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(error) => Err(format!("恢复原供应商任务执行失败: {error}")),
+                        };
+                        if let Err(rollback_error) = rollback {
+                            compensation_errors.push(format!("恢复原供应商失败: {rollback_error}"));
+                        }
+                    }
+                }
+
+                // set_takeover_for_app_inner(true) may start a previously stopped
+                // proxy even when enabled/backup/Live already match and neither
+                // routing flag above changes. A failed provider commit must still
+                // restore the exact process state and complete global config.
+                if auto_manage_routing {
+                    if let Err(rollback_error) = proxy_service
+                        .restore_runtime_state_inner(
+                            previous_proxy_running,
+                            previous_global_proxy_config
+                                .as_ref()
+                                .expect("Codex-family transaction captured global proxy config"),
+                        )
+                        .await
+                    {
+                        compensation_errors
+                            .push(format!("恢复原代理运行状态失败: {rollback_error}"));
+                    }
+                }
+
+                if !compensation_errors.is_empty() {
+                    return Err(format!(
+                        "{error}；切换失败补偿失败: {}",
+                        compensation_errors.join("；")
+                    ));
                 }
             }
             Err(error)
@@ -1094,10 +1821,23 @@ pub fn get_opencode_live_provider_ids() -> Result<Vec<String>, String> {
 
 #[cfg(test)]
 mod automatic_routing_tests {
-    use super::provider_requires_automatic_routing;
+    use super::{
+        add_and_activate_provider_with_automatic_routing_state,
+        add_provider_with_automatic_routing_state, provider_requires_automatic_routing,
+        switch_provider_with_automatic_routing_state, update_provider_with_automatic_routing_state,
+    };
     use crate::app_config::AppType;
+    use crate::codex_config::{
+        get_codex_auth_path, get_codex_config_path, get_codex_model_catalog_path,
+    };
+    use crate::database::Database;
     use crate::provider::{Provider, ProviderMeta};
+    use crate::proxy::types::ProxyConfig;
+    use crate::services::ProviderService;
+    use crate::store::AppState;
     use serde_json::json;
+    use serial_test::serial;
+    use std::sync::Arc;
 
     fn provider(config: serde_json::Value, api_format: Option<&str>) -> Provider {
         let mut provider = Provider::with_id("test".to_string(), "Test".to_string(), config, None);
@@ -1163,6 +1903,913 @@ mod automatic_routing_tests {
             &AppType::Claude,
             &third_party
         ));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn first_unlogged_codex_chat_provider_activates_automatic_routing() {
+        let original = std::env::var_os("CC_SWITCH_TEST_HOME");
+        let home = tempfile::tempdir().expect("create test home");
+        std::env::set_var("CC_SWITCH_TEST_HOME", home.path());
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(Database::memory().expect("init db"));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve port");
+        let port = listener.local_addr().expect("local addr").port();
+        drop(listener);
+        db.update_proxy_config(ProxyConfig {
+            listen_port: port,
+            ..Default::default()
+        })
+        .await
+        .expect("use available port");
+        let state = AppState::new(db.clone());
+        let mut first = provider(
+            json!({
+                "auth": {"OPENAI_API_KEY": "test-only-key"},
+                "config": "model_provider = \"third\"\nmodel = \"claude-test\"\n[model_providers.third]\nname = \"Third\"\nbase_url = \"https://example.invalid/v1\"\nwire_api = \"chat\"\n",
+                "modelCatalog": {"models": [{"model": "claude-test", "displayName": "Claude Test"}]}
+            }),
+            Some("openai_chat"),
+        );
+        first.id = "first-chat".to_string();
+        add_provider_with_automatic_routing_state(state.clone(), AppType::Codex, first, true)
+            .await
+            .expect("add first provider");
+        assert_eq!(
+            db.get_current_provider("codex")
+                .expect("current")
+                .as_deref(),
+            Some("first-chat")
+        );
+        assert!(
+            db.get_proxy_config_for_app("codex")
+                .await
+                .expect("routing")
+                .enabled
+        );
+        assert!(state.proxy_service.is_running().await);
+        let taken_over =
+            std::fs::read_to_string(get_codex_config_path()).expect("read taken-over config");
+        assert!(taken_over.contains("127.0.0.1"));
+        assert!(get_codex_model_catalog_path().exists());
+
+        state
+            .proxy_service
+            .set_takeover_for_app("codex", false)
+            .await
+            .expect("cleanup");
+        let restored =
+            std::fs::read_to_string(get_codex_config_path()).expect("read restored direct config");
+        assert!(restored.contains("https://example.invalid/v1"));
+        assert!(!restored.contains("127.0.0.1"));
+        assert!(
+            db.get_live_backup("codex")
+                .await
+                .expect("read backup")
+                .is_none(),
+            "disabling routing must remove the sensitive takeover backup"
+        );
+        match original {
+            Some(v) => std::env::set_var("CC_SWITCH_TEST_HOME", v),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        crate::settings::reload_settings().expect("restore settings");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn first_unlogged_codex_responses_provider_stays_direct() {
+        let original = std::env::var_os("CC_SWITCH_TEST_HOME");
+        let home = tempfile::tempdir().expect("create test home");
+        std::env::set_var("CC_SWITCH_TEST_HOME", home.path());
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(Database::memory().expect("init db"));
+        let state = AppState::new(db.clone());
+        let mut first = provider(
+            json!({
+                "auth": {"OPENAI_API_KEY": "test-only-key"},
+                "config": "model_provider = \"third\"\nmodel = \"gpt-test\"\n[model_providers.third]\nname = \"Third\"\nbase_url = \"https://example.invalid/v1\"\nwire_api = \"responses\"\n",
+                "modelCatalog": {"models": [{"model": "gpt-test", "displayName": "GPT Test"}]}
+            }),
+            Some("openai_responses"),
+        );
+        first.id = "first-responses".to_string();
+
+        add_provider_with_automatic_routing_state(state.clone(), AppType::Codex, first, true)
+            .await
+            .expect("add first Responses provider");
+
+        assert_eq!(
+            db.get_current_provider("codex")
+                .expect("current")
+                .as_deref(),
+            Some("first-responses")
+        );
+        assert!(
+            !db.get_proxy_config_for_app("codex")
+                .await
+                .expect("routing")
+                .enabled
+        );
+        assert!(!state.proxy_service.is_running().await);
+        let direct = std::fs::read_to_string(get_codex_config_path()).expect("read direct config");
+        assert!(direct.contains("https://example.invalid/v1"));
+        assert!(!direct.contains("127.0.0.1"));
+
+        match original {
+            Some(v) => std::env::set_var("CC_SWITCH_TEST_HOME", v),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        crate::settings::reload_settings().expect("restore settings");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn failed_enabled_codex_import_restores_existing_current_and_live_atomically() {
+        let original = std::env::var_os("CC_SWITCH_TEST_HOME");
+        let home = tempfile::tempdir().expect("create test home");
+        std::env::set_var("CC_SWITCH_TEST_HOME", home.path());
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(Database::memory().expect("init db"));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve port");
+        let port = listener.local_addr().expect("local addr").port();
+        drop(listener);
+        db.update_proxy_config(ProxyConfig {
+            listen_port: port,
+            ..Default::default()
+        })
+        .await
+        .expect("use available port");
+        let state = AppState::new(db.clone());
+
+        let mut existing = provider(
+            json!({
+                "auth": {"OPENAI_API_KEY": "existing-test-key"},
+                "config": "model_provider = \"existing\"\nmodel = \"gpt-existing\"\n[model_providers.existing]\nname = \"Existing\"\nbase_url = \"https://existing.example.invalid/v1\"\nwire_api = \"responses\"\n",
+                "modelCatalog": {"models": [{"model": "gpt-existing", "displayName": "Existing"}]}
+            }),
+            Some("openai_responses"),
+        );
+        existing.id = "existing-responses".to_string();
+        add_provider_with_automatic_routing_state(state.clone(), AppType::Codex, existing, true)
+            .await
+            .expect("activate existing provider");
+
+        {
+            let conn = db.conn.lock().expect("lock database");
+            conn.execute_batch(
+                "CREATE TRIGGER reject_enabled_import_activation
+                 BEFORE UPDATE OF is_current ON providers
+                 WHEN NEW.id = 'enabled-chat' AND NEW.is_current = 1
+                 BEGIN
+                   SELECT RAISE(ABORT, 'forced enabled import activation failure');
+                 END;",
+            )
+            .expect("install failure trigger");
+        }
+
+        let mut imported = provider(
+            json!({
+                "auth": {"OPENAI_API_KEY": "import-test-key"},
+                "config": "model_provider = \"imported\"\nmodel = \"claude-imported\"\n[model_providers.imported]\nname = \"Imported\"\nbase_url = \"https://imported.example.invalid/v1\"\nwire_api = \"chat\"\n",
+                "modelCatalog": {"models": [{"model": "claude-imported", "displayName": "Imported"}]}
+            }),
+            Some("openai_chat"),
+        );
+        imported.id = "enabled-chat".to_string();
+
+        let error = add_and_activate_provider_with_automatic_routing_state(
+            state.clone(),
+            AppType::Codex,
+            imported,
+            true,
+        )
+        .await
+        .expect_err("forced enabled import failure must roll back");
+        assert!(error.contains("forced enabled import activation failure"));
+        assert_eq!(
+            db.get_current_provider("codex")
+                .expect("db current")
+                .as_deref(),
+            Some("existing-responses")
+        );
+        assert_eq!(
+            crate::settings::get_current_provider(&AppType::Codex).as_deref(),
+            Some("existing-responses")
+        );
+        assert!(db
+            .get_provider_by_id("enabled-chat", "codex")
+            .expect("read staged provider")
+            .is_none());
+        assert!(
+            !db.get_proxy_config_for_app("codex")
+                .await
+                .expect("routing")
+                .enabled
+        );
+        assert!(!state.proxy_service.is_running().await);
+        assert!(db.get_live_backup("codex").await.expect("backup").is_none());
+        let live = std::fs::read_to_string(get_codex_config_path()).expect("read restored live");
+        assert!(live.contains("https://existing.example.invalid/v1"));
+        assert!(!live.contains("127.0.0.1"));
+        assert!(!live.contains("https://imported.example.invalid/v1"));
+
+        match original {
+            Some(v) => std::env::set_var("CC_SWITCH_TEST_HOME", v),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        crate::settings::reload_settings().expect("restore settings");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial]
+    async fn provider_switch_waits_for_complete_profile_transaction() {
+        let original = std::env::var_os("CC_SWITCH_TEST_HOME");
+        let home = tempfile::tempdir().expect("create test home");
+        std::env::set_var("CC_SWITCH_TEST_HOME", home.path());
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(Database::memory().expect("init db"));
+        let state = AppState::new(db.clone());
+
+        let provider_a = Provider::with_id(
+            "profile-provider-a".to_string(),
+            "Profile A".to_string(),
+            json!({"env": {"ANTHROPIC_AUTH_TOKEN": "profile-a-test-token"}}),
+            None,
+        );
+        let provider_b = Provider::with_id(
+            "profile-provider-b".to_string(),
+            "Profile B".to_string(),
+            json!({"env": {"ANTHROPIC_AUTH_TOKEN": "profile-b-test-token"}}),
+            None,
+        );
+        db.save_provider(AppType::Claude.as_str(), &provider_a)
+            .expect("save provider A");
+        db.save_provider(AppType::Claude.as_str(), &provider_b)
+            .expect("save provider B");
+        crate::services::ProviderService::switch(&state, AppType::Claude, &provider_a.id)
+            .expect("seed provider A");
+
+        // Model the interval after Profile Apply has switched its Provider but
+        // before MCP/Skills/Prompt and the current-profile marker are committed.
+        let profile_lock = state.profile_apply_lock.clone();
+        let profile_guard = profile_lock.lock().await;
+        let switch_state = state.clone();
+        let switch_task = tokio::spawn(async move {
+            switch_provider_with_automatic_routing_state(
+                switch_state,
+                AppType::Claude,
+                "profile-provider-b".to_string(),
+            )
+            .await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            !switch_task.is_finished(),
+            "UI/tray switch must wait until Profile Apply releases its transaction lock"
+        );
+        assert_eq!(
+            db.get_current_provider(AppType::Claude.as_str())
+                .expect("current provider while profile locked")
+                .as_deref(),
+            Some("profile-provider-a")
+        );
+
+        drop(profile_guard);
+        switch_task
+            .await
+            .expect("join provider switch")
+            .expect("provider switch after profile transaction");
+        assert_eq!(
+            db.get_current_provider(AppType::Claude.as_str())
+                .expect("current provider after profile unlock")
+                .as_deref(),
+            Some("profile-provider-b")
+        );
+
+        match original {
+            Some(v) => std::env::set_var("CC_SWITCH_TEST_HOME", v),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        crate::settings::reload_settings().expect("restore settings");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn current_provider_update_responses_to_chat_enables_routing() {
+        let original = std::env::var_os("CC_SWITCH_TEST_HOME");
+        let home = tempfile::tempdir().expect("create test home");
+        std::env::set_var("CC_SWITCH_TEST_HOME", home.path());
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(Database::memory().expect("init db"));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve port");
+        let port = listener.local_addr().expect("local addr").port();
+        drop(listener);
+        db.update_proxy_config(ProxyConfig {
+            listen_port: port,
+            ..Default::default()
+        })
+        .await
+        .expect("use available port");
+        let state = AppState::new(db.clone());
+
+        let mut current = provider(
+            json!({
+                "auth": {"OPENAI_API_KEY": "test-only-key"},
+                "config": "model_provider = \"editable\"\nmodel = \"gpt-before\"\n[model_providers.editable]\nname = \"Editable\"\nbase_url = \"https://responses-before.example.invalid/v1\"\nwire_api = \"responses\"\n"
+            }),
+            Some("openai_responses"),
+        );
+        current.id = "editable".to_string();
+        add_provider_with_automatic_routing_state(state.clone(), AppType::Codex, current, true)
+            .await
+            .expect("add Responses provider");
+
+        let mut updated = provider(
+            json!({
+                "auth": {"OPENAI_API_KEY": "test-only-key"},
+                "config": "model_provider = \"editable\"\nmodel = \"claude-after\"\n[model_providers.editable]\nname = \"Editable\"\nbase_url = \"https://chat-after.example.invalid/v1\"\nwire_api = \"chat\"\n"
+            }),
+            Some("openai_chat"),
+        );
+        updated.id = "editable".to_string();
+        update_provider_with_automatic_routing_state(
+            state.clone(),
+            AppType::Codex,
+            Some("editable".to_string()),
+            updated,
+        )
+        .await
+        .expect("update current provider to Chat");
+
+        assert!(
+            db.get_proxy_config_for_app("codex")
+                .await
+                .expect("routing")
+                .enabled
+        );
+        assert!(state.proxy_service.is_running().await);
+        let live = std::fs::read_to_string(get_codex_config_path()).expect("read takeover live");
+        assert!(live.contains(&format!("127.0.0.1:{port}")));
+        let stored = db
+            .get_provider_by_id("editable", "codex")
+            .expect("read provider")
+            .expect("provider exists");
+        assert_eq!(
+            stored
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.api_format.as_deref()),
+            Some("openai_chat")
+        );
+
+        state
+            .proxy_service
+            .set_takeover_for_app("codex", false)
+            .await
+            .expect("cleanup takeover");
+        match original {
+            Some(v) => std::env::set_var("CC_SWITCH_TEST_HOME", v),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        crate::settings::reload_settings().expect("restore settings");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn current_provider_update_chat_to_responses_disables_routing() {
+        let original = std::env::var_os("CC_SWITCH_TEST_HOME");
+        let home = tempfile::tempdir().expect("create test home");
+        std::env::set_var("CC_SWITCH_TEST_HOME", home.path());
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(Database::memory().expect("init db"));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve port");
+        let port = listener.local_addr().expect("local addr").port();
+        drop(listener);
+        db.update_proxy_config(ProxyConfig {
+            listen_port: port,
+            ..Default::default()
+        })
+        .await
+        .expect("use available port");
+        let state = AppState::new(db.clone());
+
+        let mut current = provider(
+            json!({
+                "auth": {"OPENAI_API_KEY": "test-only-key"},
+                "config": "model_provider = \"editable\"\nmodel = \"claude-before\"\n[model_providers.editable]\nname = \"Editable\"\nbase_url = \"https://chat-before.example.invalid/v1\"\nwire_api = \"chat\"\n"
+            }),
+            Some("openai_chat"),
+        );
+        current.id = "editable".to_string();
+        add_provider_with_automatic_routing_state(state.clone(), AppType::Codex, current, true)
+            .await
+            .expect("add Chat provider");
+        assert!(state.proxy_service.is_running().await);
+
+        let mut updated = provider(
+            json!({
+                "auth": {"OPENAI_API_KEY": "test-only-key"},
+                "config": "model_provider = \"editable\"\nmodel = \"gpt-after\"\n[model_providers.editable]\nname = \"Editable\"\nbase_url = \"https://responses-after.example.invalid/v1\"\nwire_api = \"responses\"\n"
+            }),
+            Some("openai_responses"),
+        );
+        updated.id = "editable".to_string();
+        update_provider_with_automatic_routing_state(
+            state.clone(),
+            AppType::Codex,
+            Some("editable".to_string()),
+            updated,
+        )
+        .await
+        .expect("update current provider to Responses");
+
+        assert!(
+            !db.get_proxy_config_for_app("codex")
+                .await
+                .expect("routing")
+                .enabled
+        );
+        assert!(!state.proxy_service.is_running().await);
+        assert!(db.get_live_backup("codex").await.expect("backup").is_none());
+        let live = std::fs::read_to_string(get_codex_config_path()).expect("read direct live");
+        assert!(live.contains("https://responses-after.example.invalid/v1"));
+        assert!(!live.contains("127.0.0.1"));
+
+        match original {
+            Some(v) => std::env::set_var("CC_SWITCH_TEST_HOME", v),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        crate::settings::reload_settings().expect("restore settings");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn failed_current_provider_route_start_restores_provider_current_live_and_backup() {
+        let original = std::env::var_os("CC_SWITCH_TEST_HOME");
+        let home = tempfile::tempdir().expect("create test home");
+        std::env::set_var("CC_SWITCH_TEST_HOME", home.path());
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(Database::memory().expect("init db"));
+        let occupied = std::net::TcpListener::bind("127.0.0.1:0").expect("occupy port");
+        let port = occupied.local_addr().expect("local addr").port();
+        db.update_proxy_config(ProxyConfig {
+            listen_port: port,
+            ..Default::default()
+        })
+        .await
+        .expect("set occupied port");
+        let state = AppState::new(db.clone());
+
+        let mut current = provider(
+            json!({
+                "auth": {"OPENAI_API_KEY": "test-only-key"},
+                "config": "model_provider = \"editable\"\nmodel = \"gpt-before\"\n[model_providers.editable]\nname = \"Editable\"\nbase_url = \"https://responses-before.example.invalid/v1\"\nwire_api = \"responses\"\n"
+            }),
+            Some("openai_responses"),
+        );
+        current.id = "editable".to_string();
+        add_provider_with_automatic_routing_state(state.clone(), AppType::Codex, current, true)
+            .await
+            .expect("add Responses provider");
+
+        let mut updated = provider(
+            json!({
+                "auth": {"OPENAI_API_KEY": "test-only-key"},
+                "config": "model_provider = \"editable\"\nmodel = \"claude-after\"\n[model_providers.editable]\nname = \"Editable\"\nbase_url = \"https://chat-after.example.invalid/v1\"\nwire_api = \"chat\"\n"
+            }),
+            Some("openai_chat"),
+        );
+        updated.id = "editable".to_string();
+        let error = update_provider_with_automatic_routing_state(
+            state.clone(),
+            AppType::Codex,
+            Some("editable".to_string()),
+            updated,
+        )
+        .await
+        .expect_err("occupied proxy port must fail route startup");
+        assert!(error.contains("自动开启本地路由失败") || error.contains("启动"));
+
+        let stored = db
+            .get_provider_by_id("editable", "codex")
+            .expect("read provider")
+            .expect("provider exists");
+        assert_eq!(
+            stored
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.api_format.as_deref()),
+            Some("openai_responses")
+        );
+        assert!(stored
+            .settings_config
+            .to_string()
+            .contains("responses-before.example.invalid"));
+        assert_eq!(
+            db.get_current_provider("codex")
+                .expect("db current")
+                .as_deref(),
+            Some("editable")
+        );
+        assert_eq!(
+            crate::settings::get_current_provider(&AppType::Codex).as_deref(),
+            Some("editable")
+        );
+        assert!(
+            !db.get_proxy_config_for_app("codex")
+                .await
+                .expect("routing")
+                .enabled
+        );
+        assert!(!state.proxy_service.is_running().await);
+        assert!(db.get_live_backup("codex").await.expect("backup").is_none());
+        let live = std::fs::read_to_string(get_codex_config_path()).expect("read restored live");
+        assert!(live.contains("https://responses-before.example.invalid/v1"));
+        assert!(!live.contains("chat-after.example.invalid"));
+        drop(occupied);
+
+        match original {
+            Some(v) => std::env::set_var("CC_SWITCH_TEST_HOME", v),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        crate::settings::reload_settings().expect("restore settings");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn failed_enabled_import_while_routed_restores_original_backup() {
+        let original = std::env::var_os("CC_SWITCH_TEST_HOME");
+        let home = tempfile::tempdir().expect("create test home");
+        std::env::set_var("CC_SWITCH_TEST_HOME", home.path());
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(Database::memory().expect("init db"));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve port");
+        let port = listener.local_addr().expect("local addr").port();
+        drop(listener);
+        db.update_proxy_config(ProxyConfig {
+            listen_port: port,
+            ..Default::default()
+        })
+        .await
+        .expect("use available port");
+        let state = AppState::new(db.clone());
+
+        let mut existing = provider(
+            json!({
+                "auth": {"OPENAI_API_KEY": "existing-test-key"},
+                "config": "model_provider = \"existing\"\nmodel = \"claude-existing\"\n[model_providers.existing]\nname = \"Existing\"\nbase_url = \"https://existing-chat.example.invalid/v1\"\nwire_api = \"chat\"\n"
+            }),
+            Some("openai_chat"),
+        );
+        existing.id = "existing-chat".to_string();
+        add_provider_with_automatic_routing_state(state.clone(), AppType::Codex, existing, true)
+            .await
+            .expect("activate existing routed provider");
+        let original_backup = db
+            .get_live_backup("codex")
+            .await
+            .expect("read original backup")
+            .expect("backup exists");
+        assert!(original_backup
+            .original_config
+            .contains("existing-chat.example.invalid"));
+
+        // Preserve the inconsistent-but-valid crash snapshot reported by audit:
+        // takeover remains enabled and Live/backup remain owned, but the shared
+        // proxy process is stopped. Failed import compensation must not heal it.
+        state
+            .proxy_service
+            .stop()
+            .await
+            .expect("simulate proxy process exit while takeover remains enabled");
+        assert!(
+            db.get_proxy_config_for_app("codex")
+                .await
+                .expect("routing after simulated exit")
+                .enabled
+        );
+        assert!(!state.proxy_service.is_running().await);
+        let previous_global_proxy_config = db
+            .get_global_proxy_config()
+            .await
+            .expect("capture stopped global proxy config");
+
+        {
+            let conn = db.conn.lock().expect("lock database");
+            conn.execute_batch(
+                "CREATE TRIGGER reject_second_enabled_import_commit
+                 BEFORE UPDATE OF is_current ON providers
+                 WHEN OLD.id = 'enabled-chat' AND OLD.is_current = 1 AND NEW.is_current = 0
+                 BEGIN
+                   SELECT RAISE(ABORT, 'forced second enabled import commit failure');
+                 END;",
+            )
+            .expect("install second-phase failure trigger");
+        }
+
+        let mut imported = provider(
+            json!({
+                "auth": {"OPENAI_API_KEY": "import-test-key"},
+                "config": "model_provider = \"imported\"\nmodel = \"claude-imported\"\n[model_providers.imported]\nname = \"Imported\"\nbase_url = \"https://imported-chat.example.invalid/v1\"\nwire_api = \"chat\"\n"
+            }),
+            Some("openai_chat"),
+        );
+        imported.id = "enabled-chat".to_string();
+        let error = add_and_activate_provider_with_automatic_routing_state(
+            state.clone(),
+            AppType::Codex,
+            imported,
+            true,
+        )
+        .await
+        .expect_err("second activation phase must fail");
+        assert!(error.contains("forced second enabled import commit failure"));
+
+        assert_eq!(
+            db.get_current_provider("codex")
+                .expect("db current")
+                .as_deref(),
+            Some("existing-chat")
+        );
+        assert_eq!(
+            crate::settings::get_current_provider(&AppType::Codex).as_deref(),
+            Some("existing-chat")
+        );
+        assert!(
+            db.get_proxy_config_for_app("codex")
+                .await
+                .expect("routing")
+                .enabled
+        );
+        assert!(
+            !state.proxy_service.is_running().await,
+            "rollback must restore the original stopped process state"
+        );
+        let restored_global_proxy_config = db
+            .get_global_proxy_config()
+            .await
+            .expect("read restored global proxy config");
+        assert_eq!(
+            restored_global_proxy_config.proxy_enabled,
+            previous_global_proxy_config.proxy_enabled
+        );
+        assert_eq!(
+            restored_global_proxy_config.listen_address,
+            previous_global_proxy_config.listen_address
+        );
+        assert_eq!(
+            restored_global_proxy_config.listen_port,
+            previous_global_proxy_config.listen_port
+        );
+        assert_eq!(
+            restored_global_proxy_config.enable_logging,
+            previous_global_proxy_config.enable_logging
+        );
+        let restored_backup = db
+            .get_live_backup("codex")
+            .await
+            .expect("read restored backup")
+            .expect("backup exists after rollback");
+        assert!(restored_backup
+            .original_config
+            .contains("existing-chat.example.invalid"));
+        assert!(!restored_backup
+            .original_config
+            .contains("imported-chat.example.invalid"));
+        let live = std::fs::read_to_string(get_codex_config_path()).expect("read takeover live");
+        assert!(live.contains(&format!("127.0.0.1:{port}")));
+
+        state
+            .proxy_service
+            .set_takeover_for_app("codex", false)
+            .await
+            .expect("disable takeover after rollback");
+        let restored = std::fs::read_to_string(get_codex_config_path()).expect("read direct live");
+        assert!(restored.contains("https://existing-chat.example.invalid/v1"));
+        assert!(!restored.contains("imported-chat.example.invalid"));
+
+        match original {
+            Some(v) => std::env::set_var("CC_SWITCH_TEST_HOME", v),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        crate::settings::reload_settings().expect("restore settings");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn failed_public_switch_while_routed_and_stopped_restores_runtime_state() {
+        let original = std::env::var_os("CC_SWITCH_TEST_HOME");
+        let home = tempfile::tempdir().expect("create test home");
+        std::env::set_var("CC_SWITCH_TEST_HOME", home.path());
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(Database::memory().expect("init db"));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve port");
+        let port = listener.local_addr().expect("local addr").port();
+        drop(listener);
+        db.update_proxy_config(ProxyConfig {
+            listen_port: port,
+            ..Default::default()
+        })
+        .await
+        .expect("use available port");
+        let state = AppState::new(db.clone());
+
+        let mut current = provider(
+            json!({
+                "auth": {"OPENAI_API_KEY": "public-current-test-key"},
+                "config": "model_provider = \"public_current\"\nmodel = \"claude-current\"\n[model_providers.public_current]\nname = \"Public Current\"\nbase_url = \"https://public-current.example.invalid/v1\"\nwire_api = \"chat\"\n"
+            }),
+            Some("openai_chat"),
+        );
+        current.id = "public-current".to_string();
+        add_provider_with_automatic_routing_state(state.clone(), AppType::Codex, current, true)
+            .await
+            .expect("activate current routed provider");
+
+        let mut target = provider(
+            json!({
+                "auth": {"OPENAI_API_KEY": "public-target-test-key"},
+                "config": "model_provider = \"public_target\"\nmodel = \"claude-target\"\n[model_providers.public_target]\nname = \"Public Target\"\nbase_url = \"https://public-target.example.invalid/v1\"\nwire_api = \"chat\"\n"
+            }),
+            Some("openai_chat"),
+        );
+        target.id = "public-target".to_string();
+        ProviderService::add_inactive(&state, AppType::Codex, target, true)
+            .expect("stage routed target");
+
+        // Reproduce the audit snapshot: DB takeover and owned Live/backup stay
+        // enabled, while only the proxy process has exited.
+        state
+            .proxy_service
+            .stop()
+            .await
+            .expect("stop proxy without changing takeover");
+        assert!(
+            db.get_proxy_config_for_app("codex")
+                .await
+                .expect("read takeover")
+                .enabled
+        );
+        assert!(!state.proxy_service.is_running().await);
+        let previous_global_proxy_config = db
+            .get_global_proxy_config()
+            .await
+            .expect("capture global proxy config");
+        let previous_backup = db
+            .get_live_backup("codex")
+            .await
+            .expect("read backup")
+            .expect("backup exists");
+        let previous_live =
+            std::fs::read_to_string(get_codex_config_path()).expect("capture takeover live config");
+
+        {
+            let conn = db.conn.lock().expect("lock database");
+            conn.execute_batch(
+                "CREATE TRIGGER reject_public_switch_commit
+                 BEFORE UPDATE OF is_current ON providers
+                 WHEN OLD.id = 'public-current' AND OLD.is_current = 1 AND NEW.is_current = 0
+                 BEGIN
+                   SELECT RAISE(ABORT, 'forced public switch commit failure');
+                 END;",
+            )
+            .expect("install switch failure trigger");
+        }
+
+        let error = switch_provider_with_automatic_routing_state(
+            state.clone(),
+            AppType::Codex,
+            "public-target".to_string(),
+        )
+        .await
+        .expect_err("provider commit must fail");
+        assert!(error.contains("forced public switch commit failure"));
+
+        assert_eq!(
+            db.get_current_provider("codex")
+                .expect("db current")
+                .as_deref(),
+            Some("public-current")
+        );
+        assert_eq!(
+            crate::settings::get_current_provider(&AppType::Codex).as_deref(),
+            Some("public-current")
+        );
+        assert!(
+            db.get_proxy_config_for_app("codex")
+                .await
+                .expect("routing after failed switch")
+                .enabled
+        );
+        assert!(
+            !state.proxy_service.is_running().await,
+            "failed public switch must restore the stopped process state"
+        );
+        let restored_global_proxy_config = db
+            .get_global_proxy_config()
+            .await
+            .expect("read restored global proxy config");
+        assert_eq!(
+            restored_global_proxy_config.proxy_enabled,
+            previous_global_proxy_config.proxy_enabled
+        );
+        assert_eq!(
+            restored_global_proxy_config.listen_address,
+            previous_global_proxy_config.listen_address
+        );
+        assert_eq!(
+            restored_global_proxy_config.listen_port,
+            previous_global_proxy_config.listen_port
+        );
+        assert_eq!(
+            restored_global_proxy_config.enable_logging,
+            previous_global_proxy_config.enable_logging
+        );
+        let restored_backup = db
+            .get_live_backup("codex")
+            .await
+            .expect("read restored backup")
+            .expect("backup remains");
+        assert_eq!(
+            restored_backup.original_config,
+            previous_backup.original_config
+        );
+        let restored_live = std::fs::read_to_string(get_codex_config_path())
+            .expect("read restored takeover live config");
+        assert_eq!(restored_live, previous_live);
+
+        state
+            .proxy_service
+            .set_takeover_for_app("codex", false)
+            .await
+            .expect("disable takeover after test");
+        match original {
+            Some(v) => std::env::set_var("CC_SWITCH_TEST_HOME", v),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        crate::settings::reload_settings().expect("restore settings");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn failed_first_unlogged_codex_provider_add_leaves_no_state() {
+        let original = std::env::var_os("CC_SWITCH_TEST_HOME");
+        let home = tempfile::tempdir().expect("create test home");
+        std::env::set_var("CC_SWITCH_TEST_HOME", home.path());
+        crate::settings::reload_settings().expect("reload settings");
+        let db = Arc::new(Database::memory().expect("init db"));
+        {
+            let conn = db.conn.lock().expect("lock database");
+            conn.execute_batch(
+                "CREATE TRIGGER reject_first_provider_activation
+                 BEFORE UPDATE OF is_current ON providers
+                 WHEN NEW.is_current = 1
+                 BEGIN
+                   SELECT RAISE(ABORT, 'forced first-provider activation failure');
+                 END;",
+            )
+            .expect("install failure trigger");
+        }
+        let state = AppState::new(db.clone());
+        let mut first = provider(
+            json!({
+                "auth": {"OPENAI_API_KEY": "test-only-key"},
+                "config": "model_provider = \"third\"\nmodel = \"claude-test\"\n[model_providers.third]\nname = \"Third\"\nbase_url = \"https://example.invalid/v1\"\nwire_api = \"chat\"\n"
+            }),
+            Some("openai_chat"),
+        );
+        first.id = "failed-first-chat".to_string();
+
+        let error =
+            add_provider_with_automatic_routing_state(state.clone(), AppType::Codex, first, true)
+                .await
+                .expect_err("forced activation failure must abort add");
+        assert!(error.contains("forced first-provider activation failure"));
+        assert!(db
+            .get_all_providers("codex")
+            .expect("providers after rollback")
+            .is_empty());
+        assert_eq!(db.get_current_provider("codex").expect("db current"), None);
+        assert_eq!(crate::settings::get_current_provider(&AppType::Codex), None);
+        assert!(!get_codex_auth_path().exists());
+        assert!(!get_codex_config_path().exists());
+        assert!(!get_codex_model_catalog_path().exists());
+        assert!(
+            !db.get_proxy_config_for_app("codex")
+                .await
+                .expect("routing")
+                .enabled
+        );
+        assert!(!state.proxy_service.is_running().await);
+        assert!(db.get_live_backup("codex").await.expect("backup").is_none());
+
+        match original {
+            Some(v) => std::env::set_var("CC_SWITCH_TEST_HOME", v),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        crate::settings::reload_settings().expect("restore settings");
     }
 }
 

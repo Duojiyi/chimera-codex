@@ -98,8 +98,8 @@ fn write_ssot_skill(directory: &str) {
     .expect("write SKILL.md");
 }
 
-#[test]
-fn profile_snapshot_apply_roundtrip_restores_configuration() {
+#[tokio::test(flavor = "current_thread")]
+async fn profile_snapshot_apply_roundtrip_restores_configuration() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     let home = ensure_test_home();
@@ -209,6 +209,7 @@ fn profile_snapshot_apply_roundtrip_restores_configuration() {
 
     // ---- 应用项目 A（Claude 组）：只复原 Claude 侧 ----
     let (warnings, _) = ProfileService::apply(&state, &profile_a.id, ProfileScope::Claude)
+        .await
         .expect("apply profile A");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
@@ -278,8 +279,8 @@ fn profile_snapshot_apply_roundtrip_restores_configuration() {
     );
 }
 
-#[test]
-fn shared_profile_sides_are_isolated_and_mergeable() {
+#[tokio::test(flavor = "current_thread")]
+async fn shared_profile_sides_are_isolated_and_mergeable() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     let home = ensure_test_home();
@@ -323,6 +324,7 @@ fn shared_profile_sides_are_isolated_and_mergeable() {
 
     // 按 Codex 组应用：只动 codex 组的 current 标记，Claude 侧原样不动
     let (warnings, _) = ProfileService::apply(&state, &project.id, ProfileScope::Codex)
+        .await
         .expect("apply project on codex side");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
@@ -359,6 +361,7 @@ fn shared_profile_sides_are_isolated_and_mergeable() {
 
     // 同一共享项目在 Claude 页应用：该侧未拍过快照 → 不动配置、标记 current、返回提示
     let (warnings, _) = ProfileService::apply(&state, &project.id, ProfileScope::Claude)
+        .await
         .expect("apply project on claude side");
     assert_eq!(warnings.len(), 1, "uncaptured side yields one hint");
     assert!(warnings[0].contains("no claude configuration captured"));
@@ -392,8 +395,8 @@ fn shared_profile_sides_are_isolated_and_mergeable() {
     );
 }
 
-#[test]
-fn profile_apply_reports_dangling_references_and_continues() {
+#[tokio::test(flavor = "current_thread")]
+async fn profile_apply_reports_dangling_references_and_continues() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     let _home = ensure_test_home();
@@ -423,6 +426,7 @@ fn profile_apply_reports_dangling_references_and_continues() {
     state.db.save_profile(&profile).expect("save profile");
 
     let (warnings, _) = ProfileService::apply(&state, "dangling-test", ProfileScope::Claude)
+        .await
         .expect("apply succeeds");
     assert_eq!(
         warnings.len(),
@@ -487,8 +491,8 @@ fn clear_current_profile_only_clears_scoped_marker() {
     );
 }
 
-#[test]
-fn switching_profile_autosaves_previous_profile_state() {
+#[tokio::test(flavor = "current_thread")]
+async fn switching_profile_autosaves_previous_profile_state() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     let home = ensure_test_home();
@@ -540,6 +544,7 @@ fn switching_profile_autosaves_previous_profile_state() {
     let project_a = ProfileService::create(&state, "Project A", ProfileScope::Claude)
         .expect("create project A");
     let (warnings, _) = ProfileService::apply(&state, &project_a.id, ProfileScope::Claude)
+        .await
         .expect("apply project A");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
@@ -554,6 +559,7 @@ fn switching_profile_autosaves_previous_profile_state() {
 
     // ---- 从 A 切换到 B：自动把当前状态 Y 保存到 A，再加载 B 的 Y ----
     let (warnings, _) = ProfileService::apply(&state, &project_b.id, ProfileScope::Claude)
+        .await
         .expect("switch to project B");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
@@ -595,6 +601,7 @@ fn switching_profile_autosaves_previous_profile_state() {
     PromptService::enable_prompt(&state, AppType::Claude, "pr1").expect("enable pr1");
 
     let (warnings, _) = ProfileService::apply(&state, &project_a.id, ProfileScope::Claude)
+        .await
         .expect("switch back to project A");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
@@ -643,24 +650,22 @@ fn switching_profile_autosaves_previous_profile_state() {
     assert_eq!(payload_b.prompts.claude.as_deref(), Some("pr1"));
 }
 
-#[test]
-fn profile_switch_auto_disables_takeover_before_apply() {
+#[tokio::test(flavor = "current_thread")]
+async fn profile_switch_preserves_takeover_and_hot_switches_provider() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
-    let home = ensure_test_home();
+    let _home = ensure_test_home();
 
     let state = create_test_state().expect("create test state");
 
     // 使用临时端口，避免测试机器端口冲突
-    futures::executor::block_on(async {
-        let mut proxy_config = state.db.get_proxy_config().await.expect("get proxy config");
-        proxy_config.listen_port = 0;
-        state
-            .db
-            .update_proxy_config(proxy_config)
-            .await
-            .expect("set ephemeral proxy port");
-    });
+    let mut proxy_config = state.db.get_proxy_config().await.expect("get proxy config");
+    proxy_config.listen_port = 0;
+    state
+        .db
+        .update_proxy_config(proxy_config)
+        .await
+        .expect("set ephemeral proxy port");
 
     // ---- 两个 Claude 供应商：custom1 与 custom2 ----
     let mut custom1 = claude_provider("custom1", "custom-key-1");
@@ -679,8 +684,10 @@ fn profile_switch_auto_disables_takeover_before_apply() {
 
     // 初始状态：custom1 + 代理接管
     ProviderService::switch(&state, AppType::Claude, "custom1").expect("switch to custom1");
-    let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
-    rt.block_on(state.proxy_service.set_takeover_for_app("claude", true))
+    state
+        .proxy_service
+        .set_takeover_for_app("claude", true)
+        .await
         .expect("enable claude takeover");
 
     let (proxy_enabled_before, _) = state.db.get_proxy_flags_sync("claude");
@@ -706,19 +713,20 @@ fn profile_switch_auto_disables_takeover_before_apply() {
         .save_profile(&project)
         .expect("save updated project");
 
-    // ---- 应用项目：应无条件自动关闭接管，再切换到 custom2 ----
+    // ---- 应用项目：应在现有接管事务内热切换到 custom2 ----
     let (warnings, _) = ProfileService::apply(&state, &project.id, ProfileScope::Claude)
+        .await
         .expect("apply custom2 project");
     assert!(
         warnings.is_empty(),
         "switching project should not warn: {warnings:?}"
     );
 
-    // 接管已关闭
+    // 接管继续保持；Profile 不应先关闭再重开，从而避免 live 配置竞态。
     let (proxy_enabled_after, _) = state.db.get_proxy_flags_sync("claude");
     assert!(
-        !proxy_enabled_after,
-        "proxy takeover should be auto-disabled before applying profile"
+        proxy_enabled_after,
+        "proxy takeover should remain enabled during a Claude profile hot switch"
     );
 
     // 当前供应商已切到 custom2
@@ -732,25 +740,33 @@ fn profile_switch_auto_disables_takeover_before_apply() {
         "current provider should be custom2"
     );
 
-    // live 配置应指向 custom2 的真实 endpoint，而非代理地址
-    let settings_path = home.join(".claude/settings.json");
-    let settings: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&settings_path).expect("read settings"))
-            .expect("parse settings");
-    let base_url = settings
-        .get("env")
-        .and_then(|e| e.get("ANTHROPIC_BASE_URL"))
-        .and_then(|v| v.as_str());
+    // live 仍由本地路由拥有；真实 custom2 配置被原子更新到备份。
+    assert!(
+        state
+            .proxy_service
+            .detect_takeover_in_live_config_for_app(&AppType::Claude),
+        "live config should remain owned by the local proxy"
+    );
+    let backup = state
+        .db
+        .get_live_backup(AppType::Claude.as_str())
+        .await
+        .expect("read Claude live backup")
+        .expect("Claude live backup exists");
+    let backup: serde_json::Value =
+        serde_json::from_str(&backup.original_config).expect("parse Claude backup");
     assert_eq!(
-        base_url,
-        Some("https://api.test"),
-        "live config should point to real endpoint after auto-disable"
+        backup
+            .pointer("/env/ANTHROPIC_AUTH_TOKEN")
+            .and_then(|value| value.as_str()),
+        Some("custom-key-2"),
+        "backup should track the profile-selected provider"
     );
 }
 
 #[cfg(any(target_os = "macos", windows))]
-#[test]
-fn claude_desktop_profile_scope_is_independent() {
+#[tokio::test(flavor = "current_thread")]
+async fn claude_desktop_profile_scope_is_independent() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     let _home = ensure_test_home();
@@ -790,6 +806,7 @@ fn claude_desktop_profile_scope_is_independent() {
 
     // 应用 Desktop 项目：恢复 d1
     let (warnings, _) = ProfileService::apply(&state, &project.id, ProfileScope::ClaudeDesktop)
+        .await
         .expect("apply desktop profile");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
@@ -811,4 +828,98 @@ fn claude_desktop_profile_scope_is_independent() {
         Some(project.id.as_str()),
         "desktop scope marker set"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_profile_apply_finishes_as_one_complete_profile() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let home = ensure_test_home();
+    let state = create_test_state().expect("create test state");
+
+    let provider_a = claude_provider("profile-a-provider", "profile-a-token");
+    let provider_b = claude_provider("profile-b-provider", "profile-b-token");
+    state
+        .db
+        .save_provider(AppType::Claude.as_str(), &provider_a)
+        .expect("save provider A");
+    state
+        .db
+        .save_provider(AppType::Claude.as_str(), &provider_b)
+        .expect("save provider B");
+    state
+        .db
+        .set_current_provider(AppType::Claude.as_str(), &provider_a.id)
+        .expect("seed current provider");
+
+    let claude_dir = home.join(".claude");
+    fs::create_dir_all(&claude_dir).expect("create .claude dir");
+    fs::write(
+        claude_dir.join("settings.json"),
+        serde_json::to_string_pretty(&provider_a.settings_config).expect("serialize live config"),
+    )
+    .expect("seed live settings");
+
+    let make_profile = |id: &str, provider_id: &str| chimera_plus_plus_lib::Profile {
+        id: id.to_string(),
+        name: id.to_string(),
+        payload: serde_json::to_string(&json!({
+            "providers": {"claude": provider_id}
+        }))
+        .expect("serialize profile payload"),
+        sort_order: None,
+        created_at: Some(1_000),
+        updated_at: Some(1_000),
+    };
+    let profile_a = make_profile("profile-a", &provider_a.id);
+    let profile_b = make_profile("profile-b", &provider_b.id);
+    state.db.save_profile(&profile_a).expect("save profile A");
+    state.db.save_profile(&profile_b).expect("save profile B");
+
+    // Repeat the race so the test covers both scheduler orders. The shared
+    // profile lock guarantees that the final current-profile pointer, provider
+    // pointer and Live file all come from the same complete application.
+    for _ in 0..20 {
+        state
+            .db
+            .set_current_profile_id(ProfileScope::Claude.as_str(), None)
+            .expect("clear current profile");
+        let state_a = state.clone();
+        let state_b = state.clone();
+        let (result_a, result_b) = tokio::join!(
+            ProfileService::apply(&state_a, &profile_a.id, ProfileScope::Claude),
+            ProfileService::apply(&state_b, &profile_b.id, ProfileScope::Claude),
+        );
+        result_a.expect("apply profile A");
+        result_b.expect("apply profile B");
+
+        let current_profile = state
+            .db
+            .get_current_profile_id(ProfileScope::Claude.as_str())
+            .expect("read current profile")
+            .expect("current profile exists");
+        let expected_provider = match current_profile.as_str() {
+            "profile-a" => &provider_a,
+            "profile-b" => &provider_b,
+            other => panic!("unexpected current profile: {other}"),
+        };
+        assert_eq!(
+            state
+                .db
+                .get_current_provider(AppType::Claude.as_str())
+                .expect("read DB current provider")
+                .as_deref(),
+            Some(expected_provider.id.as_str()),
+            "current profile and provider must not come from different applies"
+        );
+        let live: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(claude_dir.join("settings.json")).expect("read live settings"),
+        )
+        .expect("parse live settings");
+        assert_eq!(
+            live["env"]["ANTHROPIC_AUTH_TOKEN"],
+            expected_provider.settings_config["env"]["ANTHROPIC_AUTH_TOKEN"],
+            "Live settings must match the profile recorded as current"
+        );
+    }
 }

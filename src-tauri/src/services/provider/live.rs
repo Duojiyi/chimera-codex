@@ -8,7 +8,9 @@ use serde_json::{json, Value};
 use toml_edit::{DocumentMut, Item, TableLike};
 
 use crate::app_config::AppType;
-use crate::codex_config::{get_codex_auth_path, get_codex_config_path};
+use crate::codex_config::{
+    get_codex_auth_path, get_codex_config_path, get_codex_model_catalog_path,
+};
 use crate::config::{delete_file, get_claude_settings_path, read_json_file, write_json_file};
 use crate::database::Database;
 use crate::error::AppError;
@@ -946,17 +948,104 @@ pub(crate) enum LiveSnapshot {
     Claude {
         settings: Option<Value>,
     },
+    ClaudeDesktop {
+        snapshot: crate::claude_desktop_config::ClaudeDesktopLiveSnapshot,
+    },
     Codex {
         auth: Option<Value>,
         config: Option<String>,
+        model_catalog: Option<String>,
     },
     Gemini {
         env: Option<HashMap<String, String>>,
         config: Option<Value>,
     },
+    GrokBuild {
+        config: Option<Value>,
+    },
 }
 
 impl LiveSnapshot {
+    /// Whether at least one physical Live file existed when this snapshot was
+    /// captured. `capture()` returns `Some` for every supported app even when
+    /// all of its files are absent, because that empty snapshot is still needed
+    /// to roll back a failed write by deleting newly-created files.
+    pub(crate) fn has_live_data(&self) -> bool {
+        match self {
+            Self::Claude { settings } => settings.is_some(),
+            Self::ClaudeDesktop { snapshot } => snapshot.has_live_data(),
+            Self::Codex {
+                auth,
+                config,
+                model_catalog,
+            } => auth.is_some() || config.is_some() || model_catalog.is_some(),
+            Self::Gemini { env, config } => env.is_some() || config.is_some(),
+            Self::GrokBuild { config } => config.is_some(),
+        }
+    }
+
+    pub(crate) fn capture(app_type: &AppType) -> Result<Option<Self>, AppError> {
+        match app_type {
+            AppType::Claude => {
+                let path = get_claude_settings_path();
+                let settings = path.exists().then(|| read_json_file(&path)).transpose()?;
+                Ok(Some(Self::Claude { settings }))
+            }
+            AppType::ClaudeDesktop => Ok(crate::claude_desktop_config::capture_live_snapshot()?
+                .map(|snapshot| Self::ClaudeDesktop { snapshot })),
+            AppType::Codex => {
+                let auth_path = get_codex_auth_path();
+                let config_path = get_codex_config_path();
+                let model_catalog_path = get_codex_model_catalog_path();
+                let auth = auth_path
+                    .exists()
+                    .then(|| read_json_file(&auth_path))
+                    .transpose()?;
+                let config = config_path
+                    .exists()
+                    .then(|| {
+                        std::fs::read_to_string(&config_path)
+                            .map_err(|e| AppError::io(&config_path, e))
+                    })
+                    .transpose()?;
+                let model_catalog = model_catalog_path
+                    .exists()
+                    .then(|| {
+                        std::fs::read_to_string(&model_catalog_path)
+                            .map_err(|e| AppError::io(&model_catalog_path, e))
+                    })
+                    .transpose()?;
+                Ok(Some(Self::Codex {
+                    auth,
+                    config,
+                    model_catalog,
+                }))
+            }
+            AppType::Gemini => {
+                use crate::gemini_config::{
+                    get_gemini_env_path, get_gemini_settings_path, read_gemini_env,
+                };
+                let env_path = get_gemini_env_path();
+                let settings_path = get_gemini_settings_path();
+                let env = env_path.exists().then(read_gemini_env).transpose()?;
+                let config = settings_path
+                    .exists()
+                    .then(|| read_json_file(&settings_path))
+                    .transpose()?;
+                Ok(Some(Self::Gemini { env, config }))
+            }
+            AppType::GrokBuild => {
+                let path = crate::grok_config::get_grok_config_path();
+                let config = path
+                    .exists()
+                    .then(crate::grok_config::read_grok_live_settings)
+                    .transpose()?;
+                Ok(Some(Self::GrokBuild { config }))
+            }
+            _ => Ok(None),
+        }
+    }
+
     #[allow(dead_code)]
     pub(crate) fn restore(&self) -> Result<(), AppError> {
         match self {
@@ -968,19 +1057,60 @@ impl LiveSnapshot {
                     delete_file(&path)?;
                 }
             }
-            LiveSnapshot::Codex { auth, config } => {
+            LiveSnapshot::ClaudeDesktop { snapshot } => {
+                snapshot.restore()?;
+            }
+            LiveSnapshot::Codex {
+                auth,
+                config,
+                model_catalog,
+            } => {
                 let auth_path = get_codex_auth_path();
                 let config_path = get_codex_config_path();
-                if let Some(value) = auth {
-                    write_json_file(&auth_path, value)?;
+                let model_catalog_path = get_codex_model_catalog_path();
+                // Restore every component independently. The catalog is
+                // written before config.toml during provider projection, so a
+                // failure restoring auth/config must not prevent us from at
+                // least restoring the old catalog and reducing split-brain.
+                let mut errors = Vec::new();
+                let auth_result = if let Some(value) = auth {
+                    write_json_file(&auth_path, value)
                 } else if auth_path.exists() {
-                    delete_file(&auth_path)?;
+                    delete_file(&auth_path)
+                } else {
+                    Ok(())
+                };
+                if let Err(error) = auth_result {
+                    errors.push(format!("auth.json: {error}"));
                 }
 
-                if let Some(text) = config {
-                    crate::config::write_text_file(&config_path, text)?;
+                let config_result = if let Some(text) = config {
+                    crate::config::write_text_file(&config_path, text)
                 } else if config_path.exists() {
-                    delete_file(&config_path)?;
+                    delete_file(&config_path)
+                } else {
+                    Ok(())
+                };
+                if let Err(error) = config_result {
+                    errors.push(format!("config.toml: {error}"));
+                }
+
+                let catalog_result = if let Some(text) = model_catalog {
+                    crate::config::write_text_file(&model_catalog_path, text)
+                } else if model_catalog_path.exists() {
+                    delete_file(&model_catalog_path)
+                } else {
+                    Ok(())
+                };
+                if let Err(error) = catalog_result {
+                    errors.push(format!("cc-switch-model-catalog.json: {error}"));
+                }
+
+                if !errors.is_empty() {
+                    return Err(AppError::Message(format!(
+                        "恢复 Codex Live 快照失败: {}",
+                        errors.join("；")
+                    )));
                 }
             }
             LiveSnapshot::Gemini { env, .. } => {
@@ -1005,6 +1135,14 @@ impl LiveSnapshot {
                         delete_file(&settings_path)?;
                     }
                     _ => {}
+                }
+            }
+            LiveSnapshot::GrokBuild { config } => {
+                let path = crate::grok_config::get_grok_config_path();
+                if let Some(config) = config {
+                    crate::grok_config::write_grok_live_settings(config)?;
+                } else if path.exists() {
+                    delete_file(&path)?;
                 }
             }
         }
@@ -1977,6 +2115,34 @@ pub fn remove_openclaw_provider_from_live(provider_id: &str) -> Result<(), AppEr
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    #[serial_test::serial]
+    fn codex_snapshot_restore_attempts_catalog_after_auth_failure() {
+        let original = std::env::var_os("CC_SWITCH_TEST_HOME");
+        let home = tempfile::tempdir().expect("create test home");
+        std::env::set_var("CC_SWITCH_TEST_HOME", home.path());
+        let auth_path = get_codex_auth_path();
+        let catalog_path = get_codex_model_catalog_path();
+        write_json_file(&auth_path, &json!({"OPENAI_API_KEY": "old-test-key"})).expect("seed auth");
+        crate::config::write_text_file(&catalog_path, "catalog-a").expect("seed A");
+        let snapshot = LiveSnapshot::capture(&AppType::Codex)
+            .expect("capture")
+            .expect("supported");
+        crate::config::write_text_file(&catalog_path, "catalog-b").expect("seed B");
+        std::fs::remove_file(&auth_path).expect("remove auth");
+        std::fs::create_dir_all(&auth_path).expect("block auth write");
+        let error = snapshot.restore().expect_err("auth restore fails");
+        assert!(error.to_string().contains("auth.json"));
+        assert_eq!(
+            std::fs::read_to_string(&catalog_path).expect("catalog"),
+            "catalog-a"
+        );
+        match original {
+            Some(v) => std::env::set_var("CC_SWITCH_TEST_HOME", v),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+    }
 
     #[test]
     fn kimi_for_coding_effective_settings_backfill_256k_context() {

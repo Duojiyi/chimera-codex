@@ -3,10 +3,13 @@ use crate::services::{ProxyService, UsageCache};
 use std::sync::Arc;
 
 /// 全局应用状态
+#[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Database>,
     pub proxy_service: ProxyService,
     pub usage_cache: Arc<UsageCache>,
+    /// Serializes an entire Profile application across UI, tray and deep links.
+    pub profile_apply_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppState {
@@ -18,6 +21,7 @@ impl AppState {
             db,
             proxy_service,
             usage_cache: Arc::new(UsageCache::new()),
+            profile_apply_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 }
