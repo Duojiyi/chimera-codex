@@ -126,8 +126,7 @@ export function GrokBuildProviderForm({
   );
   const [apiFormat, setApiFormat] = useState<CodexApiFormatSelection>(() => {
     const savedFormat = initialData?.meta?.apiFormat as
-      | CodexApiFormat
-      | undefined;
+      CodexApiFormat | undefined;
     if (savedFormat) return savedFormat;
     return initialData
       ? grokApiFormatFromApiBackend(initialConfig.apiBackend)
