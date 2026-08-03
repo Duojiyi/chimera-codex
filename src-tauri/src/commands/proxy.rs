@@ -19,20 +19,7 @@ pub async fn start_proxy_server(
 /// 停止代理服务器（仅停止服务，不恢复/清理 Live 接管状态）
 #[tauri::command]
 pub async fn stop_proxy_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let takeover = state.proxy_service.get_takeover_status().await?;
-    if takeover.claude
-        || takeover.codex
-        || takeover.gemini
-        || takeover.grokbuild
-        || takeover.opencode
-        || takeover.openclaw
-    {
-        return Err(
-            "仍有应用处于代理接管状态，请先在设置中关闭对应应用接管后再停止本地路由。".to_string(),
-        );
-    }
-
-    state.proxy_service.stop().await
+    state.proxy_service.stop_if_no_takeover().await
 }
 
 /// 停止代理服务器（恢复 Live 配置）
@@ -101,15 +88,27 @@ pub async fn get_global_proxy_config(
 /// 更新全局代理配置
 ///
 /// 更新统一的全局配置字段，会同时更新三行（claude/codex/gemini）
+pub(crate) async fn update_global_proxy_config_state(
+    state: &AppState,
+    config: GlobalProxyConfig,
+) -> Result<(), String> {
+    // Serialize with takeover/provider transactions. A failed provider switch
+    // restores this complete snapshot while holding the same lifecycle lock, so
+    // an overlapping settings save must not be overwritten by that rollback.
+    let _lifecycle_guard = state.proxy_service.lock_lifecycle().await;
+    state
+        .db
+        .update_global_proxy_config(config)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn update_global_proxy_config(
     state: tauri::State<'_, AppState>,
     config: GlobalProxyConfig,
 ) -> Result<(), String> {
-    let db = &state.db;
-    db.update_global_proxy_config(config)
-        .await
-        .map_err(|e| e.to_string())
+    update_global_proxy_config_state(state.inner(), config).await
 }
 
 /// 获取指定应用的代理配置
@@ -128,17 +127,32 @@ pub async fn get_proxy_config_for_app(
 
 /// 更新指定应用的代理配置
 ///
-/// 更新应用级配置（enabled、auto_failover、超时、熔断器等）
-#[tauri::command]
-pub async fn update_proxy_config_for_app(
-    state: tauri::State<'_, AppState>,
-    config: AppProxyConfig,
+/// 更新应用级配置（自动故障转移、超时、熔断器等）。`enabled` 由专用的
+/// `set_proxy_takeover_for_app` 事务独占管理，普通设置表单不得覆盖它。
+pub(crate) async fn update_proxy_config_for_app_state(
+    state: &AppState,
+    mut config: AppProxyConfig,
 ) -> Result<(), String> {
-    let db = &state.db;
     let app_type = config.app_type.clone();
+
+    // Keep one global lock order everywhere: lifecycle -> per-app. This keeps
+    // settings writes outside takeover/provider rollback windows.
+    let _lifecycle_guard = state.proxy_service.lock_lifecycle().await;
+    let _app_guard = state.proxy_service.lock_switch_for_app(&app_type).await;
+
+    // Frontend forms can remain open while automatic routing changes takeover.
+    // Preserve the serialized DB truth instead of accepting a stale payload.
+    config.enabled = state
+        .db
+        .get_proxy_config_for_app(&app_type)
+        .await
+        .map_err(|e| e.to_string())?
+        .enabled;
     let circuit_config = CircuitBreakerConfig::from(&config);
 
-    db.update_proxy_config_for_app(config)
+    state
+        .db
+        .update_proxy_config_for_app(config)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -146,6 +160,14 @@ pub async fn update_proxy_config_for_app(
         .proxy_service
         .update_circuit_breaker_config_for_app(&app_type, circuit_config)
         .await
+}
+
+#[tauri::command]
+pub async fn update_proxy_config_for_app(
+    state: tauri::State<'_, AppState>,
+    config: AppProxyConfig,
+) -> Result<(), String> {
+    update_proxy_config_for_app_state(state.inner(), config).await
 }
 
 async fn get_default_cost_multiplier_internal(
@@ -452,4 +474,148 @@ pub async fn get_circuit_breaker_stats(
     // 目前先返回 None，后续可以通过 ProxyService 暴露接口来实现
     let _ = (state, provider_id, app_type);
     Ok(None)
+}
+
+#[cfg(test)]
+mod config_write_tests {
+    use super::{update_global_proxy_config_state, update_proxy_config_for_app_state};
+    use crate::database::Database;
+    use crate::store::AppState;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn stale_app_config_payload_cannot_reenable_takeover() {
+        let db = Arc::new(Database::memory().expect("init db"));
+        let state = AppState::new(db.clone());
+        let mut submitted = db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("read current config");
+        assert!(!submitted.enabled);
+
+        submitted.enabled = true;
+        submitted.auto_failover_enabled = true;
+        submitted.max_retries = 9;
+        submitted.streaming_first_byte_timeout = 17;
+        submitted.circuit_failure_threshold = 8;
+
+        update_proxy_config_for_app_state(&state, submitted)
+            .await
+            .expect("save app settings");
+
+        let stored = db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("read stored config");
+        assert!(
+            !stored.enabled,
+            "ordinary settings save must preserve the serialized takeover state"
+        );
+        assert!(stored.auto_failover_enabled);
+        assert_eq!(stored.max_retries, 9);
+        assert_eq!(stored.streaming_first_byte_timeout, 17);
+        assert_eq!(stored.circuit_failure_threshold, 8);
+    }
+
+    #[tokio::test]
+    async fn global_config_write_waits_for_lifecycle_transaction() {
+        let db = Arc::new(Database::memory().expect("init db"));
+        let state = AppState::new(db.clone());
+        let lifecycle_guard = state.proxy_service.lock_lifecycle().await;
+        let mut submitted = db
+            .get_global_proxy_config()
+            .await
+            .expect("read global config");
+        submitted.proxy_enabled = !submitted.proxy_enabled;
+        submitted.listen_port = 32123;
+        submitted.enable_logging = !submitted.enable_logging;
+
+        let task_state = state.clone();
+        let task =
+            tokio::spawn(
+                async move { update_global_proxy_config_state(&task_state, submitted).await },
+            );
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(
+            !task.is_finished(),
+            "global settings write must wait for lifecycle rollback windows"
+        );
+
+        drop(lifecycle_guard);
+        task.await
+            .expect("join global config update")
+            .expect("update global config");
+        let stored = db
+            .get_global_proxy_config()
+            .await
+            .expect("read updated global config");
+        assert_eq!(stored.listen_port, 32123);
+    }
+
+    #[tokio::test]
+    async fn app_config_write_waits_for_lifecycle_transaction() {
+        let db = Arc::new(Database::memory().expect("init db"));
+        let state = AppState::new(db.clone());
+        let lifecycle_guard = state.proxy_service.lock_lifecycle().await;
+        let mut submitted = db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("read app config");
+        submitted.max_retries = 11;
+
+        let task_state = state.clone();
+        let task =
+            tokio::spawn(
+                async move { update_proxy_config_for_app_state(&task_state, submitted).await },
+            );
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(
+            !task.is_finished(),
+            "app settings write must wait for lifecycle rollback windows"
+        );
+
+        drop(lifecycle_guard);
+        task.await
+            .expect("join app config update")
+            .expect("update app config");
+        let stored = db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("read updated app config");
+        assert_eq!(stored.max_retries, 11);
+    }
+
+    #[tokio::test]
+    async fn app_config_write_waits_for_per_app_switch_transaction() {
+        let db = Arc::new(Database::memory().expect("init db"));
+        let state = AppState::new(db.clone());
+        let app_guard = state.proxy_service.lock_switch_for_app("codex").await;
+        let mut submitted = db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("read app config");
+        submitted.max_retries = 13;
+
+        let task_state = state.clone();
+        let task =
+            tokio::spawn(
+                async move { update_proxy_config_for_app_state(&task_state, submitted).await },
+            );
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(
+            !task.is_finished(),
+            "app settings write must wait for the per-app provider transaction"
+        );
+
+        drop(app_guard);
+        task.await
+            .expect("join app config update")
+            .expect("update app config");
+        let stored = db
+            .get_proxy_config_for_app("codex")
+            .await
+            .expect("read updated app config");
+        assert_eq!(stored.max_retries, 13);
+    }
 }

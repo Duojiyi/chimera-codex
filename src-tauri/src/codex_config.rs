@@ -1869,6 +1869,7 @@ pub fn apply_codex_official_proxy_route(
 }
 
 /// Whether a live Codex config is the official route projected by CC Switch.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn codex_config_has_official_proxy_route(config_text: &str) -> bool {
     if !config_text.contains(CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID) {
         return false;
@@ -1883,6 +1884,45 @@ pub fn codex_config_has_official_proxy_route(config_text: &str) -> bool {
         })
         .as_deref()
         == Some(CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID)
+}
+
+/// Whether the active official proxy route has the complete structure emitted
+/// by CC Switch and its base URL satisfies the caller's ownership predicate.
+/// A reserved provider id by itself is not sufficient proof of ownership.
+pub fn codex_config_has_owned_official_proxy_route(
+    config_text: &str,
+    base_url_matches: impl Fn(&str) -> bool,
+) -> bool {
+    let Ok(doc) = config_text.parse::<DocumentMut>() else {
+        return false;
+    };
+    if doc.get("model_provider").and_then(|item| item.as_str())
+        != Some(CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID)
+    {
+        return false;
+    }
+
+    doc.get("model_providers")
+        .and_then(|item| item.as_table())
+        .and_then(|providers| providers.get(CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID))
+        .and_then(|item| item.as_table())
+        .is_some_and(|table| {
+            table.len() == 5
+                && table.get("name").and_then(|item| item.as_str()) == Some("OpenAI")
+                && table
+                    .get("requires_openai_auth")
+                    .and_then(|item| item.as_bool())
+                    == Some(true)
+                && table
+                    .get("supports_websockets")
+                    .and_then(|item| item.as_bool())
+                    == Some(false)
+                && table.get("wire_api").and_then(|item| item.as_str()) == Some("responses")
+                && table
+                    .get("base_url")
+                    .and_then(|item| item.as_str())
+                    .is_some_and(base_url_matches)
+        })
 }
 
 /// Remove only the official takeover route owned by CC Switch. This is a

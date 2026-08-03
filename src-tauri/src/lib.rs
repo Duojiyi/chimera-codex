@@ -2069,17 +2069,18 @@ pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
         for app_type in apps_to_restore {
             let app_name = app_type.as_str();
             match proxy_service
-                .restore_live_config_for_app_with_fallback_inner(&app_type)
+                .recover_owned_live_config_for_app(&app_type)
                 .await
             {
-                Ok(()) => {
-                    if let Err(error) = state.db.delete_live_backup(app_name).await {
-                        log::error!("退出时删除 {app_name} Live 备份失败: {error}");
-                    }
+                Ok(restored) => {
                     if let Err(error) = state.db.clear_provider_health_for_app(app_name).await {
                         log::warn!("退出时清理 {app_name} 健康状态失败: {error}");
                     }
-                    log::info!("退出时已恢复 {app_name} Live 配置");
+                    if restored {
+                        log::info!("退出时已恢复 {app_name} Live 配置");
+                    } else {
+                        log::info!("退出时保留 {app_name} 当前 Live 配置并清理孤立备份");
+                    }
                 }
                 Err(error) => log::error!("退出时恢复 {app_name} Live 配置失败: {error}"),
             }
@@ -2135,19 +2136,14 @@ async fn recover_product_managed_live_configs(state: &store::AppState) {
             continue;
         }
 
-        log::warn!("检测到 {app_name} 接管残留，正在恢复 Live 配置...");
+        log::warn!("检测到 {app_name} 接管或备份残留，正在安全核验 Live 路由所有权...");
         match state
             .proxy_service
-            .restore_live_config_for_app_with_fallback_inner(&app_type)
+            .recover_owned_live_config_for_app(&app_type)
             .await
         {
-            Ok(()) => {
-                if let Err(error) = state.db.delete_live_backup(app_name).await {
-                    log::error!("删除 {app_name} Live 备份失败: {error}");
-                } else {
-                    log::info!("{app_name} Live 配置已恢复");
-                }
-            }
+            Ok(true) => log::info!("{app_name} Live 配置已恢复"),
+            Ok(false) => log::info!("{app_name} 当前 Live 未被本地代理接管，已保留并清理孤立备份"),
             Err(error) => log::error!("恢复 {app_name} Live 配置失败: {error}"),
         }
     }
