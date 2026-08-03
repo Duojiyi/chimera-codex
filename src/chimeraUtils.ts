@@ -76,9 +76,13 @@ export function resolveCurrentProvider(
   // When Chimera has taken proxy takeover, the live endpoint is 127.0.0.1:PORT.
   // No saved provider will ever match that address, so fall back to the stored
   // selection rather than returning { provider: null, source: "external" }.
+  // The endpoint may carry a protocol prefix (e.g. "http://127.0.0.1:12345")
+  // so we check both the bare-host and URL forms.
   const isLocalProxy =
     liveEndpoint.startsWith("127.0.0.1") ||
-    liveEndpoint.startsWith("localhost");
+    liveEndpoint.startsWith("localhost") ||
+    liveEndpoint.includes("://127.0.0.1") ||
+    liveEndpoint.includes("://localhost");
   if (isLocalProxy && stored) {
     return { provider: stored, source: "stored" };
   }
