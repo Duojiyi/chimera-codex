@@ -73,6 +73,16 @@ export function resolveCurrentProvider(
   const liveEndpoint = normalizeEndpoint(extractCodexBaseUrl(config));
   const liveModel = extractCodexModelName(config) ?? "";
 
+  // When Chimera has taken proxy takeover, the live endpoint is 127.0.0.1:PORT.
+  // No saved provider will ever match that address, so fall back to the stored
+  // selection rather than returning { provider: null, source: "external" }.
+  const isLocalProxy =
+    liveEndpoint.startsWith("127.0.0.1") ||
+    liveEndpoint.startsWith("localhost");
+  if (isLocalProxy && stored) {
+    return { provider: stored, source: "stored" };
+  }
+
   const exact = providers.find((provider) => {
     const candidate = String(provider.settingsConfig?.config ?? "");
     const endpoint = normalizeEndpoint(extractCodexBaseUrl(candidate));
