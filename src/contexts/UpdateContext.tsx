@@ -8,6 +8,7 @@ import React, {
 } from "react";
 import type { UpdateInfo } from "../lib/updater";
 import { checkForUpdate } from "../lib/updater";
+import { settingsApi } from "@/lib/api/settings";
 import { isTauri } from "@tauri-apps/api/core";
 
 interface UpdateContextValue {
@@ -17,6 +18,10 @@ interface UpdateContextValue {
   isChecking: boolean;
   error: string | null;
   lastCheckedAt: number | null;
+  /** 已在后台下载完成、可直接安装的版本号；未暂存时为 null。 */
+  stagedVersion: string | null;
+  /** 后台暂存是否正在进行。 */
+  isStaging: boolean;
 
   // 提示状态
   isDismissed: boolean;
@@ -33,6 +38,8 @@ const DEFAULT_UPDATE_CONTEXT: UpdateContextValue = {
   isChecking: false,
   error: null,
   lastCheckedAt: null,
+  stagedVersion: null,
+  isStaging: false,
   isDismissed: false,
   dismissUpdate: () => undefined,
   checkUpdate: async () => false,
@@ -41,7 +48,19 @@ const DEFAULT_UPDATE_CONTEXT: UpdateContextValue = {
 
 const UpdateContext = createContext<UpdateContextValue>(DEFAULT_UPDATE_CONTEXT);
 
-const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+/** How stale a successful check may get before we run another one. */
+export const UPDATE_CHECK_INTERVAL_MS = 15 * 60 * 1000;
+
+/**
+ * How often to *evaluate* staleness. Deliberately much shorter than the
+ * interval itself: when the timer period equals the staleness threshold, a few
+ * milliseconds of timer drift make the tick land just before the threshold, it
+ * skips, and the next opportunity is a whole period later — so a 15-minute
+ * interval silently becomes 30. Polling a coarse condition on a fine timer
+ * keeps the real spacing at ~15 min. Each tick is an integer comparison unless
+ * a check is actually due, so this costs nothing.
+ */
+export const UPDATE_CHECK_POLL_MS = 60 * 1000;
 
 export function UpdateProvider({ children }: { children: React.ReactNode }) {
   const DISMISSED_VERSION_KEY = "ccswitch:update:dismissedVersion";
@@ -57,6 +76,8 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     return Number.isFinite(stored) && stored > 0 ? stored : null;
   });
   const [isDismissed, setIsDismissed] = useState(false);
+  const [stagedVersion, setStagedVersion] = useState<string | null>(null);
+  const [isStaging, setIsStaging] = useState(false);
 
   // 从 localStorage 读取已关闭的版本
   useEffect(() => {
@@ -143,6 +164,50 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     localStorage.removeItem(LEGACY_DISMISSED_KEY);
   }, []);
 
+  /**
+   * Last version we kicked off staging for. The dependency array already stops
+   * repeat runs for an unchanged version, so this exists for StrictMode's
+   * deliberate double-invoke in dev — without it that fires two downloads.
+   * (The backend would dedupe the second one, but not before a round trip.)
+   */
+  const stageAttemptedRef = useRef<string | null>(null);
+
+  // Pre-download in the background as soon as a version is known, so pressing
+  // 立即更新 installs immediately instead of waiting on a ~13 MB download.
+  //
+  // Deliberately not gated on isDismissed: dismissing means "stop nagging me",
+  // not "never install". Staging anyway means the install is instant whenever
+  // they do choose to. It costs one download per version, not per check.
+  useEffect(() => {
+    if (!isTauri()) return;
+    const version = updateInfo?.availableVersion;
+    if (!hasUpdate || !version) return;
+    if (stagedVersion === version) return;
+    if (stageAttemptedRef.current === version) return;
+
+    stageAttemptedRef.current = version;
+    let cancelled = false;
+    setIsStaging(true);
+    settingsApi
+      .stageUpdateDownload()
+      .then((staged) => {
+        if (cancelled) return;
+        setStagedVersion(staged);
+      })
+      .catch((err) => {
+        // A failed pre-download is not user-facing: the install path falls back
+        // to downloading normally, so this only costs the head start.
+        console.error("预下载更新失败:", err);
+      })
+      .finally(() => {
+        if (!cancelled) setIsStaging(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hasUpdate, updateInfo?.availableVersion, stagedVersion]);
+
   // Check shortly after launch and periodically while the app remains open.
   useEffect(() => {
     if (!isTauri()) return;
@@ -158,7 +223,7 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     const timer = setTimeout(() => {
       checkUpdate().catch(console.error);
     }, 1000);
-    const interval = window.setInterval(checkIfDue, UPDATE_CHECK_INTERVAL_MS);
+    const interval = window.setInterval(checkIfDue, UPDATE_CHECK_POLL_MS);
     window.addEventListener("focus", checkIfDue);
     document.addEventListener("visibilitychange", checkIfDue);
 
@@ -176,6 +241,8 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     isChecking,
     error,
     lastCheckedAt,
+    stagedVersion,
+    isStaging,
     isDismissed,
     dismissUpdate,
     checkUpdate,

@@ -57,6 +57,14 @@ export const settingsApi = {
     return await invoke("install_update_and_restart");
   },
 
+  /**
+   * 后台下载并暂存更新包，返回已暂存的版本号（无更新时为 null）。
+   * 之后调用 installUpdateAndRestart 会直接复用这份字节，跳过下载。
+   */
+  async stageUpdateDownload(): Promise<string | null> {
+    return await invoke("stage_update_download");
+  },
+
   async checkUpdates(): Promise<void> {
     await invoke("check_for_updates");
   },
