@@ -628,6 +628,7 @@ export default function ChimeraApp() {
       selectedProvider?.category === "official";
     try {
       await providersApi.switch(id, "codex");
+      setCurrentId(id);
       const [, latestProcess] = await Promise.all([
         loadProviders(),
         loadCodexProcess(),
