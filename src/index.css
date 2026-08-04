@@ -60,43 +60,36 @@
   }
 }
 
+/* glass → solid panel surface (register-product: no glassmorphism default) */
 .glass {
-  background: rgba(255, 255, 255, 0.7);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: var(--panel, hsl(var(--background)));
+  border: 1px solid var(--line, hsl(var(--border)));
 }
 
 .dark .glass {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
 }
 
 .glass-card {
-  background: rgba(255, 255, 255, 0.8);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: var(--panel, hsl(var(--background)));
+  border: 1px solid var(--line, hsl(var(--border)));
+  border-radius: var(--r-lg, 12px);
 }
 
 .dark .glass-card {
-  background: linear-gradient(
-    145deg,
-    rgba(255, 255, 255, 0.05) 0%,
-    rgba(255, 255, 255, 0.01) 100%
-  );
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
 }
 
 .glass-card-active {
-  background: rgba(59, 130, 246, 0.08);
-  border: 1px solid rgba(59, 130, 246, 0.4);
+  background: hsl(var(--primary) / 0.06);
+  border: 1px solid hsl(var(--primary) / 0.35);
 }
 
 .dark .glass-card-active {
-  background: rgba(59, 130, 246, 0.12);
-  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: hsl(var(--primary) / 0.1);
+  border: 1px solid hsl(var(--primary) / 0.25);
 }
 
 .glass-header {

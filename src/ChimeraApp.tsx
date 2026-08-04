@@ -45,7 +45,7 @@ import {
 } from "recharts";
 import type {
   ClaudeApiKeyField,
-  CodexApiFormat,
+  CodexApiFormatSelection,
   CodexCatalogModel,
   Provider,
 } from "@/types";
@@ -257,10 +257,12 @@ function providerDraft(provider?: Provider | null, suggestedName?: string) {
     unknown
   >;
   const meta = provider?.meta ?? {};
-  const apiFormat: CodexApiFormat =
-    meta.apiFormat === "openai_chat" || meta.apiFormat === "anthropic"
+  const apiFormat: CodexApiFormatSelection =
+    meta.apiFormat === "openai_chat" ||
+    meta.apiFormat === "anthropic" ||
+    meta.apiFormat === "openai_responses"
       ? meta.apiFormat
-      : "openai_responses";
+      : "auto"; // null/undefined → 自动检测模式
   const anthropicAuthField: ClaudeApiKeyField =
     meta.apiKeyField === "ANTHROPIC_API_KEY"
       ? "ANTHROPIC_API_KEY"
@@ -774,7 +776,10 @@ export default function ChimeraApp() {
       category: "custom",
       meta: {
         ...editor.original?.meta,
-        apiFormat: editor.apiFormat,
+        apiFormat:
+          editor.apiFormat === "auto"
+            ? undefined // 不持久化 auto，让运行时检测决定
+            : editor.apiFormat,
         apiKeyField:
           editor.apiFormat === "anthropic"
             ? editor.anthropicAuthField
@@ -2466,21 +2471,25 @@ function ProviderEditor({
               <select
                 name="provider-api-format"
                 value={editor.apiFormat}
-                onChange={(event) => patch("apiFormat", event.target.value)}
+                onChange={(event) =>
+                  patch(
+                    "apiFormat",
+                    event.target.value as CodexApiFormatSelection,
+                  )
+                }
               >
-                <option value="openai_responses">
-                  Responses（原生，推荐）
-                </option>
+                <option value="auto">自动检测（首次失败时自动切换）</option>
+                <option value="openai_responses">Responses（明确指定）</option>
                 <option value="openai_chat">
-                  Chat Completions（需路由接管）
+                  Chat Completions（明确指定，需路由接管）
                 </option>
                 <option value="anthropic">
-                  Anthropic Messages（需路由接管）
+                  Anthropic Messages（明确指定，需路由接管）
                 </option>
               </select>
               <small>
-                Responses 可直连；Chat 与 Anthropic Messages 由本地路由转换为
-                Codex 所需格式。
+                自动：先尝试
+                Responses，失败后自动切换并记住选择。明确指定时强制使用所选格式。
               </small>
             </label>
             <div className="advanced-grid">

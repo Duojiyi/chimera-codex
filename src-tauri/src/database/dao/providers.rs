@@ -330,6 +330,40 @@ impl Database {
         Ok(())
     }
 
+    /// 更新 provider meta 中的 api_format 字段。
+    ///
+    /// 由 Codex 自动协议检测在运行时写入，以便进程重启后仍能直接走 Chat 路由。
+    /// 读取现有 meta → 更新单字段 → 写回，避免破坏其他 meta 字段。
+    pub fn update_provider_meta_api_format(
+        &self,
+        app_type: &str,
+        provider_id: &str,
+        api_format: &str,
+    ) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+
+        let meta_str: String = conn
+            .query_row(
+                "SELECT meta FROM providers WHERE id = ?1 AND app_type = ?2",
+                params![provider_id, app_type],
+                |row| row.get(0),
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
+        let mut meta: ProviderMeta = serde_json::from_str(&meta_str).unwrap_or_default();
+        meta.api_format = Some(api_format.to_string());
+        let new_meta =
+            serde_json::to_string(&meta).map_err(|e| AppError::Database(e.to_string()))?;
+
+        conn.execute(
+            "UPDATE providers SET meta = ?1 WHERE id = ?2 AND app_type = ?3",
+            params![new_meta, provider_id, app_type],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
     pub fn add_custom_endpoint(
         &self,
         app_type: &str,

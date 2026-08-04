@@ -807,6 +807,14 @@ async fn handle_responses_for_app(
         RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?;
     let endpoint = endpoint_with_query(&uri, "/responses");
 
+    // 检查运行时自动协议检测缓存：若之前已成功检测到 Chat 模式，注入 api_format 以跳过重试开销
+    {
+        let cache = state.codex_wire_api_auto.read().await;
+        if let Some(auto_fmt) = cache.get(&ctx.provider.id).cloned() {
+            super::providers::apply_codex_auto_detected_api_format(&mut ctx.provider, &auto_fmt);
+        }
+    }
+
     let is_stream = body
         .get("stream")
         .and_then(|v| v.as_bool())
@@ -816,6 +824,25 @@ async fn handle_responses_for_app(
     // {namespace, name} map used to restore the native Responses upstream's
     // function-call names (see the namespace-restore dispatch below).
     let namespace_restore_map = transform_codex_responses_namespace::namespace_restore_map(&body);
+
+    // 若符合自动检测条件，保留用于 Chat fallback 重试的副本（Bytes/HeaderMap/Extensions clone 均廉价）
+    let eligible_for_chat_auto =
+        super::providers::codex_eligible_for_chat_auto_detect(&ctx.provider, &endpoint);
+    let method_for_retry = if eligible_for_chat_auto {
+        Some(method.clone())
+    } else {
+        None
+    };
+    let headers_for_retry = if eligible_for_chat_auto {
+        Some(headers.clone())
+    } else {
+        None
+    };
+    let extensions_for_retry = if eligible_for_chat_auto {
+        Some(extensions.clone())
+    } else {
+        None
+    };
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
@@ -835,6 +862,95 @@ async fn handle_responses_for_app(
             if let Some(provider) = err.provider.take() {
                 ctx.provider = provider;
             }
+
+            // Responses 端点转发失败 → 尝试 Chat Completions 自动回退
+            // 仅在满足自动检测条件时执行（未显式配置 api_format，URL 未指向 Chat 端点）
+            if eligible_for_chat_auto {
+                if let (Some(m2), Some(h2), Some(ext2)) =
+                    (method_for_retry, headers_for_retry, extensions_for_retry)
+                {
+                    // 重新解析 body（body_bytes 未被 move，Bytes 引用计数克隆廉价）
+                    match serde_json::from_slice::<Value>(&body_bytes) {
+                        Ok(body2) => {
+                            let tool_ctx2 =
+                                transform_codex_chat::build_codex_tool_context_from_request(&body2);
+                            super::providers::apply_codex_auto_detected_api_format(
+                                &mut ctx.provider,
+                                "openai_chat",
+                            );
+
+                            let forwarder2 = ctx.create_forwarder(&state);
+                            match forwarder2
+                                .forward_with_retry(
+                                    &app_type,
+                                    m2,
+                                    &endpoint,
+                                    body2,
+                                    h2,
+                                    ext2,
+                                    ctx.get_providers(),
+                                )
+                                .await
+                            {
+                                Ok(mut result2) => {
+                                    // Chat 回退成功 → 异步持久化检测结果，不阻塞当前响应
+                                    let provider_id = ctx.provider.id.clone();
+                                    let app_type_str_owned = app_type_str.to_string();
+                                    let db = state.db.clone();
+                                    let cache_arc = state.codex_wire_api_auto.clone();
+                                    tokio::spawn(async move {
+                                        cache_arc
+                                            .write()
+                                            .await
+                                            .insert(provider_id.clone(), "openai_chat".to_string());
+                                        if let Err(e) = db.update_provider_meta_api_format(
+                                            &app_type_str_owned,
+                                            &provider_id,
+                                            "openai_chat",
+                                        ) {
+                                            log::warn!(
+                                                "[Codex] 自动协议检测持久化失败 (provider={}): {e}",
+                                                provider_id
+                                            );
+                                        } else {
+                                            log::info!(
+                                                "[Codex] 自动协议检测: provider={} 已切换至 Chat Completions 并持久化",
+                                                provider_id
+                                            );
+                                        }
+                                    });
+
+                                    let connection_guard2 = result2.connection_guard.take();
+                                    ctx.outbound_model = result2.outbound_model.take();
+                                    ctx.provider = result2.provider;
+                                    let response2 = result2.response;
+                                    return handle_codex_chat_to_responses_transform(
+                                        response2,
+                                        &ctx,
+                                        &state,
+                                        is_stream,
+                                        connection_guard2,
+                                        tool_ctx2,
+                                    )
+                                    .await;
+                                }
+                                Err(_) => {
+                                    // Chat 也失败 → 还原注入的 api_format，走原始 Responses 错误路径
+                                    if let Some(meta) = ctx.provider.meta.as_mut() {
+                                        meta.api_format = None;
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "[Codex] 自动协议检测：重解析 body 失败，跳过 Chat 回退: {e}"
+                            );
+                        }
+                    }
+                }
+            }
+
             log_forward_error(&state, &ctx, is_stream, &err.error);
             return build_codex_proxy_error_response(&ctx, &endpoint, &err.error);
         }
@@ -944,12 +1060,38 @@ async fn handle_responses_compact_for_app(
         RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?;
     let endpoint = endpoint_with_query(&uri, "/responses/compact");
 
+    // 检查运行时自动协议检测缓存
+    {
+        let cache = state.codex_wire_api_auto.read().await;
+        if let Some(auto_fmt) = cache.get(&ctx.provider.id).cloned() {
+            super::providers::apply_codex_auto_detected_api_format(&mut ctx.provider, &auto_fmt);
+        }
+    }
+
     let is_stream = body
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     let codex_tool_context = transform_codex_chat::build_codex_tool_context_from_request(&body);
     let namespace_restore_map = transform_codex_responses_namespace::namespace_restore_map(&body);
+
+    let eligible_for_chat_auto =
+        super::providers::codex_eligible_for_chat_auto_detect(&ctx.provider, &endpoint);
+    let method_for_retry = if eligible_for_chat_auto {
+        Some(method.clone())
+    } else {
+        None
+    };
+    let headers_for_retry = if eligible_for_chat_auto {
+        Some(headers.clone())
+    } else {
+        None
+    };
+    let extensions_for_retry = if eligible_for_chat_auto {
+        Some(extensions.clone())
+    } else {
+        None
+    };
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
@@ -969,6 +1111,83 @@ async fn handle_responses_compact_for_app(
             if let Some(provider) = err.provider.take() {
                 ctx.provider = provider;
             }
+
+            if eligible_for_chat_auto {
+                if let (Some(m2), Some(h2), Some(ext2)) =
+                    (method_for_retry, headers_for_retry, extensions_for_retry)
+                {
+                    match serde_json::from_slice::<Value>(&body_bytes) {
+                        Ok(body2) => {
+                            let tool_ctx2 =
+                                transform_codex_chat::build_codex_tool_context_from_request(&body2);
+                            super::providers::apply_codex_auto_detected_api_format(
+                                &mut ctx.provider,
+                                "openai_chat",
+                            );
+                            let forwarder2 = ctx.create_forwarder(&state);
+                            match forwarder2
+                                .forward_with_retry(
+                                    &app_type,
+                                    m2,
+                                    &endpoint,
+                                    body2,
+                                    h2,
+                                    ext2,
+                                    ctx.get_providers(),
+                                )
+                                .await
+                            {
+                                Ok(mut result2) => {
+                                    let provider_id = ctx.provider.id.clone();
+                                    let app_type_str_owned = app_type_str.to_string();
+                                    let db = state.db.clone();
+                                    let cache_arc = state.codex_wire_api_auto.clone();
+                                    tokio::spawn(async move {
+                                        cache_arc
+                                            .write()
+                                            .await
+                                            .insert(provider_id.clone(), "openai_chat".to_string());
+                                        if let Err(e) = db.update_provider_meta_api_format(
+                                            &app_type_str_owned,
+                                            &provider_id,
+                                            "openai_chat",
+                                        ) {
+                                            log::warn!(
+                                                "[Codex/compact] 自动协议检测持久化失败 (provider={}): {e}",
+                                                provider_id
+                                            );
+                                        }
+                                    });
+                                    let connection_guard2 = result2.connection_guard.take();
+                                    ctx.outbound_model = result2.outbound_model.take();
+                                    ctx.provider = result2.provider;
+                                    let response2 = result2.response;
+                                    return handle_codex_chat_to_responses_transform(
+                                        response2,
+                                        &ctx,
+                                        &state,
+                                        is_stream,
+                                        connection_guard2,
+                                        tool_ctx2,
+                                    )
+                                    .await;
+                                }
+                                Err(_) => {
+                                    if let Some(meta) = ctx.provider.meta.as_mut() {
+                                        meta.api_format = None;
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "[Codex/compact] 自动协议检测：重解析 body 失败，跳过 Chat 回退: {e}"
+                            );
+                        }
+                    }
+                }
+            }
+
             log_forward_error(&state, &ctx, is_stream, &err.error);
             return build_codex_proxy_error_response(&ctx, &endpoint, &err.error);
         }
