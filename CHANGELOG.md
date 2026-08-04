@@ -1,9 +1,60 @@
 # Changelog
 
-All notable changes to CC Switch will be documented in this file.
+All notable changes to Chimera++ will be documented in this file.
+
+Entries numbered `2.x` are Chimera++ releases. The `3.x` entries below them are
+inherited CC Switch history, kept because Chimera++ is a fork and those changes
+are still present in the code; they are not Chimera++ releases and their version
+numbers belong to a separate upstream line.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [2.3.0] - 2026-08-05
+
+### Added
+
+- **Route globe:** the 供应商 route view gains a dotted-sphere WebGL globe (`three` 0.185.1, pinned) built from a 110m Natural Earth land mask and tinted from the active palette. It spins slowly, honours `prefers-reduced-motion` (policy `slow`/`freeze`/`spin`, default `slow`) and subscribes to changes in that preference rather than reading it once, and falls back to a pure-CSS dotted disc in the same colours where WebGL is unavailable — a GPU-less VM, an older WebView2, or jsdom under test — so the handover is not a visible jump and tests need no GL context. The land mask ships as a minified 84 KB asset excluded from Prettier via a new `.prettierignore`; formatting it would produce ~300 KB of coordinate noise for a byte-identical bundle.
+- **会话 tab:** a new navigation destination hosting the session manager, which scans local session logs from the CLIs present on the machine, supports search and per-provider filtering, and can copy a resume command or the project directory. Opening a session directly in a terminal is macOS-only; elsewhere the command is copied instead.
+- **Background update staging:** `stage_update_download` downloads and holds the update package in memory as soon as a release is detected, and `install_update_and_restart` reuses those bytes, so 立即更新 installs without waiting on a ~13 MB download. Staging runs once per version rather than once per check, and a failed pre-download is deliberately not surfaced — the install path falls back to downloading normally, so the only cost is the head start.
+
+### Changed
+
+- The renderer now re-checks for application updates every 15 minutes (previously every 6 hours), evaluated on a 60-second poll and also on window focus and visibility change, and only while the window is visible. A long-running window therefore notices a release without a restart.
+- The titlebar settings button became a one-click update check with its own checking and update-available states. 设置 remains reachable from the navigation, so no entry point was lost.
+- The 模型词元分布 panel is ranked by tokens instead of the backend's cost order. `getModelStats` returns `ORDER BY total_cost DESC`, which is correct for the cost-columned table but wrong for this panel: a model with no pricing entry has cost 0 and could never enter the top 3 regardless of token count. On a real 30-day sample that put gpt-5.5 (56K tokens, $0.39) on screen and hid codex-auto-review (1.18M tokens, $0.00). The percentage denominator is now the sum over all models rather than over the sliced three, so the bars no longer always total 100%.
+- Global button variants (`primary`/`secondary`/`danger`/`link-button`/`compact`) are now defined once, scoped inside `.chimera-shell`, along with base classes the live components were already using without definitions: `.modal-backdrop`, `.confirm-dialog`, `.empty`, `.status-dot`, `.inline-error`, `.onboarding`, `.advanced-options`.
+
+### Fixed
+
+- The outer window ring was invisible against a white desktop. The window is transparent and undecorated with the OS shadow disabled, so that 1px ring is the only thing separating the app from whatever is behind it — and it was drawn in the divider token (`--line`, `#e3e5e9`), which measures 1.26:1 against white. An opaque near-white value cannot separate a light panel from a white background at any width. The new `--shell-edge` is a translucent ink that composites against the actual backdrop and measures 2.00:1 on white.
+
+## [2.2.1] - 2026-08-04
+
+### Fixed
+
+- Renamed `--muted`/`--accent` to `--ch-muted`/`--ch-accent` in `chimera.css`. The originals collided with shadcn/ui's Tailwind variables and were overriding them, which left `bg-muted`/`text-muted` backgrounds transparent across the app.
+- Added `display: flex` and `flex-direction: column` to `.provider-editor .editor-form` so its `gap: 13px` applies between form fields.
+- Replaced `var(--liquid-glass-fill)` with `var(--panel)` on `.route-selector`; the variable had been removed in the v2.2.0 token rework.
+- `switchProvider` now sets the current id optimistically, so the active card updates immediately after a successful third-party line switch.
+
+## [2.2.0] - 2026-08-04
+
+### Added
+
+- **Codex Chat auto-fallback:** when a provider's Responses endpoint fails, the Codex path now detects the condition and falls back to Chat Completions, and caches the detected API format so later requests skip the retry overhead.
+
+### Changed
+
+- Introduced an OKLCH three-layer design token system (primitive → semantic).
+- Replaced the glass default with solid surfaces; glassmorphism is no longer the baseline treatment.
+- Enforced the radius tokens (4/8/12/16/9999px) and tokenized `font-family`.
+- Removed 1617 lines of v1 dead code, including `chimera-sidebar` and its variants.
+
+### Fixed
+
+- `.chimera-titlebar` was missing `display: flex`, so the window controls were not right-aligned.
+- Added pnpm `allowBuilds` entries for `esbuild` and `msw`.
 
 ## [2.1.0] - 2026-08-01
 

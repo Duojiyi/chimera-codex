@@ -118,7 +118,9 @@ Page titles use `title-lg`; panel titles use `title-md`. Labels, button text, an
 
 ## Layout
 
-The desktop shell has a fixed `208px` sidebar, a Windows-native title area, and a scrollable workspace with `28px` outer gutters. The sidebar remains fixed; the active page owns scrolling. Content should align to a 4px spacing system.
+The desktop shell has a Windows-native title area, a scrollable workspace with `28px` outer gutters, and a floating pill navigation centred at the bottom of the workspace carrying the six destinations. There is no persistent sidebar: the earlier `208px` rail was replaced by this bottom bar when the v2 route interface landed, and v2.2.0 removed the leftover variant CSS. `.chimera-sidebar` now survives only as a `display: none` rule with no remaining references. The active page owns scrolling. Content should align to a 4px spacing system.
+
+The window itself is frameless and transparent with the OS shadow disabled, so the shell's own 1px ring is the only thing separating the app from the desktop. That ring must be a translucent ink, not an opaque near-white: the divider tone sits at 1.26:1 against a white backdrop and disappears, while the shipped `--shell-edge` measures 2.00:1 there and still composites correctly over a dark one.
 
 The control console uses a two-column desktop layout: a primary route area and a compact inspection panel. The active connection is the first visual object, not a small card buried in a grid. Provider switching is a dense list or a destination selector; provider editing opens inline or in a focused sheet.
 
@@ -128,15 +130,15 @@ The tools page groups health scan, connection test, backup, config transfer, and
 
 Use tonal layers and one-pixel borders for normal surfaces. Do not combine decorative borders with large soft shadows. Only sheets, menus, and dialogs may use elevation: `0 8px 24px rgba(20, 24, 32, 0.14)`. Modal backdrops use a solid translucent ink layer; no blur is required.
 
-Liquid glass is reserved for the floating bottom navigation and the provider switcher. It is not frosted glass: keep the transmitted content clear, use edge refraction, a narrow specular highlight, subtle saturation/contrast, and physical press deformation. Do not use broad blur, cloudy translucent panels, or glass cards elsewhere in the product. Unsupported environments fall back to the same translucent fill and crisp edge treatment without filtering.
+Liquid glass is reserved for three surfaces: the floating bottom navigation, the provider switcher, and the provider line rail. It is not frosted glass: keep the transmitted content clear, use edge refraction, a narrow specular highlight, subtle saturation/contrast, and physical press deformation. Do not use broad blur, cloudy translucent panels, or glass cards elsewhere in the product. Unsupported environments fall back to the same translucent fill and crisp edge treatment without filtering.
 
 ## Shapes
 
-Use `6px` radii for controls, `8px` for panels, and `12px` only for large dialogs or preview frames. Pills are reserved for compact state tags. Windows window controls must use correct Windows behavior and recognizable symbols; never imitate macOS traffic lights.
+The shipped radius scale is `4px` / `8px` / `12px` / `16px`. Use the small end for controls (buttons land at `7px`), `8px` for panels, `12px` for large dialogs and preview frames, and `16px` for the window shell itself. Pills are reserved for compact state tags and for the floating bottom navigation. Windows window controls must use correct Windows behavior and recognizable symbols; never imitate macOS traffic lights.
 
 ## Components
 
-- **Connection hero:** displays provider, model, endpoint health, and one primary action. It has a restrained status indicator, never a map, radar, or decorative network visualization.
+- **Connection hero:** displays provider, model, endpoint health, and one primary action. It has a restrained status indicator, never a radar, threat overlay, or network-topology visualization. One deliberate exception, added in v2.3.0: a dotted globe (`RouteGlobe`) sits behind the route area. It is scoped tightly — geometry from a 110m Natural Earth land mask, dots tinted from the active palette, a static halo, no routes, arcs, markers, or scanning motion, and no threat semantics. It spins slowly and honours `prefers-reduced-motion` in JS (slow / freeze / spin, default slow, re-read on preference change rather than once at setup), so the blanket CSS reduced-motion rule is not what carries it. Where WebGL is unavailable it degrades to a pure-CSS dotted disc in the same colours.
 - **Provider destination list:** each row contains provider name, endpoint domain, selected model, and connection state. Selection changes the inspector with a 180ms crossfade and 4px horizontal settle.
 - **Buttons:** primary is signal-red; secondary is bordered white; tertiary is icon-only with a tooltip. Every button has default, hover, pressed, focus, disabled, loading, and error recovery states.
 - **Inputs:** labels stay above inputs. URL, key, and model fields have clear helper text. Key reveal, model picker, folder picker, and test connection use familiar icon actions with tooltips.
