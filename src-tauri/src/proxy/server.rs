@@ -48,6 +48,11 @@ pub struct ProxyState {
     pub app_handle: Option<tauri::AppHandle>,
     /// 故障转移切换管理器
     pub failover_manager: Arc<FailoverSwitchManager>,
+    /// Codex 自动协议检测缓存 (provider_id → detected api_format, e.g. "openai_chat")
+    ///
+    /// 运行时加速：避免每次请求都回退试探。进程重启后由 provider.meta.api_format 接管
+    /// （若已通过 `update_provider_meta_api_format` 持久化）。
+    pub codex_wire_api_auto: Arc<RwLock<std::collections::HashMap<String, String>>>,
 }
 
 /// 代理HTTP服务器
@@ -81,6 +86,7 @@ impl ProxyServer {
             codex_chat_history: Arc::new(CodexChatHistoryStore::default()),
             app_handle,
             failover_manager,
+            codex_wire_api_auto: Arc::new(RwLock::new(std::collections::HashMap::new())),
         };
 
         Self {

@@ -346,6 +346,8 @@ fn provider_requires_automatic_routing(app_type: &AppType, provider: &Provider) 
         || is_full_url
         || crate::proxy::providers::codex_provider_uses_chat_completions(provider)
         || crate::proxy::providers::codex_provider_uses_anthropic(provider)
+        // api_format=None ("自动") 的供应商需走代理，代理层才能触发 Responses→Chat 自动检测
+        || crate::proxy::providers::codex_provider_is_auto_detect_candidate(provider)
 }
 
 async fn rollback_automatic_routing(
@@ -1854,6 +1856,28 @@ mod automatic_routing_tests {
         assert!(!provider_requires_automatic_routing(
             &AppType::Codex,
             &provider
+        ));
+    }
+
+    #[test]
+    fn auto_detect_candidate_requires_routing() {
+        // api_format=None ("自动") 的供应商需要代理接管，才能触发 Responses→Chat 自动检测
+        let auto_provider = provider(json!({}), None);
+        assert!(provider_requires_automatic_routing(
+            &AppType::Codex,
+            &auto_provider
+        ));
+        // 明确指定 openai_responses 的供应商保持直连
+        let responses_provider = provider(json!({}), Some("openai_responses"));
+        assert!(!provider_requires_automatic_routing(
+            &AppType::Codex,
+            &responses_provider
+        ));
+        // 明确指定 openai_chat 的供应商需要代理（已有逻辑）
+        let chat_provider = provider(json!({}), Some("openai_chat"));
+        assert!(provider_requires_automatic_routing(
+            &AppType::Codex,
+            &chat_provider
         ));
     }
 

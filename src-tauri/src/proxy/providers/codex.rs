@@ -84,6 +84,76 @@ pub fn should_convert_codex_responses_to_chat(provider: &Provider, endpoint: &st
     ) && codex_provider_uses_chat_completions(provider)
 }
 
+/// 判断该 provider 是否满足自动 Responses→Chat 协议检测的条件。
+///
+/// 条件（全部成立时返回 true）：
+/// 1. 请求端点是 Responses 系列（不是其他端点，避免干扰 /models 等）
+/// 2. Provider 的 meta 里尚未显式配置 `api_format`（用户已手动配置时跳过自动检测）
+/// 3. URL 等静态信息未触发 Chat 检测（即当前未处于 Chat 模式）
+///
+/// 当已通过运行时缓存 (`codex_wire_api_auto`) 注入了 api_format 时，
+/// `codex_provider_uses_chat_completions` 会返回 true，因此条件 3 自然排除重复检测。
+pub fn codex_eligible_for_chat_auto_detect(provider: &Provider, endpoint: &str) -> bool {
+    let path = endpoint
+        .split_once('?')
+        .map_or(endpoint, |(path, _query)| path);
+
+    if !matches!(
+        path,
+        "/responses" | "/v1/responses" | "/responses/compact" | "/v1/responses/compact"
+    ) {
+        return false;
+    }
+
+    // 已有显式 api_format 配置（用户手动设置）→ 不做自动检测
+    if provider
+        .meta
+        .as_ref()
+        .and_then(|m| m.api_format.as_deref())
+        .is_some()
+    {
+        return false;
+    }
+
+    // URL / config.toml 已指向 Chat 端点 → 已经是 Chat 模式，不需要检测
+    !codex_provider_uses_chat_completions(provider)
+}
+
+/// Provider 级别的自动检测候选判断（不需要端点信息）。
+///
+/// 当以下条件全部成立时返回 `true`：
+/// 1. `meta.api_format` 未显式设置（用户选择了"自动"，而非手动指定格式）
+/// 2. 未通过 `wire_api` 或 `meta.api_format` 判定为 Chat Completions
+/// 3. 未通过 `wire_api` 或 `meta.api_format` 判定为 Anthropic Messages
+///
+/// 满足条件的 provider 需要经由本地代理转发（proxy takeover），才能在请求级别
+/// 触发 `codex_eligible_for_chat_auto_detect` 并完成 Responses→Chat 自动切换。
+pub fn codex_provider_is_auto_detect_candidate(provider: &Provider) -> bool {
+    // 用户已手动指定格式 → 无需自动检测，也无需代理接管
+    if provider
+        .meta
+        .as_ref()
+        .and_then(|m| m.api_format.as_deref())
+        .is_some()
+    {
+        return false;
+    }
+    // Chat / Anthropic 已经通过其他条件要求代理，这里排除以避免重复计数
+    !codex_provider_uses_chat_completions(provider) && !codex_provider_uses_anthropic(provider)
+}
+
+/// 向 provider.meta 注入自动检测到的 api_format（运行时临时注入或持久化后加载均适用）。
+pub fn apply_codex_auto_detected_api_format(provider: &mut Provider, api_format: &str) {
+    if let Some(meta) = provider.meta.as_mut() {
+        meta.api_format = Some(api_format.to_string());
+    } else {
+        provider.meta = Some(crate::provider::ProviderMeta {
+            api_format: Some(api_format.to_string()),
+            ..Default::default()
+        });
+    }
+}
+
 /// Whether a converted Codex Responses request may send `prompt_cache_key` to
 /// its Chat Completions upstream. Unknown OpenAI-compatible gateways default to
 /// false because many reject unsupported request fields with HTTP 400.
@@ -1607,5 +1677,163 @@ wire_api = "responses"
             "config": "base_url = \"https://api.x.ai/v1\"\nwire_api = \"responses\""
         }));
         assert!(!provider_needs_responses_namespace_flatten(&plain));
+    }
+
+    // ─── codex_eligible_for_chat_auto_detect ────────────────────────────────
+
+    /// 正常情况：no explicit api_format, Responses endpoint → 应开启自动检测
+    #[test]
+    fn auto_detect_eligible_for_clean_responses_provider() {
+        let provider = create_provider(json!({
+            "auth": { "OPENAI_API_KEY": "sk-test" },
+            "base_url": "https://hub.example.com/v1"
+        }));
+        for ep in [
+            "/responses",
+            "/v1/responses",
+            "/responses/compact",
+            "/v1/responses/compact",
+        ] {
+            assert!(
+                codex_eligible_for_chat_auto_detect(&provider, ep),
+                "expected eligible for endpoint {ep}"
+            );
+        }
+    }
+
+    /// 带查询参数的 endpoint 也应被识别
+    #[test]
+    fn auto_detect_eligible_with_query_string() {
+        let provider = create_provider(json!({
+            "auth": { "OPENAI_API_KEY": "sk-test" },
+            "base_url": "https://hub.example.com/v1"
+        }));
+        assert!(codex_eligible_for_chat_auto_detect(
+            &provider,
+            "/v1/responses?stream=true"
+        ));
+    }
+
+    /// 非 Responses endpoint → 不应触发自动检测
+    #[test]
+    fn auto_detect_not_eligible_for_non_responses_endpoints() {
+        let provider = create_provider(json!({
+            "auth": { "OPENAI_API_KEY": "sk-test" },
+            "base_url": "https://hub.example.com/v1"
+        }));
+        for ep in [
+            "/models",
+            "/v1/models",
+            "/chat/completions",
+            "/v1/chat/completions",
+        ] {
+            assert!(
+                !codex_eligible_for_chat_auto_detect(&provider, ep),
+                "expected NOT eligible for endpoint {ep}"
+            );
+        }
+    }
+
+    /// meta.api_format 已显式配置 → 跳过自动检测（用户已手动指定）
+    #[test]
+    fn auto_detect_not_eligible_when_meta_api_format_set() {
+        let mut provider = create_provider(json!({
+            "auth": { "OPENAI_API_KEY": "sk-test" },
+            "base_url": "https://hub.example.com/v1"
+        }));
+        provider.meta = Some(crate::provider::ProviderMeta {
+            api_format: Some("openai_responses".to_string()),
+            ..Default::default()
+        });
+        assert!(!codex_eligible_for_chat_auto_detect(
+            &provider,
+            "/v1/responses"
+        ));
+    }
+
+    /// URL 已指向 Chat Completions 端点 → 已经是 Chat 模式，不需要检测
+    #[test]
+    fn auto_detect_not_eligible_when_url_implies_chat() {
+        let provider = create_provider(json!({
+            "auth": { "OPENAI_API_KEY": "sk-test" },
+            "base_url": "https://hub.example.com/v1/chat/completions"
+        }));
+        assert!(!codex_eligible_for_chat_auto_detect(
+            &provider,
+            "/v1/responses"
+        ));
+    }
+
+    /// config.toml 中 wire_api = "chat" → 已是 Chat 模式，不需要检测
+    #[test]
+    fn auto_detect_not_eligible_when_toml_wire_api_chat() {
+        let provider = create_provider(json!({
+            "auth": { "OPENAI_API_KEY": "sk-test" },
+            "config": "base_url = \"https://hub.example.com/v1\"\nwire_api = \"chat\""
+        }));
+        assert!(!codex_eligible_for_chat_auto_detect(
+            &provider,
+            "/v1/responses"
+        ));
+    }
+
+    /// 运行时注入 api_format = "openai_chat" 后，不应再次触发自动检测
+    #[test]
+    fn auto_detect_not_eligible_after_runtime_inject() {
+        let mut provider = create_provider(json!({
+            "auth": { "OPENAI_API_KEY": "sk-test" },
+            "base_url": "https://hub.example.com/v1"
+        }));
+        // 模拟 apply_codex_auto_detected_api_format 调用后的状态
+        apply_codex_auto_detected_api_format(&mut provider, "openai_chat");
+        assert!(!codex_eligible_for_chat_auto_detect(
+            &provider,
+            "/v1/responses"
+        ));
+    }
+
+    // ─── apply_codex_auto_detected_api_format ───────────────────────────────
+
+    /// meta 为 None 时应创建 meta 并写入 api_format
+    #[test]
+    fn apply_auto_detected_creates_meta_when_none() {
+        let mut provider = create_provider(json!({ "auth": { "OPENAI_API_KEY": "sk-test" } }));
+        assert!(provider.meta.is_none());
+        apply_codex_auto_detected_api_format(&mut provider, "openai_chat");
+        assert_eq!(
+            provider.meta.as_ref().and_then(|m| m.api_format.as_deref()),
+            Some("openai_chat")
+        );
+    }
+
+    /// meta 已存在时直接更新 api_format，不覆盖其他字段
+    #[test]
+    fn apply_auto_detected_updates_existing_meta() {
+        let mut provider = create_provider(json!({ "auth": { "OPENAI_API_KEY": "sk-test" } }));
+        provider.meta = Some(crate::provider::ProviderMeta {
+            api_format: None,
+            provider_type: Some("custom".to_string()),
+            ..Default::default()
+        });
+        apply_codex_auto_detected_api_format(&mut provider, "openai_chat");
+        let meta = provider.meta.as_ref().unwrap();
+        assert_eq!(meta.api_format.as_deref(), Some("openai_chat"));
+        // 其他字段不受影响
+        assert_eq!(meta.provider_type.as_deref(), Some("custom"));
+    }
+
+    /// 覆盖已有 api_format（例如后续检测修正）
+    #[test]
+    fn apply_auto_detected_overrides_existing_api_format() {
+        let mut provider = create_provider(json!({ "auth": { "OPENAI_API_KEY": "sk-test" } }));
+        provider.meta = Some(crate::provider::ProviderMeta {
+            api_format: Some("openai_responses".to_string()),
+            ..Default::default()
+        });
+        apply_codex_auto_detected_api_format(&mut provider, "openai_chat");
+        assert_eq!(
+            provider.meta.as_ref().and_then(|m| m.api_format.as_deref()),
+            Some("openai_chat")
+        );
     }
 }
