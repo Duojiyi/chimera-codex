@@ -29,18 +29,23 @@ Quietly capable, exact, and reassuring. Chimera++ should feel like a refined des
 - Marketplace-style provider promotion, affiliate links, sponsored templates, or upstream project attribution in customer-facing product surfaces.
 - A crowded admin dashboard made from equally weighted cards, small gray text, and decorative metrics.
 - Fake macOS traffic lights, novelty window chrome, and visual effects that conflict with Windows conventions.
-- Security-product cliches such as world maps, animated scanning rings, neon gradients, or fear-based warning language.
+- Security-product cliches such as flat world maps with threat markers, animated scanning rings, neon gradients, or fear-based warning language. The 供应商 route globe added in v2.3.0 is a deliberate, bounded exception, recorded under Visual Research Reference.
 - Motion that delays use, repeats on every page load, or makes state unclear.
 
 ## Navigation and Product Scope
 
-The public v2 interface opens only Codex workflows. Dormant multi-tool backend capabilities remain reusable internally, but Gemini, Claude Code, and other tool-specific screens are not exposed.
+Provider configuration is Codex-only: no other tool gets a connection, model, or runtime screen, and the dormant multi-tool backend stays internal. The one deliberate exception is 会话, which reads session logs written by whatever CLIs are installed locally — its provider filter therefore names Claude Code, Gemini CLI, Grok Build, and OpenCode alongside Codex. That surface is read-only history, not provider management, and it is the only place a non-Codex tool name reaches the customer interface.
 
-1. **控制台**: the primary route. It shows the active provider, active model, connection state, quick switching, and a single path into provider editing.
-2. **Codex 运行时**: install discovery, stable or portable distribution choice, update source, version comparison, repair, rollback, and uninstall with explicit confirmation.
-3. **工具箱**: replaces the current "连接记录" navigation item. It exposes connection test, Codex health scan, open configuration folder, create or restore a local configuration backup, and import or export provider configuration. Historical events remain a compact section inside this screen rather than consuming a top-level destination.
+The shipped navigation is a six-item bottom bar, not a sidebar:
+
+1. **供应商**: the primary route. Active provider, active model, connection state, quick switching, a single path into provider editing, and the Codex start/restart action.
+2. **更新**: Codex runtime install discovery, stable or portable distribution choice, update source, version comparison, repair, rollback, and uninstall with explicit confirmation.
+3. **词元**: request counts, token consumption, per-model distribution, and history.
 4. **外观**: browse, preview, install, apply, and restore Codex client skins.
-5. **设置**: application update behavior, startup behavior, application data directory, and non-destructive preferences.
+5. **会话**: browse local session logs across installed CLIs with search and a provider filter; copy a resume command or the project directory, and on macOS resume directly in a terminal.
+6. **设置**: application update behavior, startup behavior, application data directory, and non-destructive preferences.
+
+The 控制台 and 工具箱 destinations named in earlier drafts of this document were never shipped under those names; connection test, health scan, backup, and config transfer live inside the screens above rather than in a separate tools page.
 
 The ChimeraHub template is the only customer-facing default template. Its URL remains editable. Users can create additional providers, but the product never promotes a provider catalog.
 
@@ -58,4 +63,6 @@ Meet WCAG 2.2 AA contrast for text and controls. All critical actions require ke
 
 ## Visual Research Reference
 
-The selected structural reference is Dribbble's [Internet Security and Privacy App - VPN v2](https://dribbble.com/shots/26489451-Internet-Security-and-Privacy-App-VPN-v2). Borrow only its focused connection-state composition, destination selector, and clear primary action hierarchy. Do not copy its globe, gradients, palette, security branding, or assets. The secondary material reference is [Imgo](https://dribbble.com/shots/27225909-Imgo-a-file-tool-I-built-because-Windows-deserved-better): borrow its restrained native-window material and result-list clarity, not its dark palette or file-tool-specific visuals.
+The selected structural reference is Dribbble's [Internet Security and Privacy App - VPN v2](https://dribbble.com/shots/26489451-Internet-Security-and-Privacy-App-VPN-v2). Borrow only its focused connection-state composition, destination selector, and clear primary action hierarchy. Do not copy its gradients, palette, security branding, or assets.
+
+The original instruction here was also "do not copy its globe". v2.3.0 reverses that one deliberately, and the reversal is bounded: the 供应商 route shows a dotted sphere generated at runtime from a public-domain Natural Earth 110m land mask, tinted entirely from the active palette, spinning slowly and honouring `prefers-reduced-motion` (default: slow, not freeze). It carries no routes, arcs, threat markers, scanning rings, or geographic claims — it is an idle-state ornament for the connection route, not a data visualization, and nothing about the user's provider is encoded in it. A flat map with markers remains banned. The secondary material reference is [Imgo](https://dribbble.com/shots/27225909-Imgo-a-file-tool-I-built-because-Windows-deserved-better): borrow its restrained native-window material and result-list clarity, not its dark palette or file-tool-specific visuals.
