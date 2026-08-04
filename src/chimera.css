@@ -20,6 +20,13 @@
   --canvas: var(--p-canvas);
   --panel: var(--p-white);
   --line: var(--p-line);
+  /* Outer window edge — see .chimera-shell:after. Deliberately not --line:
+     that token is tuned for dividers drawn on the panel's own background, and
+     an opaque near-white value can never separate the window from a white
+     desktop (1.26:1 against #fff). A translucent ink composites against
+     whatever actually sits behind the window, so one value works on a white
+     page and a dark one alike. */
+  --shell-edge: oklch(0.18 0.008 264 / 0.3);
   --ch-muted: var(--p-ink-500);
   --ch-accent: var(--p-orange);
   --soft: var(--p-orange-soft);
@@ -57,6 +64,453 @@
   font-family: var(--font-sans);
   letter-spacing: 0;
 }
+/* ===== Global chimera button variants =====
+   Scoped inside .chimera-shell so they don't leak out.
+   More-specific rules further down naturally override these. */
+.chimera-shell button.primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--ch-accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background 150ms var(--ease),
+    transform 120ms var(--ease);
+}
+.chimera-shell button.primary:hover:not(:disabled) {
+  background: #e84c2b;
+}
+.chimera-shell button.primary:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.chimera-shell button.primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.chimera-shell button.secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 150ms var(--ease),
+    border-color 150ms var(--ease);
+}
+.chimera-shell button.secondary:hover:not(:disabled) {
+  background: #f4f7f9;
+  border-color: #c8d0d6;
+}
+.chimera-shell button.secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.chimera-shell button.danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid #fcd0cb;
+  border-radius: 7px;
+  background: #fff3f1;
+  color: #c7372f;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 150ms var(--ease);
+}
+.chimera-shell button.danger:hover:not(:disabled) {
+  background: #ffe4e0;
+  border-color: #f5a89e;
+}
+.chimera-shell button.danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.chimera-shell .link-button {
+  border: 0;
+  background: transparent;
+  color: var(--ch-accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.chimera-shell .link-button:hover {
+  text-decoration: underline;
+}
+/* compact modifier for smaller height contexts */
+.chimera-shell button.compact {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+/* provider template info banner inside editor-form */
+.provider-template {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 13px;
+  border: 1px solid var(--soft-border);
+  border-radius: 8px;
+  background: var(--soft);
+}
+.provider-template > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.provider-template b {
+  font-size: 12px;
+}
+.provider-template small {
+  color: var(--ch-muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+/* spin animation for loading icons */
+.chimera-shell .spin {
+  animation: chimera-spin 0.75s linear infinite;
+}
+@keyframes chimera-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* ===== End global button variants ===== */
+
+/* ===== Base classes for live components =====
+   These are referenced by ChimeraApp.tsx but had no base definition, so the
+   elements fell back to browser defaults (inline / static). Scoped rules
+   further down still override these. */
+
+/* Centered overlay for ModelPickerDialog, Confirm* and DiagnosticsDialog.
+   Without this the dialogs render as static blocks in the document flow. */
+.modal-backdrop {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgba(32, 37, 43, 0.28);
+}
+.confirm-dialog {
+  width: min(420px, 100%);
+  padding: 26px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgba(23, 32, 42, 0.18);
+}
+.confirm-dialog > svg {
+  color: var(--ch-accent);
+}
+.confirm-dialog h2 {
+  margin: 14px 0 0;
+  font-size: 17px;
+  line-height: 1.3;
+}
+.confirm-dialog p {
+  margin: 9px 0 0;
+  color: var(--ch-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.confirm-dialog footer {
+  display: flex;
+  justify-content: center;
+  gap: 9px;
+  margin-top: 20px;
+}
+/* Empty-state used by Empty() across every view. */
+.empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  min-height: 180px;
+  padding: 28px;
+  text-align: center;
+}
+.empty p {
+  margin: 0;
+  max-width: 46ch;
+  color: var(--ch-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+/* Live dot in the titlebar page label. */
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+}
+.inline-error {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 12px;
+  margin-bottom: 12px;
+  border: 1px solid #f5c8c2;
+  border-radius: 8px;
+  background: #fff4f2;
+  color: #b42318;
+  font-size: 11px;
+}
+/* Onboarding: shared by inline Onboarding() and StandaloneOnboarding().
+   .onboarding-card / .onboarding-screen further down layer onto this. */
+.onboarding {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  max-width: 620px;
+  margin: 0 auto;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+}
+.onboarding h1,
+.onboarding h2 {
+  margin: 22px 0 8px;
+  font-size: 22px;
+}
+.onboarding > p {
+  margin: 0;
+  color: var(--ch-muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.onboarding-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 14px;
+  font-weight: 700;
+}
+.onboarding-brand img {
+  width: 27px;
+  height: 27px;
+}
+.onboarding ol {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+  margin: 22px 0;
+  padding: 0;
+  list-style: none;
+}
+.onboarding ol li {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 11px;
+  align-items: start;
+}
+.onboarding ol li > b {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--soft);
+  color: var(--ch-accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+.onboarding ol li strong {
+  display: block;
+  font-size: 12px;
+}
+.onboarding ol li span {
+  display: block;
+  margin-top: 3px;
+  color: var(--ch-muted);
+  font-size: 11px;
+}
+/* Advanced options base classes. The scoped rules further down set
+   grid-template-columns but never declared a display, so the tracks were
+   inert until these bases landed. */
+.advanced-options summary {
+  cursor: pointer;
+  padding: 10px 13px;
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  list-style: none;
+}
+.advanced-options summary::-webkit-details-marker {
+  display: none;
+}
+.advanced-options-body {
+  display: grid;
+  gap: 13px;
+  padding: 4px 13px 13px;
+}
+.advanced-intro {
+  margin: 0;
+  color: var(--ch-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.advanced-group {
+  display: grid;
+  gap: 11px;
+}
+.advanced-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.advanced-section-heading b {
+  font-size: 12px;
+}
+.advanced-section-heading small {
+  display: block;
+  margin-top: 3px;
+  color: var(--ch-muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+.toggle-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  font-size: 12px;
+}
+.toggle-field > span {
+  min-width: 0;
+}
+.toggle-field b {
+  display: block;
+  font-size: 12px;
+}
+.toggle-field small {
+  display: block;
+  margin-top: 3px;
+  color: var(--ch-muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+.experimental-tag {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: var(--r-full);
+  background: var(--soft);
+  color: var(--ch-accent);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  vertical-align: middle;
+}
+.mapping-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 84px 34px;
+  gap: 8px;
+  align-items: center;
+}
+.mapping-row input {
+  min-width: 0;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 400;
+}
+.icon-button {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ch-muted);
+  cursor: pointer;
+}
+.icon-button:hover {
+  border-color: #f5a89e;
+  background: #fff3f1;
+  color: #c7372f;
+}
+/* Advanced-options label rows are direct children of .advanced-options-body,
+   not .editor-form, so they need their own stacking rule. */
+.advanced-options-body > label,
+.advanced-group > label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.advanced-options-body > label.toggle-field,
+.advanced-group > label.toggle-field {
+  display: grid;
+  flex-direction: unset;
+}
+/* Exclude checkboxes: the toggle switches carry their own fixed 38x22 pill
+   sizing, and they set `height` but not `min-height`, so the 36px below does not
+   conflict — it just wins, inflating the pill to 38x36 which `border-radius:
+   999px` then renders as a circle. This rule is for text inputs and selects. */
+.advanced-options-body > label > input:not([type="checkbox"]),
+.advanced-options-body > label > select,
+.advanced-group > label > input:not([type="checkbox"]),
+.advanced-group > label > select {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 400;
+}
+.advanced-options-body > label > small,
+.advanced-group > label > small {
+  color: var(--ch-muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
 /* Chimera 2.0 interaction states and real-data surfaces. */
 .settings-layout > aside button {
   height: 40px;
@@ -405,12 +859,17 @@ select:focus-visible {
   background: var(--canvas);
   box-shadow: none;
 }
+/* Outer window edge. The window is transparent + undecorated with the OS
+   shadow off, so this ring is the only thing separating the app from the
+   desktop — it has to hold up on a white page, which --line cannot.
+   Drawn on a pseudo-element rather than as a real border so it can't affect
+   layout or the grid rows underneath. */
 .chimera-shell:after {
   content: "";
   position: absolute;
   z-index: 20;
   inset: 0;
-  border: 1px solid var(--line);
+  border: 1px solid var(--shell-edge);
   border-radius: var(--r-xl);
   pointer-events: none;
 }
@@ -506,6 +965,39 @@ select:focus-visible {
   background: #fce8e5;
   color: #b9372d;
 }
+/* One-click update check. Inherits the 32px circle from .route-window-tools >
+   button above; this only adds the has-update accent and its badge dot. */
+.titlebar-update {
+  position: relative;
+  cursor: pointer;
+  transition:
+    background 160ms var(--ease),
+    color 160ms var(--ease);
+}
+.titlebar-update:disabled {
+  cursor: default;
+}
+.route-window-tools > button.titlebar-update.is-available {
+  background: var(--soft);
+  color: var(--ch-accent);
+}
+.route-window-tools > button.titlebar-update.is-available:hover {
+  background: #fde8e4;
+  color: #c7372f;
+}
+/* Badge dot, so an available update reads at a glance without relying on the
+   icon tint alone (which fails for red/green colour blindness). */
+.titlebar-update.is-available::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid #fff;
+  border-radius: 50%;
+  background: var(--ch-accent);
+}
 .chimera-content {
   min-height: 0;
   overflow: auto;
@@ -522,6 +1014,15 @@ select:focus-visible {
   min-height: 0;
   max-width: none;
   margin: 0;
+}
+/* SessionManagerPage's root is `flex flex-col h-full min-h-0`, so `h-full` needs
+   a definite height to resolve against. Without this the wrapper sizes to
+   content and the two panels collapse to ~219px with dead space below.
+   .chimera-content is a definite grid row (minmax(0, 1fr)), so 100% here is the
+   530px content box and nothing overflows the 28/22px padding. */
+.chimera-sessions-host {
+  height: 100%;
+  min-height: 0;
 }
 .route-bottom-nav {
   position: relative;
@@ -1004,19 +1505,128 @@ select:focus-visible {
   background: #fff;
 }
 .provider-editor header {
-  margin-bottom: 16px;
+  /* Badge sits beside the title, not above it. The outer .provider-editor
+     padding is the single source of inset, so the V1 `padding: 22px` on this
+     element is zeroed here rather than compounding to 48px. */
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0;
+  margin-bottom: 18px;
+}
+.provider-editor header > div {
+  min-width: 0;
+}
+.provider-editor header h2 {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.25;
+}
+.provider-editor header p {
+  margin: 4px 0 0;
+  color: var(--ch-muted);
+  font-size: 11px;
+  line-height: 1.45;
 }
 .provider-editor .editor-form {
   display: flex;
   flex-direction: column;
   gap: 13px;
+  padding: 0;
+}
+.provider-editor .editor-form > label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.provider-editor .editor-form > label > input,
+.provider-editor .editor-form > label > select,
+.provider-editor .editor-form > label > textarea {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 400;
+}
+.provider-editor .editor-form > label > small {
+  margin-top: -2px;
+  color: var(--ch-muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+/* password-field and model-input inside editor labels */
+.password-field,
+.model-input {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  overflow: hidden;
+}
+.password-field:focus-within,
+.model-input:focus-within {
+  box-shadow: 0 0 0 2px rgba(255, 90, 61, 0.2);
+}
+.password-field > input,
+.model-input > input {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  padding: 0 11px;
+  border: 0 !important;
+  border-radius: 0 !important;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 400;
+}
+.password-field > button,
+.model-input > button {
+  flex: 0 0 auto;
+  height: 38px;
+  padding: 0 12px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  background: #f8f9fa;
+  color: var(--ch-muted);
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.password-field > button:hover,
+.model-input > button:hover {
+  background: #eef1f3;
+  color: var(--ink);
 }
 .provider-editor footer {
   position: sticky;
   bottom: -26px;
   margin: 12px -26px -26px;
   padding: 14px 26px 26px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   background: #fff;
+  border-top: 1px solid var(--line);
+}
+.provider-editor footer > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .runtime-reference-view {
   max-width: 920px;
@@ -2220,14 +2830,20 @@ select:focus-visible {
   background: transparent;
 }
 .skin-market-reference .skin-list > button {
+  /* `display: grid` was missing, so grid-template-columns did nothing and the
+     two child spans laid out inline. */
+  display: grid;
   min-height: 94px;
   grid-template-columns: 126px minmax(0, 1fr);
   grid-template-rows: 1fr;
+  align-items: center;
   gap: 10px;
   padding: 9px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #f5f7f8;
+  text-align: left;
+  cursor: pointer;
 }
 .skin-market-reference .skin-list > button.active {
   border-color: #ef7465;
@@ -2235,6 +2851,13 @@ select:focus-visible {
   box-shadow: none;
 }
 .skin-card-preview {
+  /* A <span> is inline by default, so width/height here were being ignored and
+     the nested <img width:100%> resolved against the button's content box
+     instead — rendering full-card-width art at its natural aspect ratio and
+     pushing the name/version column out of view. `display: block` is what makes
+     the 126x76 box real. */
+  display: block;
+  flex: none;
   width: 126px;
   height: 76px;
   overflow: hidden;
@@ -2609,14 +3232,107 @@ select:focus-visible {
   transform: translateX(-50%);
   isolation: isolate;
 }
-.route-static-art {
+/* The rotating globe, in place of the old static art. The box stops 66px short
+   of the stage bottom so it clears the launch card: the card is 58px tall at
+   bottom:-3px, so its top edge sits at 335px of the 390px stage, and the globe
+   box ends at 324px — an 11px gap instead of the art running under the card. */
+/* Base: a decorative fill layer. Placement is the caller's job, so the
+   component stays reusable outside this hero. */
+.route-globe {
   position: absolute;
   inset: 0;
+  /* cqw/cqh below resolve against this box, so the CSS layers can be sized to
+     the exact same silhouette the WebGL camera frames. */
+  container-type: size;
+  /* Keep the layer stack self-contained rather than competing with the card. */
+  isolation: isolate;
+}
+/* Hero placement: stop 66px short of the stage bottom so the globe clears the
+   "Codex 正在运行" card instead of sitting behind it. Card top is at 335px of
+   the 390px stage; this box ends at 324px. */
+.route-globe-art {
+  inset: 0 0 66px;
+}
+/* The four layers, back to front: glow (halo spill) / fallback disc / WebGL
+   canvas / shade (limb + highlight). The canvas is appended by the effect
+   rather than by React, so the order is set explicitly here. */
+.route-globe-canvas {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: block;
   width: 100%;
   height: 100%;
-  object-fit: contain;
-  object-position: center;
-  user-select: none;
+  /* Let drag-to-spin work without the gesture being stolen for scrolling. */
+  touch-action: none;
+}
+/* Shared geometry: a circle matching the sphere's projected silhouette. --globe-fill
+   is the same fraction the camera uses, against whichever axis is tighter. */
+.route-globe-glow,
+.route-globe-fallback,
+.route-globe-shade {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(
+    calc(var(--globe-fill, 0.92) * 100cqw),
+    calc(var(--globe-fill, 0.92) * 100cqh)
+  );
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+/* Halo. An outer box-shadow is clipped inside its own border box, so a
+   transparent circle yields nothing but the spill around the sphere — no colour
+   maths, and it can't tint the globe itself. */
+.route-globe-glow {
+  z-index: 0;
+  background: transparent;
+  box-shadow:
+    0 0 18px 3px rgb(var(--globe-glow-rgb, 125 184 220) / 0.34),
+    0 0 52px 14px rgb(var(--globe-glow-rgb, 125 184 220) / 0.16);
+}
+/* Visible until the first WebGL frame lands, and permanently where WebGL is
+   unavailable (GPU-less VM, older WebView2, jsdom in tests). No assets — a
+   dotted disc in the palette's own colours, so the handover isn't a visible
+   jump. ~5px grid with ~1.8px dots tracks the real globe's 3.1px equator
+   spacing closely enough. */
+.route-globe-fallback {
+  z-index: 1;
+  background-color: var(--globe-ocean, #8cc0e0);
+  background-image: radial-gradient(
+    circle,
+    var(--globe-land-mid, #ffab3d) 0.9px,
+    transparent 1px
+  );
+  background-size: 5px 5px;
+  opacity: 1;
+  transition: opacity 240ms var(--ease);
+}
+.route-globe-fallback.is-hidden {
+  opacity: 0;
+}
+/* Roundness. Two stacked radials: a soft specular up-left, and a darkened limb
+   toward the edge. Both are screen-fixed, which is what makes them read as a
+   light source — a texture on the sphere would rotate with it and read as
+   painted-on markings instead. Light comes from the upper left, matching the
+   launch card's own shadow direction. */
+.route-globe-shade {
+  z-index: 3;
+  background-image:
+    radial-gradient(
+      circle at 33% 26%,
+      rgba(255, 255, 255, 0.3) 0%,
+      rgba(255, 255, 255, 0.1) 22%,
+      transparent 48%
+    ),
+    radial-gradient(
+      circle at 50% 50%,
+      transparent 50%,
+      rgb(var(--globe-shade-rgb, 28 79 112) / 0.09) 76%,
+      rgb(var(--globe-shade-rgb, 28 79 112) / 0.32) 100%
+    );
 }
 .route-codex-launch {
   position: absolute;
@@ -2791,8 +3507,14 @@ select:focus-visible {
   display: none;
 }
 .route-line-card {
-  flex: 1 1 160px;
-  min-width: 0;
+  /* `flex: 1 1 160px` with `min-width: 0` let cards shrink without limit, so
+     the track never overflowed and `overflow-x: auto` on the parent never
+     engaged. At 6 lines each card fell to ~93px, leaving ~23px for text after
+     padding + mark + gap. Clamping the floor makes the track overflow and
+     scroll instead. Up to 3 lines they still grow to fill, so the existing
+     1-2 line composition is unchanged. */
+  flex: 1 1 184px;
+  min-width: 184px;
   height: 64px;
   display: flex;
   align-items: center;

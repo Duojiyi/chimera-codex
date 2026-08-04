@@ -1,6 +1,11 @@
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { UpdateProvider, useUpdate } from "@/contexts/UpdateContext";
+import {
+  UPDATE_CHECK_INTERVAL_MS,
+  UPDATE_CHECK_POLL_MS,
+  UpdateProvider,
+  useUpdate,
+} from "@/contexts/UpdateContext";
 
 const { checkForUpdateMock } = vi.hoisted(() => ({
   checkForUpdateMock: vi.fn(),
@@ -68,5 +73,43 @@ describe("UpdateProvider periodic checks", () => {
     });
 
     expect(checkForUpdateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("checks again about 15 minutes later while the app stays visible", async () => {
+    render(
+      <UpdateProvider>
+        <UpdateProbe />
+      </UpdateProvider>,
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(checkForUpdateMock).toHaveBeenCalledTimes(1);
+
+    // Well short of the interval: must not fire yet.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    });
+    expect(checkForUpdateMock).toHaveBeenCalledTimes(1);
+
+    // Past the interval (plus one poll period, so a tick is guaranteed to land
+    // beyond the threshold): now it must fire.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(
+        UPDATE_CHECK_INTERVAL_MS - 10 * 60 * 1000 + UPDATE_CHECK_POLL_MS,
+      );
+    });
+    expect(checkForUpdateMock).toHaveBeenCalledTimes(2);
+  });
+
+  // Guards the drift trap documented on UPDATE_CHECK_POLL_MS: if the poll period
+  // is ever raised to equal the interval, timer drift makes each tick land just
+  // short of the threshold, it skips, and the effective spacing silently
+  // doubles. Fake timers are exact, so no behavioural test can catch this —
+  // only the arithmetic relationship can.
+  it("polls strictly more often than the staleness threshold", () => {
+    expect(UPDATE_CHECK_POLL_MS).toBeLessThan(UPDATE_CHECK_INTERVAL_MS);
+    expect(UPDATE_CHECK_INTERVAL_MS).toBe(15 * 60 * 1000);
   });
 });

@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Activity,
+  ArrowUp,
   BarChart3,
   Check,
   ChevronDown,
@@ -15,6 +16,7 @@ import {
   EyeOff,
   LoaderCircle,
   FolderOpen,
+  MessagesSquare,
   Minus,
   MoreHorizontal,
   Package,
@@ -89,7 +91,8 @@ import {
   type OperationRecord,
 } from "./chimeraUtils";
 import routeGateIcon from "@/assets/icons/chimera-dragon-mark.png";
-import kineticTopography from "@/assets/chimera/kinetic-topography.png";
+import RouteGlobe from "@/components/RouteGlobe";
+import { SessionManagerPage } from "@/components/sessions/SessionManagerPage";
 import "./chimera.css";
 
 const runningInTauri =
@@ -154,7 +157,8 @@ function useDialogFocus<T extends HTMLElement>(
   return dialogRef;
 }
 
-type View = "providers" | "runtime" | "usage" | "appearance" | "settings";
+type View =
+  "providers" | "runtime" | "usage" | "appearance" | "sessions" | "settings";
 type RuntimeStatus = {
   supported: boolean;
   installed: boolean;
@@ -236,6 +240,7 @@ const nav: Array<[View, string, typeof Command]> = [
   ["runtime", "更新", Package],
   ["usage", "词元", BarChart3],
   ["appearance", "外观", Paintbrush],
+  ["sessions", "会话", MessagesSquare],
   ["settings", "设置", Settings2],
 ];
 
@@ -360,6 +365,40 @@ export default function ChimeraApp() {
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [onboardingDeferred, setOnboardingDeferred] = useState(false);
   void activity;
+
+  // Titlebar update affordance: one click checks, so the user never has to walk
+  // into 设置 just to find out whether a release is waiting.
+  const {
+    hasUpdate: titlebarHasUpdate,
+    isChecking: titlebarChecking,
+    checkUpdate: titlebarCheckUpdate,
+    resetDismiss: titlebarResetDismiss,
+  } = useUpdate();
+
+  const runTitlebarUpdateCheck = useCallback(async () => {
+    if (!runningInTauri) {
+      toast.info("预览模式无法检查更新");
+      return;
+    }
+    try {
+      const available = await titlebarCheckUpdate();
+      if (available) {
+        // Re-show the banner even if this version was dismissed earlier: an
+        // explicit click is a request to see it again.
+        titlebarResetDismiss();
+        toast.success("发现新版本", {
+          description: "可在供应商页横幅或设置页安装。",
+          action: { label: "前往设置", onClick: () => setView("settings") },
+        });
+      } else {
+        toast.success("已是最新版本");
+      }
+    } catch (error) {
+      toast.error("检查更新失败", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [titlebarCheckUpdate, titlebarResetDismiss]);
 
   const loadProviders = async () => {
     if (!runningInTauri) {
@@ -1044,8 +1083,30 @@ export default function ChimeraApp() {
             {viewLabels[view]}
           </div>
           <div className="route-window-tools">
-            <button aria-label="打开设置" onClick={() => setView("settings")}>
-              <Settings2 size={16} />
+            <button
+              className={`titlebar-update${titlebarHasUpdate ? " is-available" : ""}`}
+              aria-label={
+                titlebarChecking
+                  ? "正在检查更新"
+                  : titlebarHasUpdate
+                    ? "有可用更新"
+                    : "检查更新"
+              }
+              title={
+                titlebarChecking
+                  ? "正在检查更新…"
+                  : titlebarHasUpdate
+                    ? "有可用更新"
+                    : "检查更新"
+              }
+              disabled={titlebarChecking}
+              onClick={() => void runTitlebarUpdateCheck()}
+            >
+              {titlebarChecking ? (
+                <LoaderCircle size={16} className="spin" />
+              ) : (
+                <ArrowUp size={16} />
+              )}
             </button>
             <WindowControls />
           </div>
@@ -1107,6 +1168,11 @@ export default function ChimeraApp() {
               enabled={skinEnabled}
               onRequestSkinAction={setPendingSkinAction}
             />
+          )}
+          {view === "sessions" && (
+            <div className="chimera-sessions-host">
+              <SessionManagerPage appId="all" />
+            </div>
           )}
           {view === "settings" && <NewSettingsView />}
         </section>
@@ -1847,7 +1913,8 @@ export function NewProvidersView({
   onAdd: () => void;
   onNavigate?: (view: View) => void;
 }) {
-  const { hasUpdate, updateInfo, isDismissed, dismissUpdate } = useUpdate();
+  const { hasUpdate, updateInfo, isDismissed, dismissUpdate, stagedVersion } =
+    useUpdate();
   const [managerOpen, setManagerOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [switchingId, setSwitchingId] = useState<string | null>(null);
@@ -1983,7 +2050,11 @@ export function NewProvidersView({
           <i aria-hidden="true" />
           <div className="route-update-banner-copy">
             <b>Chimera++ {updateInfo.availableVersion} 可用</b>
-            <small>已通过签名验证，更新后将自动重启。</small>
+            <small>
+              {stagedVersion === updateInfo.availableVersion
+                ? "安装包已在后台下载完毕，点击即可安装并重启。"
+                : "已通过签名验证，更新后将自动重启。"}
+            </small>
           </div>
           <div className="route-update-banner-actions">
             <button type="button" onClick={dismissUpdate}>
@@ -2005,13 +2076,7 @@ export function NewProvidersView({
       <div className="route-map" aria-label="当前 Codex 连接状态">
         <code className="route-stage-label">{globeStageLabel}</code>
         <div className="route-globe-stage">
-          <img
-            className="route-static-art"
-            src={kineticTopography}
-            alt=""
-            aria-hidden="true"
-            draggable={false}
-          />
+          <RouteGlobe className="route-globe-art" />
           <div
             className={`route-codex-launch${codexProcess?.running ? " is-running" : ""}${codexProcess?.supported === false || codexProcess?.installed === false ? " is-missing" : ""}`}
             aria-live="polite"
@@ -2493,7 +2558,7 @@ function ProviderEditor({
                 Responses，失败后自动切换并记住选择。明确指定时强制使用所选格式。
               </small>
             </label>
-            <div className="advanced-grid">
+            <div className="advanced-group">
               <label className="toggle-field">
                 <span>
                   <b>完整 API 地址</b>
@@ -3066,6 +3131,31 @@ function ActivityView({
   );
 }
 
+/** How many models the 模型词元分布 panel shows. */
+export const USAGE_TOP_MODEL_COUNT = 3;
+
+/**
+ * Rank models by the quantity the panel actually renders — tokens.
+ *
+ * The backend sorts by `total_cost DESC` (correct for the cost-columned
+ * ModelStatsTable, so it is not changed there). Taking the first N of that
+ * order here ranked by *cost* while the panel is labelled 模型词元分布 and
+ * prints 词元 counts, so a cheap-but-chatty model outranked an expensive-but-
+ * quiet one on screen. Worse, a model with no pricing entry has cost 0 and can
+ * never enter the top N no matter how many tokens it burns — which makes the
+ * panel look like a hardcoded model list.
+ *
+ * Sorted copy, not in place: the caller's array is React state.
+ */
+export function topModelsByTokens(
+  models: ModelStats[],
+  count = USAGE_TOP_MODEL_COUNT,
+): ModelStats[] {
+  return [...models]
+    .sort((a, b) => b.totalTokens - a.totalTokens)
+    .slice(0, count);
+}
+
 function UsageView() {
   const [summary, setSummary] = useState<UsageSummary | null>(null);
   const [trends, setTrends] = useState<DailyStats[]>([]);
@@ -3132,7 +3222,9 @@ function UsageView() {
         if (requestId !== usageRequestId.current) return;
         setSummary(nextSummary);
         setTrends(nextTrends);
-        setModels(nextModels.slice(0, 3));
+        // Keep every model: the top-N slice happens at render time, and the
+        // percentage denominator needs the full set to be a real share.
+        setModels(nextModels);
       } catch (reason) {
         if (requestId !== usageRequestId.current) return;
         setError(String(reason));
@@ -3166,10 +3258,14 @@ function UsageView() {
       item.totalCacheCreationTokens +
       item.totalCacheReadTokens,
   }));
+  // Denominator spans *every* model, not just the rendered ones, so a bar reads
+  // "this model's share of all token use". Summing only the top 3 would force
+  // them to 100% and overstate each one.
   const modelTotal = Math.max(
     models.reduce((sum, item) => sum + item.totalTokens, 0),
     1,
   );
+  const topModels = topModelsByTokens(models);
   const displayTotal = total;
   const peak = Math.max(...chartTrends.map((item) => item.totalTokens), 0);
   const spectrum = ["#36c5d9", "#53d7c2", "#ffb84d", "#ff7e57", "#e85d9e"];
@@ -3324,8 +3420,8 @@ function UsageView() {
           </div>
         </section>
         <section className="usage-spectrum-models" aria-label="模型词元分布">
-          {models.length ? (
-            models.map((item, index) => {
+          {topModels.length ? (
+            topModels.map((item, index) => {
               const ratio = Math.round((item.totalTokens / modelTotal) * 100);
               const color = spectrum[(index * 2) % spectrum.length];
               return (

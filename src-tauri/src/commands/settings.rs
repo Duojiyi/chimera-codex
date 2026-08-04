@@ -189,13 +189,97 @@ pub async fn restart_app(app: AppHandle) -> Result<bool, String> {
     Ok(true)
 }
 
+/// 已下载并通过签名验证、但尚未安装的更新包。
+///
+/// 存在内存里而不落盘：`tauri-plugin-updater` 只在 `download()` 过程中校验
+/// minisign 签名，落盘再读回就失去了这层保证，而重新实现验签风险更高。安装包
+/// 约 13 MB，常驻内存的代价可以接受。
+#[derive(Default)]
+pub struct StagedUpdate {
+    /// 已暂存字节对应的版本号，用于安装前比对，避免装上过期的包。
+    pub version: Option<String>,
+    pub bytes: Option<Vec<u8>>,
+}
+
+pub struct StagedUpdateState(pub std::sync::Arc<tokio::sync::Mutex<StagedUpdate>>);
+
+/// 取出可用于安装 `available` 版本的暂存字节；版本不符则清空暂存槽。
+///
+/// 版本不匹配时返回 `None`，已被取用过（`bytes` 为 `None`）时同样返回 `None`
+/// ——两种情况调用方都应重新下载。抽成纯函数是为了让"绝不安装过期包"这条规则
+/// 能被测试覆盖，否则它埋在需要 `AppHandle` 和网络往返的命令里无法验证。
+pub(crate) fn take_staged_bytes(staged: &mut StagedUpdate, available: &str) -> Option<Vec<u8>> {
+    if staged.version.as_deref() == Some(available) {
+        // 命中：取走字节。版本号留着，让重复调用能区分"装过了"和"没暂存过"。
+        return staged.bytes.take();
+    }
+    // 未命中：这份暂存已经过期，丢掉以免占着内存，也杜绝装错版本。
+    *staged = StagedUpdate::default();
+    None
+}
+
+/// 后台下载更新包并暂存，让用户点"立即更新"时可以直接安装、不必等下载。
+///
+/// 返回已暂存的版本号；无更新或未配置更新源时返回 `None`。整个下载过程持锁：
+/// 这样如果用户在暂存途中点了安装，`install_update_and_restart` 会等到这里
+/// 完成、直接复用这份字节，而不是并行再下一份。
+#[tauri::command]
+pub async fn stage_update_download(
+    app: AppHandle,
+    staged: tauri::State<'_, StagedUpdateState>,
+) -> Result<Option<String>, String> {
+    if !crate::product_policy::app_update_channel_configured() {
+        return Ok(None);
+    }
+
+    let updater = app
+        .updater_builder()
+        .build()
+        .map_err(|e| format!("初始化更新器失败: {e}"))?;
+
+    let Some(update) = updater
+        .check()
+        .await
+        .map_err(|e| format!("检查更新失败: {e}"))?
+    else {
+        // 已是最新：清掉可能残留的旧暂存，否则它会一直占着内存。
+        *staged.0.lock().await = StagedUpdate::default();
+        return Ok(None);
+    };
+
+    let mut guard = staged.0.lock().await;
+    if guard.version.as_deref() == Some(update.version.as_str()) && guard.bytes.is_some() {
+        return Ok(Some(update.version.clone()));
+    }
+
+    log::info!("后台暂存应用更新: {}", update.version);
+    let bytes = update
+        .download(
+            // 故意不发进度事件：用户没触发这次下载，界面上也没有进度条在等它。
+            // 13 MB 会产生数千次回调，逐块发 IPC 给零个监听者纯属浪费。安装时
+            // 复用这份字节的那条路径会补发一次 100% 的 update-download-progress。
+            |_chunk_len, _content_len| {},
+            || {},
+        )
+        .await
+        .map_err(|e| format!("下载更新失败: {e}"))?;
+
+    log::info!("✓ 更新包已暂存: {} ({} 字节)", update.version, bytes.len());
+    guard.version = Some(update.version.clone());
+    guard.bytes = Some(bytes);
+    Ok(Some(update.version))
+}
+
 /// 下载并安装应用更新，然后由后端直接重启应用。
 ///
 /// macOS 更新会原地替换 `.app` bundle。如果先返回前端、再让旧 WebView 调
 /// `process.relaunch()`，旧进程可能已经处在 bundle 被替换后的不稳定窗口期。
 /// 这里把退出清理、安装和重启串在同一个后端流程中，避免依赖旧前端继续执行。
 #[tauri::command]
-pub async fn install_update_and_restart(app: AppHandle) -> Result<bool, String> {
+pub async fn install_update_and_restart(
+    app: AppHandle,
+    staged: tauri::State<'_, StagedUpdateState>,
+) -> Result<bool, String> {
     if !crate::product_policy::app_update_channel_configured() {
         return Err("Chimera++ update source is not configured".to_string());
     }
@@ -213,25 +297,52 @@ pub async fn install_update_and_restart(app: AppHandle) -> Result<bool, String> 
         return Ok(false);
     };
 
-    log::info!("开始下载应用更新: {}", update.version);
-    let progress_handle = app.clone();
-    let mut downloaded: u64 = 0;
-    let bytes = update
-        .download(
-            move |chunk_len, content_len| {
-                downloaded = downloaded.saturating_add(chunk_len as u64);
-                let _ = progress_handle.emit(
-                    "update-download-progress",
-                    UpdateDownloadProgress {
-                        downloaded,
-                        total: content_len,
+    // 复用后台暂存的字节（如果版本对得上）。持锁等待意味着：若暂存正在进行，
+    // 这里会等它下完再直接用，而不是并行下载第二份。
+    let mut guard = staged.0.lock().await;
+    let staged_bytes = take_staged_bytes(&mut guard, &update.version);
+    drop(guard);
+
+    let bytes = match staged_bytes {
+        Some(bytes) => {
+            log::info!(
+                "复用已暂存的更新包: {} ({} 字节)，跳过下载",
+                update.version,
+                bytes.len()
+            );
+            // 补发一次"已下载完成"事件，否则前端进度条会停在暂存时的位置。
+            let total = bytes.len() as u64;
+            let _ = app.emit(
+                "update-download-progress",
+                UpdateDownloadProgress {
+                    downloaded: total,
+                    total: Some(total),
+                },
+            );
+            bytes
+        }
+        None => {
+            log::info!("开始下载应用更新: {}", update.version);
+            let progress_handle = app.clone();
+            let mut downloaded: u64 = 0;
+            update
+                .download(
+                    move |chunk_len, content_len| {
+                        downloaded = downloaded.saturating_add(chunk_len as u64);
+                        let _ = progress_handle.emit(
+                            "update-download-progress",
+                            UpdateDownloadProgress {
+                                downloaded,
+                                total: content_len,
+                            },
+                        );
                     },
-                );
-            },
-            || {},
-        )
-        .await
-        .map_err(|e| format!("下载更新失败: {e}"))?;
+                    || {},
+                )
+                .await
+                .map_err(|e| format!("下载更新失败: {e}"))?
+        }
+    };
 
     log::info!("开始安装应用更新: {}", update.version);
 
@@ -322,12 +433,63 @@ pub async fn set_auto_launch(enabled: bool) -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::merge_settings_for_save;
+    use super::{merge_settings_for_save, take_staged_bytes, StagedUpdate};
     use crate::settings::{
         AppSettings, CodexOfficialHistoryUnifyMigration, CodexProviderTemplateMigration,
         CodexThirdPartyHistoryProviderBucketMigration, LocalMigrations, S3SyncSettings,
         WebDavSyncSettings,
     };
+
+    fn staged(version: &str, bytes: &[u8]) -> StagedUpdate {
+        StagedUpdate {
+            version: Some(version.to_string()),
+            bytes: Some(bytes.to_vec()),
+        }
+    }
+
+    #[test]
+    fn staged_bytes_are_reused_when_the_version_matches() {
+        let mut slot = staged("2.3.0", b"msi");
+        assert_eq!(take_staged_bytes(&mut slot, "2.3.0"), Some(b"msi".to_vec()));
+    }
+
+    /// The rule worth protecting: a stale package must never be installed. If
+    /// the release moved on between staging and install, those bytes are the
+    /// wrong build and reusing them would silently install the older version.
+    #[test]
+    fn stale_staged_bytes_are_discarded_rather_than_installed() {
+        let mut slot = staged("2.3.0", b"old");
+        assert_eq!(take_staged_bytes(&mut slot, "2.4.0"), None);
+        // And the slot is cleared, so the bytes cannot be picked up later.
+        assert!(slot.bytes.is_none());
+        assert!(slot.version.is_none());
+    }
+
+    #[test]
+    fn an_empty_slot_reports_no_bytes() {
+        let mut slot = StagedUpdate::default();
+        assert_eq!(take_staged_bytes(&mut slot, "2.3.0"), None);
+    }
+
+    /// Taking twice must not hand out the same bytes again — the second caller
+    /// has to download, or it would install from a slot already consumed.
+    #[test]
+    fn bytes_are_handed_out_only_once() {
+        let mut slot = staged("2.3.0", b"msi");
+        assert!(take_staged_bytes(&mut slot, "2.3.0").is_some());
+        assert_eq!(take_staged_bytes(&mut slot, "2.3.0"), None);
+    }
+
+    /// A consumed slot keeps its version, so a later mismatched request still
+    /// takes the discard path rather than looking like a fresh empty slot.
+    #[test]
+    fn a_consumed_slot_still_discards_on_version_mismatch() {
+        let mut slot = staged("2.3.0", b"msi");
+        take_staged_bytes(&mut slot, "2.3.0");
+        assert_eq!(slot.version.as_deref(), Some("2.3.0"));
+        assert_eq!(take_staged_bytes(&mut slot, "2.4.0"), None);
+        assert!(slot.version.is_none());
+    }
 
     #[test]
     fn save_settings_should_preserve_existing_webdav_when_payload_omits_it() {

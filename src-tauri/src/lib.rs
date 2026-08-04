@@ -1320,6 +1320,11 @@ pub fn run() {
             let skill_service = SkillService::new();
             app.manage(commands::skill::SkillServiceState(Arc::new(skill_service)));
 
+            // 后台暂存的更新包（内存态，见 commands::StagedUpdate 的说明）。
+            app.manage(commands::StagedUpdateState(Arc::new(
+                tokio::sync::Mutex::new(commands::StagedUpdate::default()),
+            )));
+
             // 初始化 CopilotAuthManager
             {
                 use crate::proxy::providers::copilot_auth::CopilotAuthManager;
@@ -1592,6 +1597,7 @@ pub fn run() {
             commands::set_log_config,
             commands::restart_app,
             commands::install_update_and_restart,
+            commands::stage_update_download,
             commands::check_app_update_available,
             commands::check_for_updates,
             commands::is_portable_mode,

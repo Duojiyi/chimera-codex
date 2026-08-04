@@ -1,0 +1,5 @@
+# Generated data asset, not hand-edited. Regenerate rather than reformat.
+# Pretty-printing it turns 84 KB of minified coordinates into ~300 KB of noise
+# for no benefit — Vite re-serialises JSON compactly either way, so the bundle
+# is identical.
+src/assets/chimera/ne-110m-land.json

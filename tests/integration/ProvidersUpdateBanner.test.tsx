@@ -37,7 +37,9 @@ const mockProvider: Provider = {
   createdAt: Date.now(),
 };
 
-function makeProps(overrides: Partial<Parameters<typeof NewProvidersView>[0]> = {}) {
+function makeProps(
+  overrides: Partial<Parameters<typeof NewProvidersView>[0]> = {},
+) {
   return {
     providers: [mockProvider],
     currentId: mockProvider.id,
@@ -142,5 +144,37 @@ describe("NewProvidersView — update banner (Bug 2)", () => {
     fireEvent.click(screen.getByRole("button", { name: "立即更新" }));
     expect(dismissUpdateMock).toHaveBeenCalledOnce();
     expect(onNavigate).toHaveBeenCalledWith("settings");
+  });
+
+  it("tells the user the package is already downloaded once staging matches", () => {
+    useUpdateMock.mockReturnValue({
+      hasUpdate: true,
+      isDismissed: false,
+      updateInfo: { availableVersion: "2.1.4", currentVersion: "2.1.3" },
+      dismissUpdate: dismissUpdateMock,
+      stagedVersion: "2.1.4",
+    });
+
+    render(<NewProvidersView {...makeProps()} />);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "安装包已在后台下载完毕",
+    );
+  });
+
+  // The version comparison is the whole point: a stale staged package must not
+  // be advertised as ready, because installing it would downgrade or fail.
+  it("keeps the generic copy when the staged version is not the available one", () => {
+    useUpdateMock.mockReturnValue({
+      hasUpdate: true,
+      isDismissed: false,
+      updateInfo: { availableVersion: "2.1.4", currentVersion: "2.1.3" },
+      dismissUpdate: dismissUpdateMock,
+      stagedVersion: "2.1.3",
+    });
+
+    render(<NewProvidersView {...makeProps()} />);
+    const banner = screen.getByRole("status");
+    expect(banner).not.toHaveTextContent("安装包已在后台下载完毕");
+    expect(banner).toHaveTextContent("已通过签名验证");
   });
 });
