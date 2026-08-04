@@ -20,8 +20,8 @@
   --canvas: var(--p-canvas);
   --panel: var(--p-white);
   --line: var(--p-line);
-  --muted: var(--p-ink-500);
-  --accent: var(--p-orange);
+  --ch-muted: var(--p-ink-500);
+  --ch-accent: var(--p-orange);
   --soft: var(--p-orange-soft);
   --soft-border: var(--p-orange-200);
   --success: var(--p-green);
@@ -72,7 +72,7 @@
 }
 .settings-layout > aside button.active {
   background: var(--soft);
-  color: var(--accent);
+  color: var(--ch-accent);
   font-weight: 650;
 }
 .setting-row {
@@ -105,7 +105,7 @@
 }
 .setting-control p {
   margin: 4px 0;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 10px;
 }
 .segmented {
@@ -120,7 +120,7 @@
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 11px;
 }
 .segmented button.active {
@@ -141,7 +141,7 @@
   margin-left: auto;
   border: 0;
   background: transparent;
-  color: var(--accent);
+  color: var(--ch-accent);
   font-size: 10px;
 }
 .skin-preview-image {
@@ -203,7 +203,7 @@
 }
 .diagnostics-dialog header p {
   margin: 4px 0 0;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 11px;
 }
 .diagnostics-dialog footer {
@@ -245,7 +245,7 @@
 }
 .diagnostics-list p {
   margin: 5px 0 0;
-  color: var(--muted);
+  color: var(--ch-muted);
   font:
     11px/1.55 ui-monospace,
     monospace;
@@ -289,7 +289,7 @@
 }
 .onboarding-card > small {
   margin: 24px auto 0;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 10px;
 }
 .provider-editor {
@@ -308,7 +308,7 @@
   place-items: center;
   border-radius: 9px;
   background: var(--soft);
-  color: var(--accent);
+  color: var(--ch-accent);
   font-weight: 700;
 }
 .provider-editor .editor-form {
@@ -341,7 +341,7 @@
 }
 .model-picker p {
   margin: 4px 0 0;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 11px;
 }
 .model-picker-list {
@@ -366,9 +366,9 @@
     monospace;
 }
 .model-picker-list button.picked {
-  border-color: var(--accent);
+  border-color: var(--ch-accent);
   background: var(--soft);
-  color: var(--accent);
+  color: var(--ch-accent);
 }
 .editor-model-error {
   display: flex;
@@ -381,7 +381,7 @@
 button:focus-visible,
 input:focus-visible,
 select:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ch-accent);
   outline-offset: 2px;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -479,7 +479,7 @@ select:focus-visible {
   display: grid;
   place-items: center;
   background: #f2f4f5;
-  color: var(--muted);
+  color: var(--ch-muted);
 }
 .route-window-tools .window-dots {
   padding: 0;
@@ -495,7 +495,7 @@ select:focus-visible {
   border-radius: 50%;
 }
 .route-window-tools .window-dots button {
-  color: var(--muted);
+  color: var(--ch-muted);
 }
 .route-window-tools > button:hover,
 .route-window-tools .window-dots button:hover {
@@ -577,7 +577,7 @@ select:focus-visible {
   border: 0;
   border-radius: var(--r-lg);
   background: transparent;
-  color: var(--muted);
+  color: var(--ch-muted);
   display: grid;
   justify-items: center;
   gap: 6px;
@@ -601,7 +601,7 @@ select:focus-visible {
     box-shadow 180ms var(--ease);
 }
 .route-bottom-nav button.is-active {
-  color: var(--accent);
+  color: var(--ch-accent);
   font-weight: 700;
 }
 .route-bottom-nav button.is-active {
@@ -694,7 +694,7 @@ select:focus-visible {
 }
 .eyebrow {
   display: block;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -714,11 +714,11 @@ select:focus-visible {
 .route-gate-heading p,
 .usage-heading p {
   margin: 7px 0 0;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 12px;
 }
 .route-gate-heading code {
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 11px;
 }
 .route-map {
@@ -790,7 +790,7 @@ select:focus-visible {
   border-radius: 9px;
   display: grid;
   place-items: center;
-  background: var(--accent);
+  background: var(--ch-accent);
   color: #fff;
 }
 .route-provider-node h2 {
@@ -803,7 +803,7 @@ select:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 10px;
 }
 .route-status {
@@ -847,7 +847,7 @@ select:focus-visible {
   right: 15%;
 }
 .route-side-node svg {
-  color: var(--muted);
+  color: var(--ch-muted);
 }
 .route-side-node b {
   font-size: 12px;
@@ -858,7 +858,7 @@ select:focus-visible {
   white-space: nowrap;
   text-overflow: ellipsis;
   font-size: 10px;
-  color: var(--muted);
+  color: var(--ch-muted);
 }
 .route-selector {
   position: absolute;
@@ -884,7 +884,7 @@ select:focus-visible {
   display: grid;
   place-items: center;
   background: var(--soft);
-  color: var(--accent);
+  color: var(--ch-accent);
 }
 .route-selector b {
   display: block;
@@ -893,7 +893,7 @@ select:focus-visible {
 .route-selector small {
   display: block;
   margin-bottom: 2px;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 12px;
 }
 .route-selector .compact {
@@ -904,7 +904,7 @@ select:focus-visible {
   justify-content: center;
   gap: 40px;
   padding: 12px;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 11px;
 }
 .route-meta code {
@@ -965,7 +965,7 @@ select:focus-visible {
   font-size: 12px;
 }
 .route-list-row code {
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 10px;
 }
 .route-list-row em {
@@ -1007,6 +1007,8 @@ select:focus-visible {
   margin-bottom: 16px;
 }
 .provider-editor .editor-form {
+  display: flex;
+  flex-direction: column;
   gap: 13px;
 }
 .provider-editor footer {
@@ -1077,12 +1079,12 @@ select:focus-visible {
   border-left: 1px solid #eef1f3;
 }
 .runtime-info-strip svg {
-  color: var(--muted);
+  color: var(--ch-muted);
 }
 .runtime-info-strip span {
   display: grid;
   gap: 4px;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 10px;
 }
 .runtime-info-strip b {
@@ -1099,7 +1101,7 @@ select:focus-visible {
   max-width: 700px;
   margin: 0 auto 10px;
   text-align: left;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 11px;
 }
 .runtime-reference-progress i {
@@ -1113,7 +1115,7 @@ select:focus-visible {
 .runtime-reference-progress u {
   display: block;
   height: 100%;
-  background: var(--accent);
+  background: var(--ch-accent);
   border-radius: inherit;
   text-decoration: none;
 }
@@ -1261,7 +1263,7 @@ select:focus-visible {
   font-size: 13px;
 }
 .settings-reference-row small {
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 11px;
 }
 .settings-reference-row button {
@@ -1304,7 +1306,7 @@ select:focus-visible {
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 11px;
   font-weight: 600;
 }
@@ -1341,7 +1343,7 @@ select:focus-visible {
 }
 .settings-app-update.is-available .settings-app-update-icon {
   background: #fff0ec;
-  color: var(--accent);
+  color: var(--ch-accent);
 }
 .settings-app-update.is-error .settings-app-update-icon {
   background: #fff1ef;
@@ -1363,7 +1365,7 @@ select:focus-visible {
 }
 .settings-app-update-copy small,
 .settings-app-update-details small {
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 11px;
   line-height: 1.35;
 }
@@ -1397,7 +1399,7 @@ select:focus-visible {
   margin-top: 18px;
 }
 .settings-reference-footer code {
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 10px;
 }
 
@@ -1428,7 +1430,7 @@ select:focus-visible {
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 11px;
   font-weight: 600;
 }
@@ -1513,7 +1515,7 @@ select:focus-visible {
 }
 .usage-trend-card header small,
 .usage-models header small {
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 10px;
 }
 .usage-chart {
@@ -1536,19 +1538,19 @@ select:focus-visible {
   background: #d8dee2;
 }
 .usage-chart > span:last-child {
-  background: var(--accent);
+  background: var(--ch-accent);
 }
 .chart-empty {
   width: 100%;
   display: grid;
   place-items: center;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 12px;
 }
 .usage-trend-card footer {
   display: flex;
   justify-content: space-between;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 10px;
 }
 .usage-models {
@@ -1576,7 +1578,7 @@ select:focus-visible {
 }
 .usage-model-row span,
 .usage-model-row strong {
-  color: var(--muted);
+  color: var(--ch-muted);
   font:
     11px "Geist Mono",
     monospace;
@@ -1592,11 +1594,11 @@ select:focus-visible {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: var(--accent);
+  background: var(--ch-accent);
   text-decoration: none;
 }
 .muted-copy {
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 12px;
 }
 
@@ -1824,7 +1826,7 @@ select:focus-visible {
   isolation: isolate;
   border: 1px solid rgba(180, 193, 201, 0.5);
   border-radius: 16px;
-  background: var(--liquid-glass-fill);
+  background: var(--panel);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.9),
     inset 0 -1px 1px rgba(81, 99, 111, 0.1),
@@ -1870,7 +1872,7 @@ select:focus-visible {
   height: 32px;
   border: 0;
   background: transparent;
-  color: var(--muted);
+  color: var(--ch-muted);
 }
 .route-gate-reference .route-selector .primary {
   min-width: 88px;
@@ -1914,7 +1916,7 @@ select:focus-visible {
   padding: 0 11px;
   border-radius: 7px;
   background: #f1f3f4;
-  color: var(--muted);
+  color: var(--ch-muted);
 }
 .route-picker input {
   width: 100%;
@@ -1932,7 +1934,7 @@ select:focus-visible {
 .route-picker-empty {
   margin: 8px;
   padding: 18px 10px;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 13px;
   text-align: center;
 }
@@ -1962,7 +1964,7 @@ select:focus-visible {
 }
 .route-picker > div > button.is-active {
   background: #fff0ed;
-  color: var(--accent);
+  color: var(--ch-accent);
 }
 .route-picker > div > button span:nth-child(2) {
   min-width: 0;
@@ -1977,7 +1979,7 @@ select:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 12px;
 }
 .route-picker-add {
@@ -1988,7 +1990,7 @@ select:focus-visible {
   padding: 0 10px;
   border: 0;
   background: transparent;
-  color: var(--accent);
+  color: var(--ch-accent);
   font-size: 13px;
   font-weight: 700;
 }
@@ -2018,7 +2020,7 @@ select:focus-visible {
 }
 .runtime-maintenance-drawer header p {
   margin: 0;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 11px;
 }
 .runtime-maintenance-drawer header button {
@@ -2027,7 +2029,7 @@ select:focus-visible {
   border: 0;
   border-radius: 50%;
   background: #f2f4f5;
-  color: var(--muted);
+  color: var(--ch-muted);
 }
 .runtime-maintenance-content {
   overflow: auto;
@@ -2068,11 +2070,11 @@ select:focus-visible {
   place-items: center;
   border-radius: 7px;
   background: #edf1f3;
-  color: var(--muted);
+  color: var(--ch-muted);
 }
 .runtime-mode-card.is-active > span:first-child {
   background: #ffe0da;
-  color: var(--accent);
+  color: var(--ch-accent);
 }
 .runtime-mode-card strong,
 .runtime-mode-card small {
@@ -2083,7 +2085,7 @@ select:focus-visible {
 }
 .runtime-mode-card small {
   margin-top: 3px;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 10px;
 }
 .runtime-source-segment {
@@ -2099,7 +2101,7 @@ select:focus-visible {
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 11px;
 }
 .runtime-source-segment button.is-active {
@@ -2136,7 +2138,7 @@ select:focus-visible {
 }
 .runtime-maintenance-list small {
   margin-top: 2px;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 9px;
 }
 .runtime-maintenance-list .danger {
@@ -2170,7 +2172,7 @@ select:focus-visible {
 }
 .skin-market-heading p {
   margin: 0;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 11px;
 }
 .skin-filter-tabs {
@@ -2185,7 +2187,7 @@ select:focus-visible {
   border: 0;
   border-radius: 6px;
   background: #eef1f3;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 10px;
 }
 .skin-filter-tabs button.is-active {
@@ -2195,7 +2197,7 @@ select:focus-visible {
 .skin-filter-tabs .skin-import {
   margin-left: 8px;
   background: transparent;
-  color: var(--accent);
+  color: var(--ch-accent);
 }
 .skin-market-reference .skin-layout {
   min-height: 0;
@@ -2337,7 +2339,7 @@ select:focus-visible {
 }
 .skin-market-reference .skin-list code {
   margin-top: 3px;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 9px;
 }
 .skin-market-reference .skin-list em {
@@ -2386,7 +2388,7 @@ select:focus-visible {
 }
 .skin-detail-footer p {
   margin: 4px 0 0;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 9px;
 }
 .skin-detail-footer .skin-actions {
@@ -2441,7 +2443,7 @@ select:focus-visible {
   border: 1px solid rgba(255, 255, 255, 0.92);
   border-radius: 50%;
   background: rgba(248, 250, 252, 0.82);
-  color: var(--muted);
+  color: var(--ch-muted);
   box-shadow:
     inset 0 1px 0 #fff,
     inset 0 -1px 0 rgba(122, 136, 146, 0.18),
@@ -2490,7 +2492,7 @@ select:focus-visible {
   border-color: #e56a59;
   background:
     radial-gradient(circle at 26px 50%, #fff 0 7px, transparent 8px),
-    var(--accent);
+    var(--ch-accent);
 }
 .advanced-options .toggle-field input[type="checkbox"]:focus-visible {
   outline: 2px solid var(--focus);
@@ -2516,12 +2518,12 @@ select:focus-visible {
   gap: 12px;
   min-height: 34px;
   border-top: 1px solid #e6eaed;
-  color: var(--muted);
+  color: var(--ch-muted);
   font-size: 11px;
 }
 .common-config-actions .link-button:disabled {
   cursor: not-allowed;
-  color: var(--muted);
+  color: var(--ch-muted);
   opacity: 0.55;
 }
 .common-config-editor {
@@ -2757,7 +2759,7 @@ select:focus-visible {
   font-weight: 700;
 }
 .route-line-heading > button:hover {
-  color: var(--accent);
+  color: var(--ch-accent);
 }
 .route-line-rail {
   height: 80px;
@@ -2833,7 +2835,7 @@ select:focus-visible {
 .route-line-card.is-active .route-line-mark,
 .route-line-manager article.is-active .route-line-mark {
   background: #ffe0d8;
-  color: var(--accent);
+  color: var(--ch-accent);
 }
 .route-line-copy {
   min-width: 0;
@@ -2886,7 +2888,7 @@ select:focus-visible {
   place-items: center;
   border-radius: 50%;
   background: #fff0ec;
-  color: var(--accent);
+  color: var(--ch-accent);
 }
 .route-line-add:hover {
   border-color: #ffc3b6;
