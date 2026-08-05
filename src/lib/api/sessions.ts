@@ -12,6 +12,15 @@ export interface DeleteSessionResult extends DeleteSessionOptions {
   error?: string;
 }
 
+export interface CodexHistoryReclaimResult {
+  reclaimedJsonlFiles: number;
+  reclaimedStateRows: number;
+  /** 本次归拢涉及的来源桶 id。 */
+  sourceProviderIds: string[];
+  /** 被跳过的原因，用于区分「无需恢复」与「恢复了 0 项」。 */
+  skippedReason?: string;
+}
+
 export const sessionsApi = {
   async list(): Promise<SessionMeta[]> {
     return await invoke("list_sessions");
@@ -37,6 +46,16 @@ export const sessionsApi = {
     items: DeleteSessionOptions[],
   ): Promise<DeleteSessionResult[]> {
     return await invoke("delete_sessions", { items });
+  },
+
+  /**
+   * 把所有第三方桶的 Codex 历史会话归拢到当前共享 custom 桶。
+   *
+   * 切换中转供应商后会话列表看起来「丢失」时使用：会话文件仍在
+   * `~/.codex/sessions`，只是记录的 model_provider 是旧桶 id。改写前会自动备份。
+   */
+  async reclaimCodexHistory(): Promise<CodexHistoryReclaimResult> {
+    return await invoke("reclaim_codex_history_sessions");
   },
 
   async launchTerminal(options: {

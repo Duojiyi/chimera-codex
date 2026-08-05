@@ -1007,6 +1007,13 @@ pub fn run() {
                             log::warn!("✗ Codex official history unify migration failed: {e}");
                         }
                     }
+
+                    // 未归档会话必须始终可见：上面两个迁移都是一次性/白名单驱动的，
+                    // 覆盖不到中转商自定的桶 id（Codex 按 model_providers 表名写入，
+                    // 可任意命名）。每次启动按实际数据反查一次并归拢到当前桶，
+                    // 使「切换中转线路或重启后会话列表变空」不再需要用户手动干预。
+                    // 无事可做时只是一次目录扫描，不写文件。
+                    crate::codex_history_migration::auto_reclaim_codex_history_if_needed();
                 });
             }
 
@@ -1785,6 +1792,7 @@ pub fn run() {
             commands::get_session_messages,
             commands::delete_session,
             commands::delete_sessions,
+            commands::reclaim_codex_history_sessions,
             commands::launch_session_terminal,
             commands::get_tool_versions,
             commands::run_tool_lifecycle_action,

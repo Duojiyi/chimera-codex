@@ -938,6 +938,20 @@ async fn switch_provider_with_automatic_routing_locked(
         Ok(mut result) => {
             result.routing_changed = routing_changed || routing_reconciliation_required;
             result.routing_enabled = auto_manage_routing.then_some(routing_required);
+
+            // 线路切换是会话「看起来丢失」的触发点：新 live 的 model_provider 变了，
+            // Codex 只列出与之相同的会话，旧桶里的历史就从列表消失。切换完成后把
+            // 未归档历史归拢到当前桶，使列表始终完整，无需用户手动点恢复。
+            //
+            // 放在这里而不是切换事务内部：改写会话文件与供应商切换是两个独立的写
+            // 域，归拢失败绝不能回滚一次成功的切换（函数内部只记日志）。大目录扫描
+            // 可能耗时，因此丢到后台线程，不拖慢切换返回。
+            if matches!(app_type, AppType::Codex) {
+                tauri::async_runtime::spawn_blocking(
+                    crate::codex_history_migration::auto_reclaim_codex_history_if_needed,
+                );
+            }
+
             Ok(result)
         }
         Err(error) => {
@@ -1878,6 +1892,70 @@ mod automatic_routing_tests {
         assert!(provider_requires_automatic_routing(
             &AppType::Codex,
             &chat_provider
+        ));
+    }
+
+    #[test]
+    fn declared_native_responses_provider_stays_direct_even_on_auto() {
+        // 前端把"自动"刻意不持久化，所以 meta.api_format 为 None 是默认状态。
+        // 但 config.toml 已经声明了 wire_api = "responses"：这是第一方声明，
+        // 上游原生支持 Responses，不需要任何协议转换，也就不该被强制接管。
+        // 否则用户填入密钥拿到 GPT 模型，却看到 127.0.0.1:15721 和它的 502。
+        let declared = provider(
+            json!({
+                "config": "model_provider = \"custom\"\n[model_providers.custom]\nbase_url = \"https://api.example.com/v1\"\nwire_api = \"responses\"\n"
+            }),
+            None,
+        );
+        assert!(!provider_requires_automatic_routing(
+            &AppType::Codex,
+            &declared
+        ));
+
+        // 顶层 wire_api 形式同样采信。
+        let top_level = provider(json!({ "config": "wire_api = \"responses\"\n" }), None);
+        assert!(!provider_requires_automatic_routing(
+            &AppType::Codex,
+            &top_level
+        ));
+
+        // 没有任何声明时仍需接管，自动检测能力不受影响。
+        let undeclared = provider(
+            json!({ "config": "model_provider = \"custom\"\n[model_providers.custom]\nbase_url = \"https://api.example.com/v1\"\n" }),
+            None,
+        );
+        assert!(provider_requires_automatic_routing(
+            &AppType::Codex,
+            &undeclared
+        ));
+
+        // 声明 chat 的仍然需要接管（转换是必需的）。
+        let declared_chat = provider(
+            json!({
+                "config": "model_provider = \"custom\"\n[model_providers.custom]\nwire_api = \"chat\"\n"
+            }),
+            None,
+        );
+        assert!(provider_requires_automatic_routing(
+            &AppType::Codex,
+            &declared_chat
+        ));
+    }
+
+    #[test]
+    fn full_url_provider_still_requires_routing_despite_declared_responses() {
+        // 完整 API 地址需要代理注入/改写，声明了原生 Responses 也不能豁免；
+        // 收窄自动检测候选不得削弱其他接管理由。
+        let mut full_url = provider(
+            json!({
+                "config": "model_provider = \"custom\"\n[model_providers.custom]\nwire_api = \"responses\"\n"
+            }),
+            None,
+        );
+        full_url.meta.as_mut().unwrap().is_full_url = Some(true);
+        assert!(provider_requires_automatic_routing(
+            &AppType::Codex,
+            &full_url
         ));
     }
 

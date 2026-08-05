@@ -16,6 +16,7 @@ import { setSessionFixtures } from "../msw/state";
 
 const toastSuccessMock = vi.fn();
 const toastErrorMock = vi.fn();
+const toastInfoMock = vi.fn();
 const GROUP_EXPANSION_STORAGE_KEY =
   "cc-switch.sessionManager.groupExpansionState";
 
@@ -23,6 +24,7 @@ vi.mock("sonner", () => ({
   toast: {
     success: (...args: unknown[]) => toastSuccessMock(...args),
     error: (...args: unknown[]) => toastErrorMock(...args),
+    info: (...args: unknown[]) => toastInfoMock(...args),
   },
 }));
 
@@ -247,6 +249,59 @@ describe("SessionManagerPage", () => {
     expect(screen.queryByText("Alpha Session")).not.toBeInTheDocument();
     expect(toastErrorMock).not.toHaveBeenCalled();
     expect(toastSuccessMock).toHaveBeenCalled();
+  });
+
+  it("reclaims history sessions after confirmation and refreshes the list", async () => {
+    renderPage();
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { name: "Alpha Session" }),
+      ).toBeInTheDocument(),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /一键恢复所有历史会话/i }),
+    );
+
+    const dialog = screen.getByTestId("confirm-dialog");
+    expect(within(dialog).getByText(/恢复所有历史会话/)).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /开始恢复/i }));
+
+    await waitFor(() => expect(toastSuccessMock).toHaveBeenCalled());
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("reports a skipped reclaim without claiming success", async () => {
+    // live 未指向共享桶时归拢会把历史移到看不见的分组，后端因此跳过；
+    // 这种情况必须报错而不是显示"已恢复 0 个"。
+    vi.spyOn(sessionsApi, "reclaimCodexHistory").mockResolvedValueOnce({
+      reclaimedJsonlFiles: 0,
+      reclaimedStateRows: 0,
+      sourceProviderIds: [],
+      skippedReason: "live_not_custom",
+    });
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { name: "Alpha Session" }),
+      ).toBeInTheDocument(),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /一键恢复所有历史会话/i }),
+    );
+    fireEvent.click(
+      within(screen.getByTestId("confirm-dialog")).getByRole("button", {
+        name: /开始恢复/i,
+      }),
+    );
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
+    expect(toastSuccessMock).not.toHaveBeenCalled();
   });
 
   it("removes a deleted session from filtered search results", async () => {

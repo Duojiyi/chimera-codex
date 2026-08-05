@@ -864,6 +864,28 @@ fn push_env_codex_cli_candidates(candidates: &mut Vec<PathBuf>, seen: &mut HashS
         );
     }
 
+    // The macOS Codex desktop app ships a native `codex` binary inside its
+    // bundle. It needs no Node interpreter, so it is the reliable fallback when
+    // the user's only other install is an npm launcher that a GUI-inherited
+    // PATH cannot run. This mirrors the Windows resources-directory block below,
+    // whose absence on macOS is why the runtime probe failed there.
+    #[cfg(target_os = "macos")]
+    {
+        for root in [
+            PathBuf::from("/Applications/Codex.app"),
+            get_home_dir().join("Applications/Codex.app"),
+        ] {
+            for relative in [
+                "Contents/Resources/codex",
+                "Contents/Resources/app/codex",
+                "Contents/MacOS/codex",
+                "Contents/Resources/bin/codex",
+            ] {
+                push_existing_codex_cli_candidate(candidates, seen, root.join(relative));
+            }
+        }
+    }
+
     #[cfg(windows)]
     {
         if let Some(appdata) = std::env::var_os("APPDATA") {
@@ -907,11 +929,44 @@ fn codex_cli_candidates() -> Vec<PathBuf> {
     candidates
 }
 
+/// Build a PATH with `candidate`'s own directory in front of the inherited one.
+///
+/// Calling the CLI by absolute path is not enough to make it runnable: npm
+/// installs `@openai/codex` as a launcher whose shebang is
+/// `#!/usr/bin/env node`, so the kernel still has to find `node` via PATH. A
+/// GUI process on macOS inherits launchd's PATH (`/usr/bin:/bin:/usr/sbin:
+/// /sbin`) and never reads the user's shell rc files, so Homebrew/nvm/fnm/volta
+/// Node directories are absent and the launcher dies with exit 127
+/// (`env: node: No such file or directory`). Prefixing the candidate's sibling
+/// bin directory makes the interpreter resolve to the same install we picked.
+/// This mirrors what `commands::misc` already does for its version probes.
+fn codex_command_path_env(candidate: &Path) -> Option<std::ffi::OsString> {
+    let parent = candidate.parent()?;
+    if parent.as_os_str().is_empty() {
+        // A bare command name such as `codex`; nothing to anchor to.
+        return None;
+    }
+
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let mut prefixed = std::ffi::OsString::from(parent);
+    if !inherited.is_empty() {
+        #[cfg(target_os = "windows")]
+        prefixed.push(";");
+        #[cfg(not(target_os = "windows"))]
+        prefixed.push(":");
+        prefixed.push(&inherited);
+    }
+    Some(prefixed)
+}
+
 fn codex_command(candidate: &Path, args: &[&str], codex_home: Option<&Path>) -> Command {
     let mut command = Command::new(candidate);
     command.args(args).stdin(Stdio::null());
     if let Some(codex_home) = codex_home {
         command.env("CODEX_HOME", codex_home);
+    }
+    if let Some(path_env) = codex_command_path_env(candidate) {
+        command.env("PATH", path_env);
     }
 
     // A release build uses the Windows GUI subsystem, so a console child that
@@ -968,22 +1023,109 @@ fn load_codex_model_template_from_bundled() -> Result<Option<Value>, AppError> {
     Ok(None)
 }
 
+/// Known, non-sensitive `codex debug models` failure signatures worth showing
+/// verbatim: each one tells the user exactly what to fix, and none can contain
+/// config contents or credentials.
+///
+/// `env: node: ...` is the macOS GUI-PATH failure (npm launcher without a
+/// reachable Node); the clap messages mean the installed CLI predates the
+/// subcommand this probe relies on.
+fn recognized_codex_probe_hint(stderr: &str) -> Option<String> {
+    const PATTERNS: &[(&str, &str)] = &[
+        (
+            "env: node",
+            "Codex CLI 是 npm 安装的启动脚本，但当前进程找不到 node（macOS 图形进程不会加载 shell 配置）",
+        ),
+        (
+            "env: 'node'",
+            "Codex CLI 是 npm 安装的启动脚本，但当前进程找不到 node（macOS 图形进程不会加载 shell 配置）",
+        ),
+        (
+            "unrecognized subcommand",
+            "已安装的 Codex CLI 不支持 `codex debug models`，版本过旧",
+        ),
+        (
+            "unexpected argument",
+            "已安装的 Codex CLI 不支持 `codex debug models`，版本过旧",
+        ),
+        (
+            "command not found",
+            "Codex CLI 启动脚本所需的解释器不在当前进程 PATH 中",
+        ),
+    ];
+
+    let lowered = stderr.to_ascii_lowercase();
+    PATTERNS
+        .iter()
+        .find(|(needle, _)| lowered.contains(needle))
+        .map(|(_, hint)| (*hint).to_string())
+}
+
+/// Why the runtime model probe could not produce a list. Kept separate from the
+/// success path so callers can tell "Codex never ran" from "Codex ran and
+/// rejected the config" — the two need completely different user guidance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CodexProbeFailure {
+    /// No candidate could even be spawned (CLI not installed / not found).
+    NoCliFound,
+    /// A candidate ran but exited non-zero.
+    ExitedUnsuccessfully {
+        code: Option<i32>,
+        hint: Option<String>,
+    },
+    /// A candidate exited 0 but its stdout was not the expected JSON shape.
+    UnusableOutput,
+}
+
+impl CodexProbeFailure {
+    fn message(&self) -> String {
+        match self {
+            Self::NoCliFound => "未找到可用的 Codex CLI，无法验证 Codex 实际模型列表".to_string(),
+            Self::ExitedUnsuccessfully { code, hint } => {
+                let code = code
+                    .map(|code| format!("退出码 {code}"))
+                    .unwrap_or_else(|| "异常终止".to_string());
+                match hint {
+                    Some(hint) => {
+                        format!("Codex CLI 无法解析当前配置目录中的实际模型列表（{code}）：{hint}")
+                    }
+                    None => format!("Codex CLI 无法解析当前配置目录中的实际模型列表（{code}）"),
+                }
+            }
+            Self::UnusableOutput => "Codex CLI 返回的模型列表为空或格式不可识别".to_string(),
+        }
+    }
+
+    /// Later variants describe a more advanced (more informative) failure, so a
+    /// candidate that actually ran outranks one that was never found.
+    fn rank(&self) -> u8 {
+        match self {
+            Self::NoCliFound => 0,
+            Self::ExitedUnsuccessfully { .. } => 1,
+            Self::UnusableOutput => 2,
+        }
+    }
+}
+
 /// Ask Codex itself which models it loaded from the active `CODEX_HOME`.
 ///
 /// The generated JSON file can be syntactically valid while the desktop app is
 /// reading a different config directory, so file-level checks alone are not
-/// sufficient. This probe intentionally returns only model identities and never
-/// includes stderr or config contents in an error/log message.
+/// sufficient. This probe returns only model identities; error text is limited to
+/// an exit code plus a recognized-pattern hint, never raw stderr or config
+/// contents.
 pub fn probe_codex_runtime_models() -> Result<Vec<CodexRuntimeModel>, AppError> {
     let codex_home = get_codex_config_dir();
-    let mut launched_candidate = false;
+    let mut failure = CodexProbeFailure::NoCliFound;
+    fn record(next: CodexProbeFailure, failure: &mut CodexProbeFailure) {
+        if next.rank() >= failure.rank() {
+            *failure = next;
+        }
+    }
 
     for candidate in codex_cli_candidates() {
         let output = match codex_runtime_models_command(&candidate, &codex_home).output() {
-            Ok(output) => {
-                launched_candidate = true;
-                output
-            }
+            Ok(output) => output,
             Err(error) => {
                 log::debug!(
                     "unable to run Codex model probe ({}): {}",
@@ -995,10 +1137,20 @@ pub fn probe_codex_runtime_models() -> Result<Vec<CodexRuntimeModel>, AppError> 
         };
 
         if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let hint = recognized_codex_probe_hint(&stderr);
             log::debug!(
-                "Codex model probe exited unsuccessfully ({}): {:?}",
+                "Codex model probe exited unsuccessfully ({}): {:?} hint={:?}",
                 candidate.display(),
-                output.status.code()
+                output.status.code(),
+                hint
+            );
+            record(
+                CodexProbeFailure::ExitedUnsuccessfully {
+                    code: output.status.code(),
+                    hint,
+                },
+                &mut failure,
             );
             continue;
         }
@@ -1007,11 +1159,13 @@ pub fn probe_codex_runtime_models() -> Result<Vec<CodexRuntimeModel>, AppError> 
             Ok(catalog) => catalog,
             Err(error) => {
                 log::debug!("Codex model probe returned invalid JSON: {error}");
+                record(CodexProbeFailure::UnusableOutput, &mut failure);
                 continue;
             }
         };
         let Some(models) = catalog.get("models").and_then(Value::as_array) else {
             log::debug!("Codex model probe returned no models array");
+            record(CodexProbeFailure::UnusableOutput, &mut failure);
             continue;
         };
 
@@ -1044,18 +1198,14 @@ pub fn probe_codex_runtime_models() -> Result<Vec<CodexRuntimeModel>, AppError> 
 
         if malformed || parsed.is_empty() {
             log::debug!("Codex model probe returned an empty or malformed model list");
+            record(CodexProbeFailure::UnusableOutput, &mut failure);
             continue;
         }
 
         return Ok(parsed);
     }
 
-    let message = if launched_candidate {
-        "Codex CLI 无法解析当前配置目录中的实际模型列表"
-    } else {
-        "未找到可用的 Codex CLI，无法验证 Codex 实际模型列表"
-    };
-    Err(AppError::Message(message.to_string()))
+    Err(AppError::Message(failure.message()))
 }
 
 fn load_codex_model_template_static() -> Option<Value> {
@@ -4149,6 +4299,75 @@ web_search = "disabled"
                 .collect::<Vec<_>>(),
             ["debug", "models", "--bundled"]
         );
+    }
+
+    #[test]
+    fn absolute_candidate_prefixes_its_own_bin_dir_onto_path() {
+        // An npm-installed launcher resolves `node` through PATH, which a macOS
+        // GUI process inherits from launchd without the user's Node directory.
+        let candidate = Path::new("/Users/tester/.nvm/versions/node/v22.11.0/bin/codex");
+        let path_env = codex_command_path_env(candidate).expect("absolute candidate anchors PATH");
+        let rendered = path_env.to_string_lossy().into_owned();
+
+        let expected_prefix = "/Users/tester/.nvm/versions/node/v22.11.0/bin";
+        assert!(
+            rendered.starts_with(expected_prefix),
+            "candidate's own bin dir must come first, got {rendered}"
+        );
+        if let Some(inherited) = std::env::var_os("PATH") {
+            if !inherited.is_empty() {
+                assert!(
+                    rendered.len() > expected_prefix.len(),
+                    "inherited PATH must be preserved after the prefix"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bare_command_name_leaves_path_untouched() {
+        // `codex` on PATH has no sibling dir to anchor to; overriding PATH here
+        // would be strictly worse than inheriting it.
+        assert!(codex_command_path_env(Path::new("codex")).is_none());
+    }
+
+    #[test]
+    fn recognized_probe_hints_explain_actionable_failures() {
+        assert!(
+            recognized_codex_probe_hint("env: node: No such file or directory")
+                .is_some_and(|hint| hint.contains("node")),
+            "the macOS GUI PATH failure must be explained to the user"
+        );
+        assert!(
+            recognized_codex_probe_hint("error: unrecognized subcommand 'models'")
+                .is_some_and(|hint| hint.contains("版本过旧")),
+            "an outdated CLI must be reported as such"
+        );
+        assert_eq!(
+            recognized_codex_probe_hint("panicked while reading /Users/me/.codex/auth.json"),
+            None,
+            "unrecognized stderr must not be surfaced: it can carry paths or secrets"
+        );
+    }
+
+    #[test]
+    fn probe_failure_messages_distinguish_cause_and_keep_ran_candidates() {
+        assert!(CodexProbeFailure::NoCliFound
+            .message()
+            .contains("未找到可用的 Codex CLI"));
+
+        let exited = CodexProbeFailure::ExitedUnsuccessfully {
+            code: Some(127),
+            hint: Some("找不到 node".to_string()),
+        };
+        let message = exited.message();
+        assert!(message.contains("127"), "exit code aids self-diagnosis");
+        assert!(message.contains("找不到 node"));
+
+        // A candidate that actually ran is more informative than one never found,
+        // so it must win when several candidates fail differently.
+        assert!(exited.rank() > CodexProbeFailure::NoCliFound.rank());
+        assert!(CodexProbeFailure::UnusableOutput.rank() > exited.rank());
     }
 
     #[test]

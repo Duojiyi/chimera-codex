@@ -119,15 +119,45 @@ pub fn codex_eligible_for_chat_auto_detect(provider: &Provider, endpoint: &str) 
     !codex_provider_uses_chat_completions(provider)
 }
 
+/// Whether the provider's own config explicitly declares the native Responses
+/// wire protocol (`wire_api = "responses"`).
+///
+/// This is a first-party declaration, not a guess: every built-in preset and the
+/// official provider table write it, and vendors' own Codex docs specify it for
+/// gateways that serve `/responses` natively. Such an upstream needs no protocol
+/// translation, so it must not be dragged through the local router.
+fn codex_provider_declares_native_responses(provider: &Provider) -> bool {
+    let declared = provider
+        .settings_config
+        .get("config")
+        .and_then(|value| value.as_str())
+        .and_then(extract_codex_wire_api_from_toml);
+
+    declared.is_some_and(|wire_api| {
+        matches!(
+            wire_api.trim().to_ascii_lowercase().as_str(),
+            "responses" | "openai_responses" | "openai-responses"
+        )
+    })
+}
+
 /// Provider 级别的自动检测候选判断（不需要端点信息）。
 ///
 /// 当以下条件全部成立时返回 `true`：
 /// 1. `meta.api_format` 未显式设置（用户选择了"自动"，而非手动指定格式）
 /// 2. 未通过 `wire_api` 或 `meta.api_format` 判定为 Chat Completions
 /// 3. 未通过 `wire_api` 或 `meta.api_format` 判定为 Anthropic Messages
+/// 4. config.toml 未显式声明 `wire_api = "responses"`
 ///
 /// 满足条件的 provider 需要经由本地代理转发（proxy takeover），才能在请求级别
 /// 触发 `codex_eligible_for_chat_auto_detect` 并完成 Responses→Chat 自动切换。
+///
+/// 第 4 条是刻意的收窄。此前这里是个「取反」兜底：凡是没被判定为 Chat 或
+/// Anthropic 的都算候选。而前端把"自动"刻意不持久化（`meta.api_format` 保持为
+/// 空，让运行时检测决定），于是原生 Responses 的 GPT 端点也恒为候选、恒被强制
+/// 走 `127.0.0.1:15721`——用户填入密钥后拿到的是 GPT 模型，却看到本地路由地址
+/// 和它转发失败时的 502。既然 config.toml 已经明确声明了 `wire_api`，就该采信，
+/// 不必再拿一次失败的请求去"检测"。
 pub fn codex_provider_is_auto_detect_candidate(provider: &Provider) -> bool {
     // 用户已手动指定格式 → 无需自动检测，也无需代理接管
     if provider
@@ -136,6 +166,10 @@ pub fn codex_provider_is_auto_detect_candidate(provider: &Provider) -> bool {
         .and_then(|m| m.api_format.as_deref())
         .is_some()
     {
+        return false;
+    }
+    // config.toml 已声明原生 Responses → 无需检测，也无需接管
+    if codex_provider_declares_native_responses(provider) {
         return false;
     }
     // Chat / Anthropic 已经通过其他条件要求代理，这里排除以避免重复计数

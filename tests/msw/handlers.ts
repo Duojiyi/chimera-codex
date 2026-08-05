@@ -130,6 +130,14 @@ export const handlers = [
 
   http.post(`${TAURI_ENDPOINT}/list_sessions`, () => success(listSessions())),
 
+  http.post(`${TAURI_ENDPOINT}/reclaim_codex_history_sessions`, () =>
+    success({
+      reclaimedJsonlFiles: 2,
+      reclaimedStateRows: 3,
+      sourceProviderIds: ["relay-a", "relay-b"],
+    }),
+  ),
+
   http.post(`${TAURI_ENDPOINT}/get_session_messages`, async ({ request }) => {
     const { providerId, sourcePath } = await withJson<{
       providerId: string;

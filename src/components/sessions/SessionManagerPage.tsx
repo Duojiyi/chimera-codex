@@ -5,6 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  ArchiveRestore,
   Copy,
   RefreshCw,
   Search,
@@ -206,6 +207,8 @@ export function SessionManagerPage({ appId }: { appId: string }) {
   );
   const [isBatchDeleting, setIsBatchDeleting] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
+  const [isReclaiming, setIsReclaiming] = useState(false);
+  const [reclaimConfirmOpen, setReclaimConfirmOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const [search, setSearch] = useState("");
@@ -541,6 +544,76 @@ export function SessionManagerPage({ appId }: { appId: string }) {
       );
     } finally {
       setIsBatchDeleting(false);
+    }
+  };
+
+  /**
+   * 一键恢复所有历史会话。
+   *
+   * 切换中转供应商后 Codex 只列出与当前 model_provider 相同的会话，旧桶里的
+   * 历史看起来「丢失」了。后端把这些桶统一改写为当前共享桶（改写前自动备份），
+   * 会话便重新出现在列表里。
+   */
+  const handleReclaimHistory = async () => {
+    setReclaimConfirmOpen(false);
+    setIsReclaiming(true);
+    try {
+      const result = await sessionsApi.reclaimCodexHistory();
+
+      if (result.skippedReason === "live_not_custom") {
+        toast.error(
+          t("sessionManager.reclaimLiveNotCustom", {
+            defaultValue:
+              "当前 Codex 线路未使用共享供应商标识，恢复会把历史移到看不见的分组。请先切换到一条第三方线路后重试。",
+          }),
+        );
+        return;
+      }
+      if (result.skippedReason === "nothing_to_reclaim") {
+        toast.info(
+          t("sessionManager.reclaimNothing", {
+            defaultValue: "没有需要恢复的历史会话，现有会话都已在当前分组中。",
+          }),
+        );
+        return;
+      }
+      if (result.skippedReason) {
+        // 未知的跳过原因：reason 是内部标识（如 live_not_custom），不直接展示给
+        // 用户；给一句通用说明，具体值留在日志里。
+        toast.info(
+          t("sessionManager.reclaimSkipped", {
+            defaultValue: "本次没有执行恢复，请稍后重试或查看日志。",
+          }),
+        );
+        return;
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      await refetch();
+
+      toast.success(
+        t("sessionManager.reclaimSuccess", {
+          defaultValue: "已恢复 {{files}} 个会话文件",
+          files: result.reclaimedJsonlFiles,
+        }),
+        {
+          description: t("sessionManager.reclaimSuccessDetail", {
+            defaultValue:
+              "同时更新 {{rows}} 条索引记录，来源分组：{{sources}}。原文件已备份。",
+            rows: result.reclaimedStateRows,
+            sources: result.sourceProviderIds.join("、"),
+          }),
+        },
+      );
+    } catch (error) {
+      toast.error(
+        extractErrorMessage(error) ||
+          t("sessionManager.reclaimFailed", {
+            defaultValue: "恢复历史会话失败，请稍后重试",
+          }),
+      );
+    } finally {
+      setIsReclaiming(false);
     }
   };
 
@@ -1137,6 +1210,34 @@ export function SessionManagerPage({ appId }: { appId: string }) {
                               variant="ghost"
                               size="icon"
                               className="size-7"
+                              onClick={() => setReclaimConfirmOpen(true)}
+                              disabled={isReclaiming}
+                              aria-label={t("sessionManager.reclaimHistory", {
+                                defaultValue: "一键恢复所有历史会话",
+                              })}
+                              title={t("sessionManager.reclaimHistory", {
+                                defaultValue: "一键恢复所有历史会话",
+                              })}
+                            >
+                              <ArchiveRestore
+                                className={`size-3.5${isReclaiming ? " animate-pulse" : ""}`}
+                              />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            {t("sessionManager.reclaimHistoryTooltip", {
+                              defaultValue:
+                                "一键恢复所有历史会话（切换中转线路后列表变空时使用）",
+                            })}
+                          </TooltipContent>
+                        </Tooltip>
+
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-7"
                               onClick={() => void refetch()}
                             >
                               <RefreshCw className="size-3.5" />
@@ -1703,6 +1804,22 @@ export function SessionManagerPage({ appId }: { appId: string }) {
           </div>
         </div>
       </div>
+      <ConfirmDialog
+        isOpen={reclaimConfirmOpen}
+        variant="info"
+        title={t("sessionManager.reclaimConfirmTitle", {
+          defaultValue: "恢复所有历史会话",
+        })}
+        message={t("sessionManager.reclaimConfirmMessage", {
+          defaultValue:
+            "会把此前在其他中转线路下产生的 Codex 历史会话，统一归入当前线路的会话分组，使它们重新出现在列表中。\n\n启动、切换线路和刷新列表时已会自动执行，这里用于手动重试。\n\n只改写本机会话记录的分组标识，不修改会话内容；改写前会自动备份，可重复执行。",
+        })}
+        confirmText={t("sessionManager.reclaimConfirmAction", {
+          defaultValue: "开始恢复",
+        })}
+        onConfirm={() => void handleReclaimHistory()}
+        onCancel={() => setReclaimConfirmOpen(false)}
+      />
       <ConfirmDialog
         isOpen={Boolean(deleteTargets)}
         title={

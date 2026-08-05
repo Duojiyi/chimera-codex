@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Activity,
   ArrowUp,
@@ -17,7 +16,6 @@ import {
   LoaderCircle,
   FolderOpen,
   MessagesSquare,
-  Minus,
   MoreHorizontal,
   Package,
   Paintbrush,
@@ -57,6 +55,7 @@ import { configApi } from "@/lib/api";
 import { vscodeApi } from "@/lib/api/vscode";
 import { usageApi } from "@/lib/api/usage";
 import { getCurrentVersion } from "@/lib/updater";
+import { WindowControls } from "@/components/WindowControls";
 import { useUpdate } from "@/contexts/UpdateContext";
 import type {
   DailyStats,
@@ -175,6 +174,15 @@ type CodexProcessStatus = {
   running: boolean;
   installMode?: string | null;
   officialLoginAvailable: boolean;
+};
+type CodexModelCatalogStatus = {
+  valid: boolean;
+  defaultModel: string;
+  catalogPath?: string | null;
+  modelCount: number;
+  /** Codex 运行时是否确认了目录；false 表示文件已写对但探针未能验证。 */
+  runtimeVerified: boolean;
+  runtimeMessage?: string | null;
 };
 type CodexLaunchResult = {
   wasRunning: boolean;
@@ -863,14 +871,20 @@ export default function ChimeraApp() {
         await configApi.setCommonConfigSnippet("codex", commonConfigSnippet);
       }
       await providersApi.switch(provider.id, "codex");
+      // 文件级校验失败才算真错（目录没写对）；运行时交叉验证跑不起来只是
+      // 环境限制（如 macOS 图形进程 PATH 里没有 node），不该报成保存失败。
+      let catalogStatus: CodexModelCatalogStatus | null = null;
       try {
-        await invoke("verify_codex_model_catalog", {
-          expectedModel: editor.model.trim(),
-          expectedModels: catalogModels.map((item) => ({
-            model: item.model.trim(),
-            displayName: item.displayName?.trim() || item.model.trim(),
-          })),
-        });
+        catalogStatus = await invoke<CodexModelCatalogStatus>(
+          "verify_codex_model_catalog",
+          {
+            expectedModel: editor.model.trim(),
+            expectedModels: catalogModels.map((item) => ({
+              model: item.model.trim(),
+              displayName: item.displayName?.trim() || item.model.trim(),
+            })),
+          },
+        );
       } catch (error) {
         await loadProviders();
         setEditor(null);
@@ -882,13 +896,28 @@ export default function ChimeraApp() {
       }
       await loadProviders();
       setEditor(null);
-      note("保存并应用线路", "success", undefined, provider.name);
       setPendingModelReload(editor.model.trim());
-      toast.success("线路与模型目录已保存", {
-        description: automaticFetchFailed
-          ? "供应商未返回模型列表，已确保默认模型可用。"
-          : `已写入 ${catalogModels.length} 个模型，重启 Codex 后生效。`,
-      });
+      const writtenSummary = automaticFetchFailed
+        ? "供应商未返回模型列表，已确保默认模型可用。"
+        : `已写入 ${catalogModels.length} 个模型，重启 Codex 后生效。`;
+      if (catalogStatus && !catalogStatus.runtimeVerified) {
+        note(
+          "保存并应用线路",
+          "success",
+          catalogStatus.runtimeMessage ?? undefined,
+          provider.name,
+        );
+        toast.warning("线路与模型目录已保存，但未能自动验证实际模型列表", {
+          description: [writtenSummary, catalogStatus.runtimeMessage]
+            .filter(Boolean)
+            .join(" "),
+        });
+      } else {
+        note("保存并应用线路", "success", undefined, provider.name);
+        toast.success("线路与模型目录已保存", {
+          description: writtenSummary,
+        });
+      }
     } catch (error) {
       toast.error("保存失败", { description: String(error) });
     }
@@ -4700,25 +4729,3 @@ void ProvidersView;
 void ActivityView;
 void RuntimeView;
 void SettingsView;
-
-function WindowControls() {
-  return (
-    <div className="window-dots">
-      <button
-        aria-label="最小化 Chimera++"
-        title="最小化"
-        onClick={() => void getCurrentWindow().minimize()}
-      >
-        <Minus size={17} strokeWidth={2} />
-      </button>
-      <button
-        className="is-close"
-        aria-label="关闭 Chimera++"
-        title="关闭"
-        onClick={() => void getCurrentWindow().close()}
-      >
-        <X size={16} strokeWidth={2} />
-      </button>
-    </div>
-  );
-}
