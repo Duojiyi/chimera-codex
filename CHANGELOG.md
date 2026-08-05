@@ -10,6 +10,24 @@ numbers belong to a separate upstream line.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-08-05
+
+### Added
+
+- **Session recovery:** historical Codex sessions are automatically collected into the active session store, with a manual action to restore all discoverable history at once.
+- **macOS window controls:** frameless macOS windows now provide native-style close, minimize, and zoom controls while Windows keeps its existing titlebar behavior.
+
+### Changed
+
+- Codex model-directory probing is now diagnostic rather than a startup requirement, so an unavailable model catalog no longer blocks an otherwise usable runtime.
+- Runtime model validation accepts the provider's supported subset instead of requiring an exact match with the complete catalog.
+
+### Fixed
+
+- macOS GUI launches now discover the Codex CLI through the expected shell PATH and Codex.app candidate locations.
+- Native Responses providers no longer incorrectly enable local automatic routing, avoiding the resulting proxy 502 responses.
+- Automatically detected Codex API formats are persisted so subsequent launches keep the working protocol selection.
+
 ## [2.3.0] - 2026-08-05
 
 ### Added

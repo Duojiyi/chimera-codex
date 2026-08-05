@@ -13,7 +13,8 @@ use chimera_plus_plus_lib::{
 
 #[path = "support.rs"]
 mod support;
-use support::{create_test_state, ensure_test_home, reset_test_fs, test_mutex};
+use serial_test::serial;
+use support::{create_test_state, ensure_test_home, reset_test_fs};
 
 fn claude_provider(id: &str, token: &str) -> Provider {
     Provider::with_id(
@@ -99,8 +100,8 @@ fn write_ssot_skill(directory: &str) {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial]
 async fn profile_snapshot_apply_roundtrip_restores_configuration() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     let home = ensure_test_home();
 
@@ -280,8 +281,8 @@ async fn profile_snapshot_apply_roundtrip_restores_configuration() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial]
 async fn shared_profile_sides_are_isolated_and_mergeable() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     let home = ensure_test_home();
 
@@ -396,8 +397,8 @@ async fn shared_profile_sides_are_isolated_and_mergeable() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial]
 async fn profile_apply_reports_dangling_references_and_continues() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -453,8 +454,8 @@ async fn profile_apply_reports_dangling_references_and_continues() {
 }
 
 #[test]
+#[serial]
 fn clear_current_profile_only_clears_scoped_marker() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -492,8 +493,8 @@ fn clear_current_profile_only_clears_scoped_marker() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial]
 async fn switching_profile_autosaves_previous_profile_state() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     let home = ensure_test_home();
 
@@ -651,8 +652,8 @@ async fn switching_profile_autosaves_previous_profile_state() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial]
 async fn profile_switch_preserves_takeover_and_hot_switches_provider() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -766,8 +767,8 @@ async fn profile_switch_preserves_takeover_and_hot_switches_provider() {
 
 #[cfg(any(target_os = "macos", windows))]
 #[tokio::test(flavor = "current_thread")]
+#[serial]
 async fn claude_desktop_profile_scope_is_independent() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -831,8 +832,8 @@ async fn claude_desktop_profile_scope_is_independent() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
 async fn concurrent_profile_apply_finishes_as_one_complete_profile() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     let home = ensure_test_home();
     let state = create_test_state().expect("create test state");

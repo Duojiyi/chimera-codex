@@ -7,11 +7,12 @@ use chimera_plus_plus_lib::{
 
 #[path = "support.rs"]
 mod support;
-use support::{ensure_test_home, reset_test_fs, test_mutex};
+use serial_test::serial;
+use support::{ensure_test_home, reset_test_fs};
 
 #[tokio::test(flavor = "current_thread")]
+#[serial]
 async fn deeplink_import_claude_provider_persists_to_db() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -47,8 +48,8 @@ async fn deeplink_import_claude_provider_persists_to_db() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial]
 async fn deeplink_import_codex_provider_builds_auth_and_config() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     let _home = ensure_test_home();
 

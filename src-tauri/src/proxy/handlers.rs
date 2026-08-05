@@ -760,6 +760,53 @@ pub async fn handle_chat_completions(
     .await
 }
 
+/// Record an auto-detected Codex wire protocol in both the in-process cache and
+/// the database, off the request path.
+///
+/// Persisting matters beyond skipping a retry: `meta.api_format == None` is what
+/// marks a provider an auto-detect candidate, and an auto-detect candidate is
+/// unconditionally forced through the local router (see
+/// `codex_provider_is_auto_detect_candidate`). Writing the detected value back is
+/// therefore what lets a provider stop being routed once its protocol is known —
+/// without it, a native-Responses gateway stays proxied for the life of the
+/// install even though it never needed translating.
+fn persist_codex_auto_detected_api_format(
+    state: &ProxyState,
+    app_type_str: &'static str,
+    provider_id: &str,
+    api_format: &'static str,
+) {
+    let provider_id = provider_id.to_string();
+    let app_type_str_owned = app_type_str.to_string();
+    let db = state.db.clone();
+    let cache_arc = state.codex_wire_api_auto.clone();
+    tokio::spawn(async move {
+        // Claim the cache slot first and bail if this protocol was already
+        // recorded. Callers fire on every eligible request, and while the cache
+        // injection normally makes the next request ineligible, concurrent
+        // in-flight requests all reach here before the first one lands. Without
+        // this guard a burst of parallel requests would each issue the same
+        // redundant write.
+        {
+            let mut cache = cache_arc.write().await;
+            if cache.get(&provider_id).map(String::as_str) == Some(api_format) {
+                return;
+            }
+            cache.insert(provider_id.clone(), api_format.to_string());
+        }
+
+        if let Err(e) =
+            db.update_provider_meta_api_format(&app_type_str_owned, &provider_id, api_format)
+        {
+            log::warn!("[Codex] 自动协议检测持久化失败 (provider={provider_id}): {e}");
+        } else {
+            log::info!(
+                "[Codex] 自动协议检测: provider={provider_id} 已记录为 {api_format} 并持久化"
+            );
+        }
+    });
+}
+
 /// 处理 /v1/responses 请求（OpenAI Responses API - Codex CLI 透传）
 pub async fn handle_responses(
     State(state): State<ProxyState>,
@@ -894,31 +941,12 @@ async fn handle_responses_for_app(
                             {
                                 Ok(mut result2) => {
                                     // Chat 回退成功 → 异步持久化检测结果，不阻塞当前响应
-                                    let provider_id = ctx.provider.id.clone();
-                                    let app_type_str_owned = app_type_str.to_string();
-                                    let db = state.db.clone();
-                                    let cache_arc = state.codex_wire_api_auto.clone();
-                                    tokio::spawn(async move {
-                                        cache_arc
-                                            .write()
-                                            .await
-                                            .insert(provider_id.clone(), "openai_chat".to_string());
-                                        if let Err(e) = db.update_provider_meta_api_format(
-                                            &app_type_str_owned,
-                                            &provider_id,
-                                            "openai_chat",
-                                        ) {
-                                            log::warn!(
-                                                "[Codex] 自动协议检测持久化失败 (provider={}): {e}",
-                                                provider_id
-                                            );
-                                        } else {
-                                            log::info!(
-                                                "[Codex] 自动协议检测: provider={} 已切换至 Chat Completions 并持久化",
-                                                provider_id
-                                            );
-                                        }
-                                    });
+                                    persist_codex_auto_detected_api_format(
+                                        &state,
+                                        app_type_str,
+                                        &ctx.provider.id,
+                                        "openai_chat",
+                                    );
 
                                     let connection_guard2 = result2.connection_guard.take();
                                     ctx.outbound_model = result2.outbound_model.take();
@@ -960,6 +988,19 @@ async fn handle_responses_for_app(
     ctx.outbound_model = result.outbound_model.take();
     ctx.provider = result.provider;
     let response = result.response;
+
+    // Responses 直接成功 → 上游就是原生 Responses 网关，记录并持久化这个结论。
+    // 只有 Chat 回退成功才落库是不对称的：原生 Responses 供应商的
+    // `meta.api_format` 会永远为空，于是永远被判定为「需要自动检测」，也就永远
+    // 被强制走本地路由（127.0.0.1:15721），即便它根本不需要任何协议转换。
+    if eligible_for_chat_auto {
+        persist_codex_auto_detected_api_format(
+            &state,
+            app_type_str,
+            &ctx.provider.id,
+            "openai_responses",
+        );
+    }
 
     if super::providers::should_convert_codex_responses_to_anthropic(&ctx.provider, &endpoint) {
         return handle_codex_anthropic_to_responses_transform(
@@ -1138,26 +1179,12 @@ async fn handle_responses_compact_for_app(
                                 .await
                             {
                                 Ok(mut result2) => {
-                                    let provider_id = ctx.provider.id.clone();
-                                    let app_type_str_owned = app_type_str.to_string();
-                                    let db = state.db.clone();
-                                    let cache_arc = state.codex_wire_api_auto.clone();
-                                    tokio::spawn(async move {
-                                        cache_arc
-                                            .write()
-                                            .await
-                                            .insert(provider_id.clone(), "openai_chat".to_string());
-                                        if let Err(e) = db.update_provider_meta_api_format(
-                                            &app_type_str_owned,
-                                            &provider_id,
-                                            "openai_chat",
-                                        ) {
-                                            log::warn!(
-                                                "[Codex/compact] 自动协议检测持久化失败 (provider={}): {e}",
-                                                provider_id
-                                            );
-                                        }
-                                    });
+                                    persist_codex_auto_detected_api_format(
+                                        &state,
+                                        app_type_str,
+                                        &ctx.provider.id,
+                                        "openai_chat",
+                                    );
                                     let connection_guard2 = result2.connection_guard.take();
                                     ctx.outbound_model = result2.outbound_model.take();
                                     ctx.provider = result2.provider;
@@ -1197,6 +1224,16 @@ async fn handle_responses_compact_for_app(
     ctx.outbound_model = result.outbound_model.take();
     ctx.provider = result.provider;
     let response = result.response;
+
+    // 与 /responses 同理：直接成功即证明上游是原生 Responses 网关。
+    if eligible_for_chat_auto {
+        persist_codex_auto_detected_api_format(
+            &state,
+            app_type_str,
+            &ctx.provider.id,
+            "openai_responses",
+        );
+    }
 
     if super::providers::should_convert_codex_responses_to_anthropic(&ctx.provider, &endpoint) {
         return handle_codex_anthropic_to_responses_transform(

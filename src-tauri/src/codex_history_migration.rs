@@ -272,6 +272,204 @@ pub fn maybe_migrate_codex_official_history_to_unified_bucket(
     Ok(outcome)
 }
 
+/// 「一键恢复所有历史会话」的备份代际名。
+const RECLAIM_ALL_BACKUP_NAME: &str = "codex-history-reclaim-all-v1";
+
+#[derive(Debug, Clone, Default)]
+pub struct CodexHistoryReclaimAllOutcome {
+    /// 实际改写的 jsonl 会话文件数。
+    pub reclaimed_jsonl_files: usize,
+    /// 实际改写的 state DB thread 行数。
+    pub reclaimed_state_rows: usize,
+    /// 本次归拢涉及的来源桶 id（供 UI 说明「从哪些桶拿回来的」）。
+    pub source_provider_ids: Vec<String>,
+    pub skipped_reason: Option<String>,
+}
+
+/// 扫描本机 Codex 历史里出现过的全部 `model_provider` 桶 id。
+///
+/// 与 `collect_source_model_provider_ids` 的区别：那个函数只认
+/// `CC_SWITCH_LEGACY_CODEX_MODEL_PROVIDER_IDS` 白名单里的已知 id，因此中转商
+/// 用了列表外的 id（Codex 按 `model_providers` 表名写入，中转商可任意命名）时
+/// 历史就留在一个当前 live 看不见的桶里 —— 这正是「切换中转供应商后会话列表
+/// 显示丢失」的成因。这里改为按实际数据反查，不依赖白名单。
+///
+/// 官方桶 `openai` 被刻意排除：把官方会话并入 custom 属于「统一会话历史」开关
+/// 的语义（有独立的备份账本与还原路径），不应由这个恢复动作偷偷代劳。
+fn scan_existing_codex_history_provider_ids(
+    codex_dir: &Path,
+    config_text: &str,
+) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+
+    let mut files = Vec::new();
+    collect_jsonl_files(&codex_dir.join("sessions"), &mut files, 0, 8);
+    collect_jsonl_files(&codex_dir.join("archived_sessions"), &mut files, 0, 4);
+    for path in files {
+        collect_session_meta_provider_ids_from_head(&path, &mut ids);
+    }
+
+    for db_path in codex_state_db_paths(codex_dir, config_text) {
+        if !db_path.exists() {
+            continue;
+        }
+        let Ok(conn) = Connection::open(&db_path) else {
+            continue;
+        };
+        if conn.busy_timeout(Duration::from_secs(5)).is_err() {
+            continue;
+        }
+        if !matches!(Database::table_exists(&conn, "threads"), Ok(true))
+            || !matches!(
+                Database::has_column(&conn, "threads", "model_provider"),
+                Ok(true)
+            )
+        {
+            continue;
+        }
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT DISTINCT model_provider FROM threads WHERE model_provider IS NOT NULL",
+        ) else {
+            continue;
+        };
+        let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) else {
+            continue;
+        };
+        for id in rows.flatten() {
+            let trimmed = id.trim();
+            if !trimmed.is_empty() {
+                ids.insert(trimmed.to_string());
+            }
+        }
+    }
+
+    ids.remove(CC_SWITCH_CODEX_MODEL_PROVIDER_ID);
+    ids.remove(OFFICIAL_OPENAI_CODEX_MODEL_PROVIDER_ID);
+    ids
+}
+
+/// 从一个会话文件的开头若干行里读出 `session_meta.model_provider`。
+///
+/// Codex 把 `session_meta` 写在文件首行，后面全是对话内容。这个扫描在每次打开
+/// 会话列表时都会跑，而单个会话文件可达数十 MB，所以按行读并在拿到 meta 后立即
+/// 停止，绝不整文件读入内存。留出少量行的余量以兼容未来在 meta 前插入其他记录。
+fn collect_session_meta_provider_ids_from_head(path: &Path, ids: &mut BTreeSet<String>) {
+    use std::io::BufRead;
+
+    /// 只看开头这些行：足够覆盖 meta 位置的微小变动，又不会退化成整文件扫描。
+    const MAX_SCANNED_LINES: usize = 16;
+
+    let Ok(file) = fs::File::open(path) else {
+        return;
+    };
+    for line in std::io::BufReader::new(file)
+        .lines()
+        .take(MAX_SCANNED_LINES)
+        .map_while(Result::ok)
+    {
+        if !line.contains("\"session_meta\"") || !line.contains("\"model_provider\"") {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        if let Some(provider_id) = value
+            .get("payload")
+            .and_then(|payload| payload.get("model_provider"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        {
+            ids.insert(provider_id.to_string());
+        }
+        // 每个文件只有一条 session_meta，拿到即止。
+        return;
+    }
+}
+
+/// 一键把所有第三方桶的历史会话归拢到当前共享 custom 桶。
+///
+/// 场景：切换中转供应商后会话列表看起来「丢了」。会话文件其实都还在
+/// `~/.codex/sessions`，只是 `session_meta.model_provider` 记的是旧桶 id，而
+/// Codex 只列出与当前 `model_provider` 相同的会话。把这些桶统一改写为
+/// `custom` 后，历史会话重新出现在列表里。
+///
+/// 与既有自动迁移的关系：`maybe_migrate_codex_third_party_history_provider_bucket`
+/// 是一次性、白名单驱动、带完成标记的启动迁移；这个函数按实际数据反查、可反复
+/// 执行，因此不写也不读完成标记。它既是自动路径（启动、切换线路后、打开会话
+/// 列表时，见 `auto_reclaim_codex_history_if_needed`），也是手动入口
+/// （`reclaim_codex_history_sessions` 命令）——两者共用同一套语义。
+/// 改写前所有涉及的 jsonl / state DB 都会备份到
+/// `~/.chimera-plus-plus/backups/codex-history-reclaim-all-v1/<时间戳>/`。
+pub fn reclaim_all_codex_history_into_current_bucket(
+) -> Result<CodexHistoryReclaimAllOutcome, AppError> {
+    // 与统一会话历史的迁移/还原共用一把锁：两者都对同一批 jsonl / state DB
+    // 做双向改写，并发执行会互相覆盖。
+    let _op_guard = lock_codex_official_history_op();
+
+    let codex_dir = get_codex_config_dir();
+    let config_text = read_codex_config_text().unwrap_or_default();
+
+    // live 必须已路由到 custom，否则改写只是把历史搬进当前 live 看不见的另一个
+    // 桶里，用户会看到「恢复成功但列表还是空」。
+    if !codex_config_text_routes_custom(&config_text) {
+        return Ok(CodexHistoryReclaimAllOutcome {
+            skipped_reason: Some("live_not_custom".to_string()),
+            ..Default::default()
+        });
+    }
+
+    let source_provider_ids = scan_existing_codex_history_provider_ids(&codex_dir, &config_text);
+    if source_provider_ids.is_empty() {
+        return Ok(CodexHistoryReclaimAllOutcome {
+            skipped_reason: Some("nothing_to_reclaim".to_string()),
+            ..Default::default()
+        });
+    }
+
+    let backup_root = migration_backup_root(RECLAIM_ALL_BACKUP_NAME);
+    let reclaimed_jsonl_files =
+        migrate_codex_jsonl_files(&codex_dir, &source_provider_ids, &backup_root)?;
+    let reclaimed_state_rows =
+        migrate_codex_state_dbs(&codex_dir, &source_provider_ids, &backup_root)?;
+    write_backup_generation_meta(&backup_root, &canonical_dir_string(&codex_dir))?;
+
+    Ok(CodexHistoryReclaimAllOutcome {
+        reclaimed_jsonl_files,
+        reclaimed_state_rows,
+        source_provider_ids: source_provider_ids.into_iter().collect(),
+        skipped_reason: None,
+    })
+}
+
+/// 自动恢复入口：在启动和切换线路后调用，保证未归档会话始终出现在列表里。
+///
+/// 与手动入口是同一套逻辑（同一把锁、同样先备份、同样幂等），区别只在于这里
+/// 不向用户报错：自动路径失败不该打断切换或启动流程，下一次触发会重试。
+/// 无事可做时（一切都已在当前桶）只有一次目录扫描的开销，不写任何文件。
+pub fn auto_reclaim_codex_history_if_needed() {
+    match reclaim_all_codex_history_into_current_bucket() {
+        Ok(outcome) => {
+            if let Some(reason) = outcome.skipped_reason {
+                log::debug!("○ Codex history auto-reclaim skipped: {reason}");
+            } else {
+                log::info!(
+                    "✓ Codex history auto-reclaimed: jsonl_files={}, state_rows={}, sources={:?}",
+                    outcome.reclaimed_jsonl_files,
+                    outcome.reclaimed_state_rows,
+                    outcome.source_provider_ids
+                );
+            }
+        }
+        Err(error) => {
+            log::warn!("Codex history auto-reclaim failed (will retry later): {error}");
+        }
+    }
+}
+
 /// live config.toml 是否路由到共享 custom 桶（会话分桶只看这个实态：
 /// base_url / 接管与否都不影响 session_meta 记录的 model_provider）。
 fn codex_config_text_routes_custom(config_text: &str) -> bool {
@@ -1616,6 +1814,183 @@ base_url = "https://proxy.example/v1"
                 .and_then(|value| value.as_str()),
             Some("custom")
         );
+    }
+
+    #[test]
+    fn history_scan_finds_buckets_outside_the_legacy_whitelist() {
+        let dir = tempdir().expect("tempdir");
+        let codex_dir = dir.path().join(".codex");
+        let session_dir = codex_dir.join("sessions/2026/07/02");
+        fs::create_dir_all(&session_dir).expect("create session dir");
+        // 一个文件一个会话（Codex 的实际形态：session_meta 只在首行），
+        // 所以每个桶各用一个文件。
+        for (name, provider_id) in [
+            ("relay.jsonl", "my-private-relay"),
+            ("current.jsonl", "custom"),
+            ("official.jsonl", "openai"),
+            ("kimi.jsonl", "kimi"),
+        ] {
+            fs::write(
+                session_dir.join(name),
+                format!(
+                    "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{provider_id}-s\",\"model_provider\":\"{provider_id}\"}}}}\n"
+                ),
+            )
+            .expect("write session");
+        }
+
+        let state_db_path = codex_dir.join(CODEX_STATE_DB_FILENAME);
+        let conn = Connection::open(&state_db_path).expect("open state db");
+        conn.execute_batch(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, model_provider TEXT NOT NULL);
+             INSERT INTO threads (id, model_provider) VALUES
+                ('t1', 'another-unlisted-gateway'),
+                ('t2', 'custom');",
+        )
+        .expect("seed state db");
+        drop(conn);
+
+        let found = scan_existing_codex_history_provider_ids(&codex_dir, "");
+
+        // 反查实际数据，而不是白名单：中转商自定的桶名也必须被发现，
+        // 这正是「切换中转供应商后会话列表丢失」而自动迁移漏掉的那一类。
+        assert!(found.contains("my-private-relay"), "got {found:?}");
+        assert!(found.contains("another-unlisted-gateway"), "got {found:?}");
+        assert!(found.contains("kimi"), "got {found:?}");
+        // 当前桶无需归拢；官方桶归「统一会话历史」开关管，不在此代劳。
+        assert!(!found.contains("custom"), "got {found:?}");
+        assert!(!found.contains("openai"), "got {found:?}");
+    }
+
+    #[test]
+    fn history_scan_reads_only_the_head_of_large_session_files() {
+        let dir = tempdir().expect("tempdir");
+        let codex_dir = dir.path().join(".codex");
+        let session_dir = codex_dir.join("sessions/2026/07/05");
+        fs::create_dir_all(&session_dir).expect("create session dir");
+
+        // 这个扫描在每次打开会话列表时都跑，单个会话文件可达数十 MB，
+        // 因此必须按行读并在 meta 之后停止，不能整文件读入。
+        let mut content = String::from(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s1\",\"model_provider\":\"relay-head\"}}\n",
+        );
+        for index in 0..5_000 {
+            content.push_str(&format!(
+                "{{\"type\":\"response_item\",\"payload\":{{\"text\":\"line {index}\",\"model_provider\":\"decoy-should-not-be-scanned\"}}}}\n"
+            ));
+        }
+        fs::write(session_dir.join("big.jsonl"), content).expect("write session");
+
+        let found = scan_existing_codex_history_provider_ids(&codex_dir, "");
+        assert!(found.contains("relay-head"), "got {found:?}");
+        // 正文里的诱饵不该被采纳：只有 type == session_meta 的行算桶声明，
+        // 且扫描在首条 meta 之后就停下了。
+        assert!(
+            !found.contains("decoy-should-not-be-scanned"),
+            "got {found:?}"
+        );
+    }
+
+    #[test]
+    fn history_scan_is_empty_when_everything_already_sits_in_current_bucket() {
+        let dir = tempdir().expect("tempdir");
+        let codex_dir = dir.path().join(".codex");
+        let session_dir = codex_dir.join("sessions/2026/07/03");
+        fs::create_dir_all(&session_dir).expect("create session dir");
+        fs::write(
+            session_dir.join("already.jsonl"),
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s1\",\"model_provider\":\"custom\"}}\n",
+        )
+        .expect("write session");
+
+        assert!(
+            scan_existing_codex_history_provider_ids(&codex_dir, "").is_empty(),
+            "a fully-reclaimed history must report nothing to do"
+        );
+    }
+
+    #[test]
+    fn reclaim_rewrites_every_scanned_bucket_and_backs_up_first() {
+        let dir = tempdir().expect("tempdir");
+        let codex_dir = dir.path().join(".codex");
+        let backup_root = dir.path().join("reclaim-backup");
+        let session_dir = codex_dir.join("sessions/2026/07/04");
+        fs::create_dir_all(&session_dir).expect("create session dir");
+
+        // 两个不同的第三方桶各一个会话文件，外加一个官方桶的会话。
+        let relay_a_path = session_dir.join("relay-a.jsonl");
+        fs::write(
+            &relay_a_path,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s1\",\"model_provider\":\"relay-a\"}}\n",
+                "{\"type\":\"response_item\",\"payload\":{\"text\":\"relay-a\"}}\n",
+            ),
+        )
+        .expect("write relay-a session");
+        let relay_b_path = session_dir.join("relay-b.jsonl");
+        fs::write(
+            &relay_b_path,
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s2\",\"model_provider\":\"relay-b\"}}\n",
+        )
+        .expect("write relay-b session");
+        let official_path = session_dir.join("official.jsonl");
+        fs::write(
+            &official_path,
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s3\",\"model_provider\":\"openai\"}}\n",
+        )
+        .expect("write official session");
+
+        let scanned = scan_existing_codex_history_provider_ids(&codex_dir, "");
+        let reclaimed = migrate_codex_jsonl_files(&codex_dir, &scanned, &backup_root)
+            .expect("reclaim jsonl files");
+        // 两个第三方会话文件被改写，官方那个不动。
+        assert_eq!(reclaimed, 2);
+
+        let relay_a_text = fs::read_to_string(&relay_a_path).expect("read relay-a");
+        assert!(relay_a_text.contains("\"model_provider\":\"custom\""));
+        assert!(!relay_a_text.contains("\"model_provider\":\"relay-a\""));
+        // 非 session_meta 行原样保留，即便正文里出现桶名。
+        assert!(relay_a_text
+            .contains("{\"type\":\"response_item\",\"payload\":{\"text\":\"relay-a\"}}"));
+
+        let relay_b_text = fs::read_to_string(&relay_b_path).expect("read relay-b");
+        assert!(relay_b_text.contains("\"model_provider\":\"custom\""));
+        assert!(!relay_b_text.contains("\"model_provider\":\"relay-b\""));
+
+        // 官方桶不动：并入官方会话属于统一会话历史开关的语义。
+        let official_text = fs::read_to_string(&official_path).expect("read official");
+        assert!(official_text.contains("\"model_provider\":\"openai\""));
+
+        for name in ["relay-a.jsonl", "relay-b.jsonl"] {
+            assert!(
+                backup_root
+                    .join(format!("jsonl/sessions/2026/07/04/{name}"))
+                    .exists(),
+                "the pre-rewrite copy of {name} must exist so the change is reversible"
+            );
+        }
+
+        // 幂等：再跑一次没有可改写的行。
+        let rerun = migrate_codex_jsonl_files(
+            &codex_dir,
+            &scan_existing_codex_history_provider_ids(&codex_dir, ""),
+            &backup_root,
+        )
+        .expect("rerun reclaim");
+        assert_eq!(rerun, 0);
+    }
+
+    #[test]
+    fn reclaim_requires_live_config_to_route_to_the_current_bucket() {
+        // 归拢的目标桶是 custom；live 若不指向 custom，改写只会把历史搬进
+        // 当前 live 看不见的桶，用户会看到「恢复成功但列表仍为空」。
+        assert!(!codex_config_text_routes_custom(
+            "model_provider = \"openai\"\n"
+        ));
+        assert!(!codex_config_text_routes_custom(""));
+        assert!(codex_config_text_routes_custom(
+            "model_provider = \"custom\"\n"
+        ));
     }
 
     #[test]

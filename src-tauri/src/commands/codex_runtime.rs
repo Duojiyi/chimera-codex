@@ -102,6 +102,12 @@ pub struct CodexModelCatalogStatus {
     pub default_model: String,
     pub catalog_path: Option<String>,
     pub model_count: usize,
+    /// Whether Codex's own runtime confirmed the catalog. `false` means the
+    /// files are correct but the probe could not run (or its result did not
+    /// line up); the renderer surfaces this as a warning, never as a failure.
+    pub runtime_verified: bool,
+    /// Why `runtime_verified` is false, for display next to the warning.
+    pub runtime_message: Option<String>,
 }
 
 /// Renderer-side expectation for one catalog entry. Keeping this contract
@@ -184,6 +190,35 @@ fn parse_catalog_model_identities(
         });
     }
     Ok(actual)
+}
+
+/// Looser check for the list Codex's runtime reports: every expected model must
+/// be present, but extra entries and a different order are fine.
+///
+/// Codex merges its own built-in entries into the picker and does not promise to
+/// preserve file order, so demanding exact equality here would fail on healthy
+/// installs. Order, count, and display names stay strictly checked against the
+/// catalog file, which cc-switch owns outright.
+fn validate_runtime_models_contain_expected(
+    expected: &[ExpectedCodexCatalogModel],
+    actual: &[CatalogModelIdentity],
+    source: &str,
+) -> Result<(), String> {
+    let actual_by_slug: std::collections::HashMap<&str, &CatalogModelIdentity> = actual
+        .iter()
+        .map(|entry| (entry.slug.as_str(), entry))
+        .collect();
+
+    let missing = expected
+        .iter()
+        .filter(|entry| !actual_by_slug.contains_key(entry.model.as_str()))
+        .map(|entry| entry.model.as_str())
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(format!("{source}缺少模型：{}", missing.join("、")));
+    }
+
+    Ok(())
 }
 
 fn validate_catalog_model_identities(
@@ -570,26 +605,50 @@ pub fn verify_codex_model_catalog(
         &format!("模型目录（{}）", catalog_path.display()),
     )?;
 
-    // File-level validation is not enough: Codex Desktop may be using a
-    // different CODEX_HOME or may reject the catalog during its own parsing.
-    // Ask Codex's runtime and validate the identities that the picker actually
-    // receives. This is what detects the old "only custom is visible" failure.
-    let runtime_models = crate::codex_config::probe_codex_runtime_models()
-        .map_err(|error| format!("无法验证 Codex 实际模型列表：{error}"))?;
-    let runtime_models = runtime_models
-        .into_iter()
-        .map(|model| CatalogModelIdentity {
-            slug: model.slug,
-            display_name: model.display_name,
-        })
-        .collect::<Vec<_>>();
-    validate_catalog_model_identities(&expected_models, &runtime_models, "Codex 实际模型列表")?;
+    // File-level validation above is authoritative: cc-switch owns config.toml
+    // and the catalog file, and both were just confirmed correct.
+    //
+    // Asking Codex's own runtime is a useful extra signal — it is what detects
+    // the old "only custom is visible" failure — but it is only advisory. The
+    // probe needs a runnable `codex` CLI, which is not guaranteed: a macOS GUI
+    // process inherits launchd's PATH, so an npm-installed launcher cannot find
+    // its Node interpreter, and older CLIs lack `debug models` entirely. Those
+    // are environment gaps, not catalog defects, and the remediation the user
+    // would be pushed toward (restart Codex) is Windows-only anyway. Treating
+    // them as hard failures reported a correct save as broken.
+    let (runtime_verified, runtime_message) =
+        match crate::codex_config::probe_codex_runtime_models() {
+            Ok(runtime_models) => {
+                let runtime_models = runtime_models
+                    .into_iter()
+                    .map(|model| CatalogModelIdentity {
+                        slug: model.slug,
+                        display_name: model.display_name,
+                    })
+                    .collect::<Vec<_>>();
+                match validate_runtime_models_contain_expected(
+                    &expected_models,
+                    &runtime_models,
+                    "Codex 实际模型列表",
+                ) {
+                    Ok(()) => (true, None),
+                    Err(message) => (false, Some(message)),
+                }
+            }
+            Err(error) => (false, Some(error.to_string())),
+        };
+
+    if let Some(message) = runtime_message.as_deref() {
+        log::info!("Codex model catalog written; runtime cross-check unavailable: {message}");
+    }
 
     Ok(CodexModelCatalogStatus {
         valid: true,
         default_model,
         catalog_path: Some(catalog_path.to_string_lossy().to_string()),
         model_count: file_models.len(),
+        runtime_verified,
+        runtime_message,
     })
 }
 
@@ -1009,9 +1068,95 @@ pub async fn uninstall_codex_runtime(confirm: bool) -> Result<CodexRuntimeOperat
 mod tests {
     use super::{
         launch_action, normalize_expected_catalog_models, parse_catalog_model_identities,
-        process_install_mode, validate_catalog_model_identities, CatalogModelIdentity,
+        process_install_mode, validate_catalog_model_identities,
+        validate_runtime_models_contain_expected, CatalogModelIdentity, CodexModelCatalogStatus,
         CodexProcessStatus, CodexRuntimeStatus, ExpectedCodexCatalogModel,
     };
+
+    fn identity(slug: &str, display_name: &str) -> CatalogModelIdentity {
+        CatalogModelIdentity {
+            slug: slug.to_string(),
+            display_name: display_name.to_string(),
+        }
+    }
+
+    #[test]
+    fn runtime_validation_tolerates_extra_entries_and_reordering() {
+        let expected = normalize_expected_catalog_models(
+            "gpt-5.5",
+            Some(vec![
+                ExpectedCodexCatalogModel {
+                    model: "gpt-5.5".to_string(),
+                    display_name: Some("GPT-5.5".to_string()),
+                },
+                ExpectedCodexCatalogModel {
+                    model: "gpt-5.5-codex".to_string(),
+                    display_name: Some("GPT-5.5 Codex".to_string()),
+                },
+            ]),
+        )
+        .expect("expected mapping normalizes");
+
+        // Codex merges its own entries in and does not promise file order, so a
+        // healthy install legitimately reports a superset in a different order.
+        let actual = vec![
+            identity("gpt-5.5-codex", "GPT-5.5 Codex"),
+            identity("gpt-5.1-codex-max", "GPT-5.1 Codex Max"),
+            identity("gpt-5.5", "GPT-5.5 (Chimera)"),
+        ];
+
+        assert!(
+            validate_runtime_models_contain_expected(&expected, &actual, "Codex 实际模型列表")
+                .is_ok(),
+            "a superset in a different order must pass the runtime check"
+        );
+    }
+
+    #[test]
+    fn runtime_validation_still_reports_a_genuinely_missing_model() {
+        let expected = normalize_expected_catalog_models(
+            "gpt-5.5",
+            Some(vec![
+                ExpectedCodexCatalogModel {
+                    model: "gpt-5.5".to_string(),
+                    display_name: None,
+                },
+                ExpectedCodexCatalogModel {
+                    model: "gpt-5.5-codex".to_string(),
+                    display_name: None,
+                },
+            ]),
+        )
+        .expect("expected mapping normalizes");
+        // The historical failure this probe exists to catch: only Codex's single
+        // `custom` entry survives, so the configured models are invisible.
+        let actual = vec![identity("custom", "Custom")];
+
+        let error =
+            validate_runtime_models_contain_expected(&expected, &actual, "Codex 实际模型列表")
+                .expect_err("a missing model must still be reported");
+        assert!(error.contains("gpt-5.5"), "got {error}");
+        assert!(error.contains("gpt-5.5-codex"), "got {error}");
+    }
+
+    #[test]
+    fn catalog_status_reports_runtime_verification_separately() {
+        // The renderer distinguishes "catalog written" from "runtime confirmed";
+        // an unverifiable probe must still arrive as valid == true.
+        let status = CodexModelCatalogStatus {
+            valid: true,
+            default_model: "gpt-5.5".to_string(),
+            catalog_path: Some("/Users/me/.codex/cc-switch-model-catalog.json".to_string()),
+            model_count: 3,
+            runtime_verified: false,
+            runtime_message: Some("未找到可用的 Codex CLI".to_string()),
+        };
+        let json = serde_json::to_value(status).expect("status serializes");
+        assert_eq!(json["valid"], true);
+        assert_eq!(json["runtimeVerified"], false);
+        assert_eq!(json["runtimeMessage"], "未找到可用的 Codex CLI");
+        assert!(json.get("runtime_verified").is_none());
+    }
 
     #[test]
     fn launch_action_replaces_a_running_instance() {

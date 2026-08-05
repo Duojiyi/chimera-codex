@@ -965,6 +965,92 @@ select:focus-visible {
   background: #fce8e5;
   color: #b9372d;
 }
+
+/* ── macOS window controls ──────────────────────────────────────────────
+   macOS puts window buttons at the top-LEFT as red/yellow/green "traffic
+   lights", the opposite of the Windows convention this titlebar was built for.
+   The `.is-mac` body class (set in main.tsx) scopes every rule here, so Windows
+   and Linux keep the layout above untouched.
+
+   The lights are pulled out of the right-hand tool cluster and pinned to the
+   left edge; the brand shifts right to make room, matching how a native macOS
+   window lays out. Icons stay hidden until the group is hovered, as in the OS. */
+body.is-mac .chimera-titlebar {
+  /* Containing block for the absolutely-positioned lights below. Without this
+     they would resolve against `.chimera-main`, which spans the whole window —
+     the vertical centering would then land mid-page instead of in the titlebar. */
+  position: relative;
+  /* Space for the 3 lights + their inset, so the brand never sits under them. */
+  padding-left: 88px;
+}
+body.is-mac .route-window-tools .window-dots.is-traffic-lights {
+  position: absolute;
+  /* Aligns with the traffic lights of a native window at this titlebar height. */
+  left: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  gap: 8px;
+  /* Sits above the drag region so clicks reach the buttons, not the drag. */
+  z-index: 1;
+}
+body.is-mac .route-window-tools .window-dots.is-traffic-lights button,
+body.is-mac
+  .route-window-tools
+  .window-dots.is-traffic-lights
+  button:nth-child(n) {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  padding: 0;
+  /* A hairline ring keeps the lights legible against a light titlebar. */
+  box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 12%);
+  transition:
+    background 120ms var(--ease),
+    filter 120ms var(--ease);
+}
+/* Icons appear only while the cluster is hovered — the macOS behaviour. */
+body.is-mac .route-window-tools .window-dots.is-traffic-lights svg {
+  opacity: 0;
+  transition: opacity 120ms var(--ease);
+}
+body.is-mac .route-window-tools .window-dots.is-traffic-lights:hover svg {
+  opacity: 1;
+}
+body.is-mac .route-window-tools .window-dots.is-traffic-lights button.is-close {
+  background: #ff5f57;
+  color: #4d0000;
+}
+body.is-mac
+  .route-window-tools
+  .window-dots.is-traffic-lights
+  button.is-minimize {
+  background: #febc2e;
+  color: #5a3a00;
+}
+/* Fixed-size window: the zoom light renders in the OS's disabled-window style
+   rather than being removed, since a two-light macOS window reads as broken. */
+body.is-mac .route-window-tools .window-dots.is-traffic-lights button.is-zoom {
+  background: #dddfe2;
+  cursor: default;
+}
+body.is-mac
+  .route-window-tools
+  .window-dots.is-traffic-lights
+  button.is-close:hover,
+body.is-mac
+  .route-window-tools
+  .window-dots.is-traffic-lights
+  button.is-minimize:hover {
+  /* Keep the hue and just deepen it, as the OS does; no palette swap. */
+  filter: brightness(0.92);
+}
+body.is-mac
+  .route-window-tools
+  .window-dots.is-traffic-lights
+  button.is-zoom:hover {
+  background: #dddfe2;
+  filter: none;
+}
 /* One-click update check. Inherits the 32px circle from .route-window-tools >
    button above; this only adds the has-update accent and its badge dot. */
 .titlebar-update {
@@ -2283,6 +2369,20 @@ select:focus-visible {
   }
   .route-window-tools .window-dots {
     gap: 4px;
+  }
+  /* macOS traffic lights keep their fixed 12px size at every width: they are a
+     system affordance, not a scalable toolbar button. Re-stated after the
+     compact overrides above, which would otherwise shrink them to 26px. */
+  body.is-mac .route-window-tools .window-dots.is-traffic-lights button,
+  body.is-mac
+    .route-window-tools
+    .window-dots.is-traffic-lights
+    button:nth-child(n) {
+    width: 12px;
+    height: 12px;
+  }
+  body.is-mac .route-window-tools .window-dots.is-traffic-lights {
+    gap: 8px;
   }
   .usage-chart {
     background: none;

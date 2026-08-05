@@ -72,6 +72,12 @@ pub fn disable_codex_official_auth_preservation() {
 }
 
 /// 全局互斥锁，避免多测试并发写入相同的 HOME 目录。
+///
+/// 这个文件通过 `#[path]` 被每个集成测试各自包含一份，所以「未使用」是按包含方
+/// 分别判定的：改用 `#[serial]` 串行化的测试（profile_roundtrip、deeplink_import）
+/// 不再需要它，但其余九个仍在用。`#[serial]` 是异步测试的正确做法——把
+/// `std::sync::MutexGuard` 持过 `.await` 会阻塞整个 runtime 线程。
+#[allow(dead_code)]
 pub fn test_mutex() -> &'static Mutex<()> {
     static MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
     MUTEX.get_or_init(|| Mutex::new(()))
