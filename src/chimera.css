@@ -2074,8 +2074,7 @@ body.is-mac
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
-.settings-app-update-row > button,
-.settings-app-update-details > button {
+.settings-app-update-row > button {
   flex: 0 0 118px;
   width: 118px;
   height: 34px;
@@ -2087,6 +2086,53 @@ body.is-mac
 .settings-app-update-details {
   border-top: 1px solid #edf0f2;
   background: #fbfcfd;
+}
+.settings-app-update-progress {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 0 16px 11px 57px;
+  background: #fbfcfd;
+  color: var(--ch-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.settings-app-update-progress > i {
+  display: block;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #e8edf0;
+}
+.settings-app-update-progress u {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ch-accent);
+  transition: width 160ms ease-out;
+}
+.settings-app-update-progress u.is-indeterminate {
+  width: 42%;
+  animation: settings-update-progress 1.1s ease-in-out infinite;
+}
+@keyframes settings-update-progress {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(290%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-app-update-progress u {
+    transition: none;
+  }
+  .settings-app-update-progress u.is-indeterminate {
+    animation: none;
+    transform: none;
+  }
 }
 .settings-reference-footer {
   display: flex;

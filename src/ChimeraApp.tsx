@@ -209,6 +209,10 @@ type DownloadProgress = {
   total: number;
   stage?: "downloading" | "installing";
 };
+type AppUpdateDownloadProgress = {
+  downloaded: number;
+  total: number | null;
+};
 type RuntimeAction = "update" | "repair" | "rollback" | "uninstall";
 type RuntimeOperation = {
   action: RuntimeAction;
@@ -2093,11 +2097,10 @@ export function NewProvidersView({
               type="button"
               className="primary"
               onClick={() => {
-                dismissUpdate();
                 onNavigate?.("settings");
               }}
             >
-              立即更新
+              前往更新
             </button>
           </div>
         </div>
@@ -3784,12 +3787,26 @@ export function NewSettingsView() {
     isChecking,
     error: updateError,
     lastCheckedAt,
+    stagedVersion,
+    isStaging,
     checkUpdate,
   } = useUpdate();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [appVersion, setAppVersion] = useState("正在读取版本");
-  const [updateDetailsOpen, setUpdateDetailsOpen] = useState(false);
   const [installingAppUpdate, setInstallingAppUpdate] = useState(false);
+  const [appUpdateProgress, setAppUpdateProgress] =
+    useState<AppUpdateDownloadProgress | null>(null);
+  const installingAppUpdateRef = useRef(false);
+  const appUpdateProgressUnlistenRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    return () => {
+      installingAppUpdateRef.current = false;
+      appUpdateProgressUnlistenRef.current?.();
+      appUpdateProgressUnlistenRef.current = null;
+    };
+  }, []);
+
   useEffect(() => {
     if (!runningInTauri) {
       setSettings({
@@ -3837,24 +3854,34 @@ export function NewSettingsView() {
   };
   const checkAppUpdate = async () => {
     try {
-      const available = await checkUpdate();
-      setUpdateDetailsOpen(available);
+      await checkUpdate();
     } catch (reason) {
       toast.error("检查应用更新失败", { description: String(reason) });
     }
   };
   const installAppUpdate = async () => {
+    if (installingAppUpdateRef.current) return;
+    installingAppUpdateRef.current = true;
     setInstallingAppUpdate(true);
+    setAppUpdateProgress(null);
     try {
+      appUpdateProgressUnlistenRef.current?.();
+      appUpdateProgressUnlistenRef.current =
+        await listen<AppUpdateDownloadProgress>(
+          "update-download-progress",
+          (event) => setAppUpdateProgress(event.payload),
+        );
       const installed = await settingsApi.installUpdateAndRestart();
       if (!installed) {
-        setUpdateDetailsOpen(false);
         toast.info("该更新已不可用", { description: "正在重新检查更新" });
         await checkUpdate();
       }
     } catch (reason) {
       toast.error("应用更新失败", { description: String(reason) });
     } finally {
+      appUpdateProgressUnlistenRef.current?.();
+      appUpdateProgressUnlistenRef.current = null;
+      installingAppUpdateRef.current = false;
       setInstallingAppUpdate(false);
     }
   };
@@ -3864,24 +3891,45 @@ export function NewSettingsView() {
         minute: "2-digit",
       }).format(lastCheckedAt)
     : null;
+  const appUpdatePercent =
+    appUpdateProgress?.total && appUpdateProgress.total > 0
+      ? Math.min(
+          100,
+          Math.round(
+            (appUpdateProgress.downloaded / appUpdateProgress.total) * 100,
+          ),
+        )
+      : null;
   const appUpdateTitle = isChecking
     ? "正在检查更新"
-    : hasUpdate && updateInfo
-      ? `发现 Chimera++ ${updateInfo.availableVersion}`
-      : updateError
-        ? "检查更新失败"
-        : lastCheckedAt
-          ? "已是最新版本"
-          : `Chimera++ ${appVersion}`;
+    : installingAppUpdate
+      ? "正在更新 Chimera++"
+      : hasUpdate && updateInfo
+        ? `发现 Chimera++ ${updateInfo.availableVersion}`
+        : updateError
+          ? "检查更新失败"
+          : lastCheckedAt
+            ? "已是最新版本"
+            : `Chimera++ ${appVersion}`;
   const appUpdateDescription = isChecking
     ? "正在连接稳定版更新源"
-    : hasUpdate
-      ? "已检测到新版本，安装时将验证签名"
-      : updateError
-        ? updateError
-        : lastCheckedLabel
-          ? `Chimera++ ${appVersion} · 上次检查 ${lastCheckedLabel}`
-          : "自动检测已开启，也可以随时手动检查";
+    : installingAppUpdate
+      ? appUpdatePercent !== null
+        ? appUpdatePercent >= 100
+          ? "正在安装更新，完成后应用将自动重启"
+          : `正在下载更新 ${appUpdatePercent}%`
+        : "正在准备更新，完成后应用将自动重启"
+      : hasUpdate
+        ? stagedVersion === updateInfo?.availableVersion
+          ? "更新包已下载并通过验证，安装后应用将自动重启"
+          : isStaging
+            ? "正在后台下载更新包，点击后将下载完成并安装"
+            : "新版本已通过签名验证，点击即可下载并安装"
+        : updateError
+          ? updateError
+          : lastCheckedLabel
+            ? `Chimera++ ${appVersion} · 上次检查 ${lastCheckedLabel}`
+            : "自动检测已开启，也可以随时手动检查";
   return (
     <section className="new-settings-view">
       <h1>设置</h1>
@@ -3972,7 +4020,7 @@ export function NewSettingsView() {
         >
           <div className="settings-app-update-row">
             <span className="settings-app-update-icon" aria-hidden="true">
-              {isChecking ? (
+              {isChecking || installingAppUpdate ? (
                 <LoaderCircle className="spin" size={15} />
               ) : hasUpdate ? (
                 <Download size={15} />
@@ -3990,20 +4038,16 @@ export function NewSettingsView() {
             </span>
             <button
               className={hasUpdate ? "primary" : "secondary"}
-              disabled={isChecking}
-              aria-expanded={hasUpdate ? updateDetailsOpen : undefined}
-              aria-controls={
-                hasUpdate ? "settings-app-update-details" : undefined
-              }
+              disabled={isChecking || installingAppUpdate}
               onClick={() => {
                 if (hasUpdate) {
-                  setUpdateDetailsOpen((open) => !open);
+                  void installAppUpdate();
                 } else {
                   void checkAppUpdate();
                 }
               }}
             >
-              {isChecking ? (
+              {isChecking || installingAppUpdate ? (
                 <LoaderCircle className="spin" size={14} />
               ) : hasUpdate ? (
                 <Download size={14} />
@@ -4012,18 +4056,19 @@ export function NewSettingsView() {
               )}
               {isChecking
                 ? "正在检查…"
-                : hasUpdate
-                  ? "查看更新"
-                  : lastCheckedAt
-                    ? "重新检查"
-                    : "检查更新"}
+                : installingAppUpdate
+                  ? "正在更新…"
+                  : hasUpdate
+                    ? stagedVersion === updateInfo?.availableVersion
+                      ? "安装并重启"
+                      : "下载并安装"
+                    : lastCheckedAt
+                      ? "重新检查"
+                      : "检查更新"}
             </button>
           </div>
-          {hasUpdate && updateInfo && updateDetailsOpen && (
-            <div
-              id="settings-app-update-details"
-              className="settings-app-update-details"
-            >
+          {hasUpdate && updateInfo && (
+            <div className="settings-app-update-details">
               <span>
                 <b>
                   {updateInfo.currentVersion} → {updateInfo.availableVersion}
@@ -4033,18 +4078,35 @@ export function NewSettingsView() {
                     "安装期间 Chimera++ 将重新启动，正在运行的 Codex 任务不会被关闭。"}
                 </small>
               </span>
-              <button
-                className="primary"
-                disabled={installingAppUpdate}
-                onClick={() => void installAppUpdate()}
+            </div>
+          )}
+          {installingAppUpdate && (
+            <div className="settings-app-update-progress">
+              <span>
+                {appUpdatePercent !== null
+                  ? appUpdatePercent >= 100
+                    ? "正在安装"
+                    : `${appUpdatePercent}%`
+                  : "正在准备下载"}
+              </span>
+              <i
+                role="progressbar"
+                aria-label="应用更新下载进度"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={appUpdatePercent ?? undefined}
               >
-                {installingAppUpdate ? (
-                  <LoaderCircle className="spin" size={14} />
-                ) : (
-                  <Download size={14} />
-                )}
-                {installingAppUpdate ? "正在更新…" : "立即更新"}
-              </button>
+                <u
+                  className={
+                    appUpdatePercent === null ? "is-indeterminate" : undefined
+                  }
+                  style={
+                    appUpdatePercent !== null
+                      ? { width: `${appUpdatePercent}%` }
+                      : undefined
+                  }
+                />
+              </i>
             </div>
           )}
         </div>
