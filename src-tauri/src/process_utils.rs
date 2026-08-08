@@ -179,12 +179,19 @@ fn terminate_process_tree(pid: u32) {
 
 #[cfg(unix)]
 fn terminate_process_tree(pid: u32) {
-    let _ = Command::new("kill")
-        .args(["-KILL", &format!("-{pid}")])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    // Use the syscall directly instead of resolving an external `kill`
+    // executable through PATH.  Probes may run with a restricted environment,
+    // and a failed cleanup command would leave descendants holding the pipe
+    // open while the bounded-reader threads wait forever.
+    unsafe extern "C" {
+        fn kill(pid: i32, signal: i32) -> i32;
+    }
+
+    const SIGKILL: i32 = 9;
+    let process_group = -(pid as i32);
+    // SAFETY: the negative PID targets the dedicated process group created
+    // before spawning the child; SIGKILL is intentionally used for cleanup.
+    let _ = unsafe { kill(process_group, SIGKILL) };
 }
 
 #[cfg(not(any(unix, target_os = "windows")))]
