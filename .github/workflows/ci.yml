@@ -52,6 +52,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path test-results | Out-Null
           pnpm test:unit -- --reporter=default --reporter=junit --outputFile=test-results/vitest.junit.xml
 
+      - name: Build renderer and enforce bundle budgets
+        run: pnpm build:renderer:check
+
       - name: Upload frontend test report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -69,6 +72,7 @@ jobs:
         os:
           - windows-2022
           - macos-15
+          - ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -78,9 +82,25 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            pkg-config \
+            libssl-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev
+
       - name: Prepare frontend placeholder
-        shell: pwsh
-        run: New-Item -ItemType Directory -Force -Path dist | Out-Null
+        shell: bash
+        run: mkdir -p dist
 
       - name: Check Rust formatting
         run: cargo fmt --check --manifest-path src-tauri/Cargo.toml

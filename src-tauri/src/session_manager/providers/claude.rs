@@ -1,10 +1,13 @@
-use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde_json::Value;
 
 use crate::config::get_claude_config_dir;
+use crate::security_limits::{
+    collect_files_with_extensions, open_limited_regular_file, MAX_SESSION_FILE_BYTES,
+    MAX_SESSION_SCAN_DEPTH,
+};
 use crate::session_manager::{SessionMessage, SessionMeta};
 
 use super::utils::{
@@ -16,8 +19,8 @@ const PROVIDER_ID: &str = "claude";
 
 pub fn scan_sessions() -> Vec<SessionMeta> {
     let root = get_claude_config_dir().join("projects");
-    let mut files = Vec::new();
-    collect_jsonl_files(&root, &mut files);
+    let files = collect_files_with_extensions(&root, &["jsonl"], MAX_SESSION_SCAN_DEPTH)
+        .unwrap_or_default();
 
     let mut sessions = Vec::new();
     for path in files {
@@ -30,7 +33,8 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
 }
 
 pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
-    let file = File::open(path).map_err(|e| format!("Failed to open session file: {e}"))?;
+    let file = open_limited_regular_file(path, MAX_SESSION_FILE_BYTES)
+        .map_err(|e| format!("Failed to open session file: {e}"))?;
     let reader = BufReader::new(file);
     let mut messages = Vec::new();
 
@@ -263,26 +267,6 @@ fn infer_session_id_from_filename(path: &Path) -> Option<String> {
     path.file_stem()
         .and_then(|stem| stem.to_str())
         .map(|stem| stem.to_string())
-}
-
-fn collect_jsonl_files(root: &Path, files: &mut Vec<PathBuf>) {
-    if !root.exists() {
-        return;
-    }
-
-    let entries = match std::fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_jsonl_files(&path, files);
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
-            files.push(path);
-        }
-    }
 }
 
 fn remove_path_if_exists(path: &Path) -> std::io::Result<()> {

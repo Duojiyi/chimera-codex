@@ -14,6 +14,12 @@ fn merge_settings_for_save(
     mut incoming: crate::settings::AppSettings,
     existing: &crate::settings::AppSettings,
 ) -> crate::settings::AppSettings {
+    if incoming.settings_migration_version < existing.settings_migration_version {
+        incoming.unify_codex_session_history = existing.unify_codex_session_history;
+    }
+    incoming.settings_migration_version = existing
+        .settings_migration_version
+        .max(incoming.settings_migration_version);
     match (&mut incoming.webdav_sync, &existing.webdav_sync) {
         // incoming 没有 webdav → 保留现有
         (None, _) => {

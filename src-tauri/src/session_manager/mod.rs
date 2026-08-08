@@ -148,8 +148,6 @@ fn delete_session_with_roots(
     source_path: &Path,
     roots: &[PathBuf],
 ) -> Result<bool, String> {
-    let validated_source = canonicalize_existing_path(source_path, "session source")?;
-
     let mut saw_existing_root = false;
     for root in roots {
         if !root.exists() {
@@ -157,24 +155,49 @@ fn delete_session_with_roots(
         }
 
         saw_existing_root = true;
-        let validated_root = canonicalize_existing_path(root, "session root")?;
-        if validated_source.starts_with(&validated_root) {
-            return match provider_id {
-                "codex" => codex::delete_session(&validated_root, &validated_source, session_id),
-                "claude" => claude::delete_session(&validated_root, &validated_source, session_id),
-                "opencode" => {
-                    opencode::delete_session(&validated_root, &validated_source, session_id)
-                }
-                "openclaw" => {
-                    openclaw::delete_session(&validated_root, &validated_source, session_id)
-                }
-                "gemini" => gemini::delete_session(&validated_root, &validated_source, session_id),
-                "grokbuild" => {
-                    grokbuild::delete_session(&validated_root, &validated_source, session_id)
-                }
-                "hermes" => hermes::delete_session(&validated_root, &validated_source, session_id),
-                _ => Err(format!("Unsupported provider: {provider_id}")),
-            };
+        let validated_root = root
+            .canonicalize()
+            .map_err(|e| format!("Failed to resolve session root {}: {e}", root.display()))?;
+        match crate::security_limits::canonicalize_within_root(source_path, root) {
+            Ok(validated_source) => {
+                return match provider_id {
+                    "codex" => {
+                        codex::delete_session(&validated_root, &validated_source, session_id)
+                    }
+                    "claude" => {
+                        claude::delete_session(&validated_root, &validated_source, session_id)
+                    }
+                    "opencode" => {
+                        opencode::delete_session(&validated_root, &validated_source, session_id)
+                    }
+                    "openclaw" => {
+                        openclaw::delete_session(&validated_root, &validated_source, session_id)
+                    }
+                    "gemini" => {
+                        gemini::delete_session(&validated_root, &validated_source, session_id)
+                    }
+                    "grokbuild" => {
+                        grokbuild::delete_session(&validated_root, &validated_source, session_id)
+                    }
+                    "hermes" => {
+                        hermes::delete_session(&validated_root, &validated_source, session_id)
+                    }
+                    _ => Err(format!("Unsupported provider: {provider_id}")),
+                };
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(format!(
+                    "session source not found: {}",
+                    source_path.display()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => continue,
+            Err(error) => {
+                return Err(format!(
+                    "Failed to validate session source {}: {error}",
+                    source_path.display()
+                ));
+            }
         }
     }
 
@@ -207,15 +230,6 @@ fn provider_roots(provider_id: &str) -> Result<Vec<PathBuf>, String> {
     };
 
     Ok(roots)
-}
-
-fn canonicalize_existing_path(path: &Path, label: &str) -> Result<PathBuf, String> {
-    if !path.exists() {
-        return Err(format!("{label} not found: {}", path.display()));
-    }
-
-    path.canonicalize()
-        .map_err(|e| format!("Failed to resolve {label} {}: {e}", path.display()))
 }
 
 fn collect_delete_session_outcomes<F>(

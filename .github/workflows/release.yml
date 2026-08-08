@@ -101,6 +101,8 @@ jobs:
             arch: arm64
           - os: macos-15
             arch: universal
+          - os: ubuntu-22.04
+            arch: x86_64
 
     steps:
       - name: Checkout
@@ -510,10 +512,15 @@ jobs:
           if [ -n "$APPIMAGE" ]; then
             NEW_APPIMAGE="Chimera++-${VERSION}-Linux-${ARCH}.AppImage"
             cp "$APPIMAGE" "release-assets/$NEW_APPIMAGE"
-            [ -f "$APPIMAGE.sig" ] && cp "$APPIMAGE.sig" "release-assets/$NEW_APPIMAGE.sig" || echo ".sig for AppImage not found"
+            if [ ! -s "$APPIMAGE.sig" ]; then
+              echo "Signed AppImage updater artifact is required: $APPIMAGE.sig" >&2
+              exit 1
+            fi
+            cp "$APPIMAGE.sig" "release-assets/$NEW_APPIMAGE.sig"
             echo "AppImage copied: $NEW_APPIMAGE"
           else
             echo "No AppImage found under target/release/bundle" >&2
+            exit 1
           fi
           # 额外上传 .deb（用于手动安装，不参与 Updater）
           DEB=$(find src-tauri/target/release/bundle -name "*.deb" | head -1 || true)
@@ -521,7 +528,8 @@ jobs:
             cp "$DEB" "release-assets/Chimera++-${VERSION}-Linux-${ARCH}.deb"
             echo "Deb package copied: Chimera++-${VERSION}-Linux-${ARCH}.deb"
           else
-            echo "No .deb found (optional)"
+            echo "Required .deb package was not produced" >&2
+            exit 1
           fi
           # 额外上传 .rpm（用于 Fedora/RHEL/openSUSE 等，不参与 Updater）
           RPM=$(find src-tauri/target/release/bundle -name "*.rpm" | head -1 || true)
@@ -529,7 +537,8 @@ jobs:
             cp "$RPM" "release-assets/Chimera++-${VERSION}-Linux-${ARCH}.rpm"
             echo "RPM package copied: Chimera++-${VERSION}-Linux-${ARCH}.rpm"
           else
-            echo "No .rpm found (optional)"
+            echo "Required .rpm package was not produced" >&2
+            exit 1
           fi
 
       - name: Generate Windows release evidence
@@ -640,6 +649,52 @@ jobs:
           ) > "release-assets/$checksum_name"
           test -s "release-assets/$checksum_name"
 
+      - name: Generate Linux release evidence
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_COMMIT: ${{ env.SOURCE_COMMIT }}
+        run: |
+          set -euo pipefail
+          platform='linux-x86_64'
+          pnpm list --prod --json > "release-assets/frontend-sbom-$platform.json"
+          cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 --locked > "release-assets/rust-sbom-$platform.json"
+          jq -n \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg platform "$platform" \
+            --arg runner_name "$RUNNER_NAME" \
+            --arg runner_os "$RUNNER_OS" \
+            --arg runner_arch "$RUNNER_ARCH" \
+            --argjson external_git_dependencies '[
+              {"package":"chimera-runtime","repository":"https://github.com/Duojiyi/chimera-codex.git","revision":"a5075e6e4d58aad13db259e3eebeabdc0417e3b3"},
+              {"package":"chimera-platform","repository":"https://github.com/Duojiyi/chimera-codex.git","revision":"a5075e6e4d58aad13db259e3eebeabdc0417e3b3"},
+              {"package":"codex-win-engine","repository":"https://github.com/Wangnov/Codex-App-Manager.git","revision":"89b542b9299453dcd833757b10cdb15f6d14d527"},
+              {"package":"codex-theme-engine","repository":"https://github.com/Wangnov/Codex-App-Manager.git","revision":"89b542b9299453dcd833757b10cdb15f6d14d527"}
+            ]' \
+            '{
+              schemaVersion: 1,
+              releaseTag: $release_tag,
+              sourceCommit: $source_commit,
+              platform: $platform,
+              runner: {name: $runner_name, os: $runner_os, arch: $runner_arch},
+              target: "x86_64-unknown-linux-gnu",
+              publisherSigned: false,
+              updaterSigned: true,
+              externalGitDependencies: $external_git_dependencies
+            }' > "release-assets/build-provenance-$platform.json"
+          checksum_name="SHA256SUMS-$platform.txt"
+          (
+            cd release-assets
+            for asset in *; do
+              [ "$asset" = "$checksum_name" ] && continue
+              [ -f "$asset" ] || continue
+              sha256sum "$asset"
+            done
+          ) > "release-assets/$checksum_name"
+          test -s "release-assets/$checksum_name"
+
       - name: List prepared assets
         shell: bash
         run: |
@@ -741,18 +796,26 @@ jobs:
             "Chimera++-$tag-macOS.tar.gz"
             "Chimera++-$tag-macOS.zip"
             "Chimera++-$tag-macOS.dmg"
+            "Chimera++-$tag-Linux-x86_64.AppImage"
+            "Chimera++-$tag-Linux-x86_64.AppImage.sig"
+            "Chimera++-$tag-Linux-x86_64.deb"
+            "Chimera++-$tag-Linux-x86_64.rpm"
             "SHA256SUMS-windows-x86_64.txt"
             "SHA256SUMS-windows-arm64.txt"
             "SHA256SUMS-macos-universal.txt"
+            "SHA256SUMS-linux-x86_64.txt"
             "frontend-sbom-windows-x86_64.json"
             "frontend-sbom-windows-arm64.json"
             "frontend-sbom-macos-universal.json"
+            "frontend-sbom-linux-x86_64.json"
             "rust-sbom-windows-x86_64.json"
             "rust-sbom-windows-arm64.json"
             "rust-sbom-macos-universal.json"
+            "rust-sbom-linux-x86_64.json"
             "build-provenance-windows-x86_64.json"
             "build-provenance-windows-arm64.json"
             "build-provenance-macos-universal.json"
+            "build-provenance-linux-x86_64.json"
             "codex-mirror-provenance-windows-x86_64.json"
             "codex-mirror-provenance-windows-arm64.json"
           )
@@ -763,6 +826,7 @@ jobs:
             "Chimera++-$tag-Windows.msi"
             "Chimera++-$tag-Windows-arm64.msi"
             "Chimera++-$tag-macOS.tar.gz"
+            "Chimera++-$tag-Linux-x86_64.AppImage"
           )
           for artifact in "${updater_artifacts[@]}"; do
             test -s "release-assets/$artifact"
@@ -771,7 +835,8 @@ jobs:
           for checksum in \
             SHA256SUMS-windows-x86_64.txt \
             SHA256SUMS-windows-arm64.txt \
-            SHA256SUMS-macos-universal.txt; do
+            SHA256SUMS-macos-universal.txt \
+            SHA256SUMS-linux-x86_64.txt; do
             (cd release-assets && sha256sum -c "$checksum")
           done
           node scripts/verify-release-evidence.mjs \
@@ -782,7 +847,8 @@ jobs:
             --assets-dir release-assets \
             --asset "Chimera++-$tag-Windows.msi" \
             --asset "Chimera++-$tag-Windows-arm64.msi" \
-            --asset "Chimera++-$tag-macOS.tar.gz"
+            --asset "Chimera++-$tag-macOS.tar.gz" \
+            --asset "Chimera++-$tag-Linux-x86_64.AppImage"
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
@@ -801,8 +867,9 @@ jobs:
             - **Windows (x86_64)**: `Chimera++-${{ github.ref_name }}-Windows.msi`（安装版）或 `Chimera++-${{ github.ref_name }}-Windows-Portable.zip`（绿色版）
             - **Windows (ARM64)**: `Chimera++-${{ github.ref_name }}-Windows-arm64.msi`（安装版）或 `Chimera++-${{ github.ref_name }}-Windows-arm64-Portable.zip`（绿色版）
             - **macOS (Universal)**: `Chimera++-${{ github.ref_name }}-macOS.dmg`（推荐）或 `Chimera++-${{ github.ref_name }}-macOS.zip`，同时支持 Intel 与 Apple Silicon
+            - **Linux (x86_64)**: `Chimera++-${{ github.ref_name }}-Linux-x86_64.AppImage`、`.deb` 或 `.rpm`
 
-            Windows 绿色版已内置经 SHA-256 校验的 Codex 桌面本体。macOS 版本未进行 Apple Developer ID 签名和公证；首次打开如被 Gatekeeper 阻止，请在 Finder 中右键应用并选择“打开”，或自行完成签名。`.sig` 是独立的 Tauri 应用内更新签名，`latest.json` 供自动更新使用。`ChimeraPlusPlus-*-windows-x64-setup.exe` 是供 Chimera++ 1.x 自动升级到 2.0 使用的兼容安装器。
+            Windows 绿色版已内置经 SHA-256 校验的 Codex 桌面本体。macOS 版本未进行 Apple Developer ID 签名和公证；Linux 手动安装包也未提供发行者代码签名。`.sig` 仅表示独立的 Tauri 应用内更新签名，不等同于 Authenticode、Apple Developer ID 或 Linux 发行者签名。请使用对应的 `SHA256SUMS-*.txt` 校验手动安装包。`latest.json` 供自动更新使用，更新失败时旧版本不会被替换。`ChimeraPlusPlus-*-windows-x64-setup.exe` 是供 Chimera++ 1.x 自动升级到 2.0 使用的兼容安装器。
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -864,7 +931,8 @@ jobs:
             --assets-dir dl \
             --asset "Chimera++-$RELEASE_TAG-Windows.msi" \
             --asset "Chimera++-$RELEASE_TAG-Windows-arm64.msi" \
-            --asset "Chimera++-$RELEASE_TAG-macOS.tar.gz"
+            --asset "Chimera++-$RELEASE_TAG-macOS.tar.gz" \
+            --asset "Chimera++-$RELEASE_TAG-Linux-x86_64.AppImage"
       - name: Generate latest.json
         env:
           REPO: ${{ github.repository }}
@@ -899,9 +967,10 @@ jobs:
           add_platform windows-aarch64 "Chimera++-$TAG-Windows-arm64.msi"
           add_platform darwin-x86_64 "Chimera++-$TAG-macOS.tar.gz"
           add_platform darwin-aarch64 "Chimera++-$TAG-macOS.tar.gz"
+          add_platform linux-x86_64 "Chimera++-$TAG-Linux-x86_64.AppImage"
 
-          if [ "$(jq 'length' <<< "$platform_json")" -lt 4 ]; then
-            echo 'Signed Windows and macOS updater platforms are required' >&2
+          if [ "$(jq 'length' <<< "$platform_json")" -ne 5 ]; then
+            echo 'Signed Windows, macOS, and Linux x86_64 updater platforms are required' >&2
             exit 1
           fi
 
@@ -947,6 +1016,7 @@ jobs:
              .platforms["windows-aarch64"].signature != "" and
              .platforms["darwin-x86_64"].signature != "" and
              .platforms["darwin-aarch64"].signature != "" and
+             .platforms["linux-x86_64"].signature != "" and
              (.assets | length == 1) and
              (.assets[0].sha256 | test("^[0-9a-f]{64}$")) and
              (.assets[0].size > 0)' \

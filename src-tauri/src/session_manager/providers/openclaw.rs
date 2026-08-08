@@ -1,11 +1,12 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use serde_json::Value;
 
 use crate::openclaw_config::get_openclaw_dir;
+use crate::security_limits::{
+    read_dir_without_links, read_to_string_limited, MAX_CONFIG_FILE_BYTES, MAX_SESSION_FILE_BYTES,
+};
 use crate::{
     config::write_json_file,
     session_manager::{SessionMessage, SessionMeta},
@@ -36,12 +37,12 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
     let mut sessions = Vec::new();
 
     // Traverse each agent directory
-    let agent_entries = match std::fs::read_dir(&agents_dir) {
+    let agent_entries = match read_dir_without_links(&agents_dir) {
         Ok(entries) => entries,
         Err(_) => return sessions,
     };
 
-    for agent_entry in agent_entries.flatten() {
+    for agent_entry in agent_entries {
         let agent_path = agent_entry.path();
         if !agent_path.is_dir() {
             continue;
@@ -52,14 +53,14 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
             continue;
         }
 
-        let session_entries = match std::fs::read_dir(&sessions_dir) {
+        let session_entries = match read_dir_without_links(&sessions_dir) {
             Ok(entries) => entries,
             Err(_) => continue,
         };
 
         let display_names = load_display_names(&sessions_dir);
 
-        for entry in session_entries.flatten() {
+        for entry in session_entries {
             let path = entry.path();
             if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
                 continue;
@@ -75,16 +76,12 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
 }
 
 pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
-    let file = File::open(path).map_err(|e| format!("Failed to open session file: {e}"))?;
-    let reader = BufReader::new(file);
+    let content = read_to_string_limited(path, MAX_SESSION_FILE_BYTES)
+        .map_err(|e| format!("Failed to open session file: {e}"))?;
     let mut messages = Vec::new();
 
-    for line in reader.lines() {
-        let line = match line {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-        let value: Value = match serde_json::from_str(&line) {
+    for line in content.lines() {
+        let value: Value = match serde_json::from_str(line) {
             Ok(parsed) => parsed,
             Err(_) => continue,
         };
@@ -157,7 +154,7 @@ pub fn delete_session(_root: &Path, path: &Path, session_id: &str) -> Result<boo
 /// Returns an empty map if the file does not exist or cannot be parsed.
 fn load_display_names(sessions_dir: &Path) -> HashMap<String, String> {
     let index_path = sessions_dir.join("sessions.json");
-    let content = match std::fs::read_to_string(&index_path) {
+    let content = match read_to_string_limited(&index_path, MAX_CONFIG_FILE_BYTES) {
         Ok(c) => c,
         Err(_) => return HashMap::new(),
     };
@@ -308,7 +305,7 @@ fn prune_sessions_index(
         return Ok(());
     }
 
-    let content = std::fs::read_to_string(index_path).map_err(|e| {
+    let content = read_to_string_limited(index_path, MAX_CONFIG_FILE_BYTES).map_err(|e| {
         format!(
             "Failed to read OpenClaw sessions index {}: {e}",
             index_path.display()

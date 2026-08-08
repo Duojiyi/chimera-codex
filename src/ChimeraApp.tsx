@@ -1,6 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Activity,
   ArrowUp,
@@ -33,16 +41,6 @@ import {
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import type {
   ClaudeApiKeyField,
   CodexApiFormatSelection,
@@ -53,16 +51,10 @@ import { providersApi } from "@/lib/api/providers";
 import { settingsApi } from "@/lib/api/settings";
 import { configApi } from "@/lib/api";
 import { vscodeApi } from "@/lib/api/vscode";
-import { usageApi } from "@/lib/api/usage";
 import { getCurrentVersion } from "@/lib/updater";
 import { WindowControls } from "@/components/WindowControls";
 import { useUpdate } from "@/contexts/UpdateContext";
-import type {
-  DailyStats,
-  ModelStats,
-  RequestLog,
-  UsageSummary,
-} from "@/types/usage";
+import type { RequestLog } from "@/types/usage";
 import type { Settings } from "@/types";
 import { fetchModelsForConfig, type FetchedModel } from "@/lib/api/model-fetch";
 import { getChimeraHubTemplate } from "@/config/codexTemplates";
@@ -91,11 +83,23 @@ import {
 } from "./chimeraUtils";
 import routeGateIcon from "@/assets/icons/chimera-dragon-mark.png";
 import RouteGlobe from "@/components/RouteGlobe";
-import { SessionManagerPage } from "@/components/sessions/SessionManagerPage";
 import "./chimera.css";
 
 const runningInTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+const UsageView = lazy(() =>
+  import("./views/UsageView").then(({ UsageView: view }) => ({
+    default: view,
+  })),
+);
+const SessionManagerPage = lazy(() =>
+  import("./components/sessions/SessionManagerPage").then(
+    ({ SessionManagerPage: page }) => ({
+      default: page,
+    }),
+  ),
+);
 
 function useDialogFocus<T extends HTMLElement>(
   onClose: () => void,
@@ -208,10 +212,6 @@ type DownloadProgress = {
   downloaded: number;
   total: number;
   stage?: "downloading" | "installing";
-};
-type AppUpdateDownloadProgress = {
-  downloaded: number;
-  total: number | null;
 };
 type RuntimeAction = "update" | "repair" | "rollback" | "uninstall";
 type RuntimeOperation = {
@@ -383,6 +383,7 @@ export default function ChimeraApp() {
   const {
     hasUpdate: titlebarHasUpdate,
     isChecking: titlebarChecking,
+    isInstalling: titlebarInstalling,
     checkUpdate: titlebarCheckUpdate,
     resetDismiss: titlebarResetDismiss,
   } = useUpdate();
@@ -390,6 +391,11 @@ export default function ChimeraApp() {
   const runTitlebarUpdateCheck = useCallback(async () => {
     if (!runningInTauri) {
       toast.info("预览模式无法检查更新");
+      return;
+    }
+    if (titlebarHasUpdate) {
+      titlebarResetDismiss();
+      setView("settings");
       return;
     }
     try {
@@ -410,7 +416,38 @@ export default function ChimeraApp() {
         description: error instanceof Error ? error.message : String(error),
       });
     }
-  }, [titlebarCheckUpdate, titlebarResetDismiss]);
+  }, [titlebarCheckUpdate, titlebarHasUpdate, titlebarResetDismiss]);
+
+  const handleTitlebarMouseDown = useCallback(
+    (event: React.MouseEvent<HTMLElement>) => {
+      if (event.button !== 0 || event.detail !== 1) {
+        return;
+      }
+
+      const target = event.target as HTMLElement;
+      if (
+        target.closest(
+          'button, input, textarea, select, a, [role="button"], [data-tauri-no-drag]',
+        )
+      ) {
+        return;
+      }
+
+      // Use an explicit drag call instead of Tauri's native drag-region
+      // attribute. Native drag regions let the window manager interpret a
+      // double-click as maximize/restore, even for a fixed-size window.
+      void getCurrentWindow().startDragging();
+    },
+    [],
+  );
+
+  const preventTitlebarDoubleClick = useCallback(
+    (event: React.MouseEvent<HTMLElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    [],
+  );
 
   const loadProviders = async () => {
     if (!runningInTauri) {
@@ -1104,8 +1141,12 @@ export default function ChimeraApp() {
   return (
     <div className="chimera-shell">
       <main className="chimera-main">
-        <header className="chimera-titlebar" data-tauri-drag-region>
-          <div className="route-brand" data-tauri-drag-region>
+        <header
+          className="chimera-titlebar"
+          onMouseDown={handleTitlebarMouseDown}
+          onDoubleClick={preventTitlebarDoubleClick}
+        >
+          <div className="route-brand">
             <span className="route-brand-mark">
               <img src={routeGateIcon} alt="" />
             </span>
@@ -1115,27 +1156,31 @@ export default function ChimeraApp() {
             <span className="status-dot" />
             {viewLabels[view]}
           </div>
-          <div className="route-window-tools">
+          <div className="route-window-tools" data-tauri-no-drag>
             <button
               className={`titlebar-update${titlebarHasUpdate ? " is-available" : ""}`}
               aria-label={
-                titlebarChecking
-                  ? "正在检查更新"
-                  : titlebarHasUpdate
-                    ? "有可用更新"
-                    : "检查更新"
+                titlebarInstalling
+                  ? "正在安装更新"
+                  : titlebarChecking
+                    ? "正在检查更新"
+                    : titlebarHasUpdate
+                      ? "下载并安装可用更新"
+                      : "检查更新"
               }
               title={
-                titlebarChecking
-                  ? "正在检查更新…"
-                  : titlebarHasUpdate
-                    ? "有可用更新"
-                    : "检查更新"
+                titlebarInstalling
+                  ? "正在安装更新…"
+                  : titlebarChecking
+                    ? "正在检查更新…"
+                    : titlebarHasUpdate
+                      ? "下载并安装可用更新"
+                      : "检查更新"
               }
-              disabled={titlebarChecking}
+              disabled={titlebarChecking || titlebarInstalling}
               onClick={() => void runTitlebarUpdateCheck()}
             >
-              {titlebarChecking ? (
+              {titlebarChecking || titlebarInstalling ? (
                 <LoaderCircle size={16} className="spin" />
               ) : (
                 <ArrowUp size={16} />
@@ -1180,7 +1225,6 @@ export default function ChimeraApp() {
                   providerDraft(null, providers.length ? "新线路" : "默认线路"),
                 );
               }}
-              onNavigate={setView}
             />
           )}
           {view === "runtime" && (
@@ -1195,19 +1239,27 @@ export default function ChimeraApp() {
               onAction={setPendingAction}
             />
           )}
-          {view === "usage" && <UsageView />}
-          {view === "appearance" && (
-            <AppearanceView
-              enabled={skinEnabled}
-              onRequestSkinAction={setPendingSkinAction}
-            />
-          )}
-          {view === "sessions" && (
-            <div className="chimera-sessions-host">
-              <SessionManagerPage appId="all" />
-            </div>
-          )}
-          {view === "settings" && <NewSettingsView />}
+          <Suspense
+            fallback={
+              <div className="route-loading" role="status">
+                正在加载模块…
+              </div>
+            }
+          >
+            {view === "usage" && <UsageView />}
+            {view === "appearance" && (
+              <AppearanceView
+                enabled={skinEnabled}
+                onRequestSkinAction={setPendingSkinAction}
+              />
+            )}
+            {view === "sessions" && (
+              <div className="chimera-sessions-host">
+                <SessionManagerPage appId="all" />
+              </div>
+            )}
+            {view === "settings" && <NewSettingsView />}
+          </Suspense>
         </section>
         <nav className="route-bottom-nav" aria-label="主导航">
           {nav.map(([id, label, Icon]) => (
@@ -1930,7 +1982,6 @@ export function NewProvidersView({
   onSwitch,
   onEdit,
   onAdd,
-  onNavigate,
 }: {
   providers: Provider[];
   currentId: string;
@@ -1944,10 +1995,17 @@ export function NewProvidersView({
   onSwitch: (id: string) => Promise<void>;
   onEdit: (provider: Provider) => void;
   onAdd: () => void;
-  onNavigate?: (view: View) => void;
 }) {
-  const { hasUpdate, updateInfo, isDismissed, dismissUpdate, stagedVersion } =
-    useUpdate();
+  const {
+    hasUpdate,
+    updateInfo,
+    isDismissed,
+    dismissUpdate,
+    stagedVersion,
+    isInstalling,
+    downloadProgress,
+    installUpdate,
+  } = useUpdate();
   const [managerOpen, setManagerOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [switchingId, setSwitchingId] = useState<string | null>(null);
@@ -2084,9 +2142,19 @@ export function NewProvidersView({
           <div className="route-update-banner-copy">
             <b>Chimera++ {updateInfo.availableVersion} 可用</b>
             <small>
-              {stagedVersion === updateInfo.availableVersion
-                ? "安装包已在后台下载完毕，点击即可安装并重启。"
-                : "已通过签名验证，更新后将自动重启。"}
+              {isInstalling
+                ? downloadProgress?.total
+                  ? `正在下载 ${Math.min(
+                      100,
+                      Math.round(
+                        (downloadProgress.downloaded / downloadProgress.total) *
+                          100,
+                      ),
+                    )}%，完成后将自动安装并重启。`
+                  : "正在准备更新，完成后将自动安装并重启。"
+                : stagedVersion === updateInfo.availableVersion
+                  ? "安装包已在后台下载完毕，点击即可安装并重启。"
+                  : "已通过签名验证，更新后将自动重启。"}
             </small>
           </div>
           <div className="route-update-banner-actions">
@@ -2096,11 +2164,20 @@ export function NewProvidersView({
             <button
               type="button"
               className="primary"
-              onClick={() => {
-                onNavigate?.("settings");
-              }}
+              disabled={isInstalling}
+              onClick={() =>
+                void installUpdate().catch((reason) =>
+                  toast.error("应用更新失败", {
+                    description: String(reason),
+                  }),
+                )
+              }
             >
-              前往更新
+              {isInstalling
+                ? "正在更新…"
+                : stagedVersion === updateInfo.availableVersion
+                  ? "安装并重启"
+                  : "下载并安装"}
             </button>
           </div>
         </div>
@@ -3163,327 +3240,6 @@ function ActivityView({
   );
 }
 
-/** How many models the 模型词元分布 panel shows. */
-export const USAGE_TOP_MODEL_COUNT = 3;
-
-/**
- * Rank models by the quantity the panel actually renders — tokens.
- *
- * The backend sorts by `total_cost DESC` (correct for the cost-columned
- * ModelStatsTable, so it is not changed there). Taking the first N of that
- * order here ranked by *cost* while the panel is labelled 模型词元分布 and
- * prints 词元 counts, so a cheap-but-chatty model outranked an expensive-but-
- * quiet one on screen. Worse, a model with no pricing entry has cost 0 and can
- * never enter the top N no matter how many tokens it burns — which makes the
- * panel look like a hardcoded model list.
- *
- * Sorted copy, not in place: the caller's array is React state.
- */
-export function topModelsByTokens(
-  models: ModelStats[],
-  count = USAGE_TOP_MODEL_COUNT,
-): ModelStats[] {
-  return [...models]
-    .sort((a, b) => b.totalTokens - a.totalTokens)
-    .slice(0, count);
-}
-
-function UsageView() {
-  const [summary, setSummary] = useState<UsageSummary | null>(null);
-  const [trends, setTrends] = useState<DailyStats[]>([]);
-  const [models, setModels] = useState<ModelStats[]>([]);
-  const [range, setRange] = useState<"today" | "7d" | "30d">("30d");
-  const [error, setError] = useState("");
-  const [syncing, setSyncing] = useState(runningInTauri);
-  const [rangeLoading, setRangeLoading] = useState(false);
-  const [syncNote, setSyncNote] = useState(
-    runningInTauri
-      ? "正在读取 Codex 本机会话记录"
-      : "浏览器预览不会读取本机会话数据",
-  );
-  const initialUsageLoadStarted = useRef(false);
-  const usageRequestId = useRef(0);
-
-  const loadUsage = useCallback(
-    async (selectedRange: "today" | "7d" | "30d", syncSessions: boolean) => {
-      const requestId = ++usageRequestId.current;
-      if (!runningInTauri) {
-        setSummary(null);
-        setTrends([]);
-        setModels([]);
-        setSyncing(false);
-        setRangeLoading(false);
-        setSyncNote("浏览器预览不会读取本机会话数据");
-        return;
-      }
-      if (syncSessions) setSyncing(true);
-      else setRangeLoading(true);
-      setError("");
-      if (syncSessions) {
-        try {
-          const result = await usageApi.syncCodexSessionUsage();
-          setSyncNote(
-            result.errors.length
-              ? `已读取 ${result.filesScanned} 个文件，${result.errors.length} 项未能导入`
-              : `已同步 ${result.filesScanned} 个本机会话文件`,
-          );
-        } catch (reason) {
-          setSyncNote("本机会话同步失败，正在显示已有记录");
-          setError(String(reason));
-        }
-      }
-      const now = new Date();
-      const end = Math.floor(now.getTime() / 1000);
-      const days = selectedRange === "7d" ? 7 : 30;
-      const start =
-        selectedRange === "today"
-          ? Math.floor(
-              new Date(
-                now.getFullYear(),
-                now.getMonth(),
-                now.getDate(),
-              ).getTime() / 1000,
-            )
-          : end - days * 24 * 60 * 60;
-      try {
-        const [nextSummary, nextTrends, nextModels] = await Promise.all([
-          usageApi.getUsageSummary(start, end, "codex"),
-          usageApi.getUsageTrends(start, end, "codex"),
-          usageApi.getModelStats(start, end, "codex"),
-        ]);
-        if (requestId !== usageRequestId.current) return;
-        setSummary(nextSummary);
-        setTrends(nextTrends);
-        // Keep every model: the top-N slice happens at render time, and the
-        // percentage denominator needs the full set to be a real share.
-        setModels(nextModels);
-      } catch (reason) {
-        if (requestId !== usageRequestId.current) return;
-        setError(String(reason));
-      } finally {
-        if (requestId === usageRequestId.current) {
-          setSyncing(false);
-          setRangeLoading(false);
-        }
-      }
-    },
-    [],
-  );
-
-  useEffect(() => {
-    const shouldSyncSessions = !initialUsageLoadStarted.current;
-    initialUsageLoadStarted.current = true;
-    void loadUsage(range, shouldSyncSessions);
-  }, [loadUsage, range]);
-
-  const total = summary?.realTotalTokens ?? 0;
-  const input = summary?.totalInputTokens ?? 0;
-  const output = summary?.totalOutputTokens ?? 0;
-  const cache =
-    (summary?.totalCacheCreationTokens ?? 0) +
-    (summary?.totalCacheReadTokens ?? 0);
-  const chartTrends = trends.map((item) => ({
-    ...item,
-    totalTokens:
-      item.totalInputTokens +
-      item.totalOutputTokens +
-      item.totalCacheCreationTokens +
-      item.totalCacheReadTokens,
-  }));
-  // Denominator spans *every* model, not just the rendered ones, so a bar reads
-  // "this model's share of all token use". Summing only the top 3 would force
-  // them to 100% and overstate each one.
-  const modelTotal = Math.max(
-    models.reduce((sum, item) => sum + item.totalTokens, 0),
-    1,
-  );
-  const topModels = topModelsByTokens(models);
-  const displayTotal = total;
-  const peak = Math.max(...chartTrends.map((item) => item.totalTokens), 0);
-  const spectrum = ["#36c5d9", "#53d7c2", "#ffb84d", "#ff7e57", "#e85d9e"];
-  return (
-    <section className="usage-surface usage-spectrum">
-      <div className="usage-heading">
-        <div>
-          <span className="eyebrow">本机统计</span>
-          <h1>词元消耗</h1>
-          <p>
-            {syncing
-              ? "正在同步本机会话记录…"
-              : `${syncNote}，所有数据仅保存在这台电脑。`}
-          </p>
-        </div>
-        <div className="usage-toolbar">
-          <button
-            className="usage-refresh"
-            onClick={() => void loadUsage(range, true)}
-            disabled={!runningInTauri || syncing}
-            aria-label="同步词元记录"
-          >
-            <RefreshCw size={14} className={syncing ? "spin" : ""} />
-          </button>
-          <div className="range-segment">
-            {(
-              [
-                ["today", "今日"],
-                ["7d", "7 天"],
-                ["30d", "30 天"],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                className={range === id ? "is-active" : ""}
-                onClick={() => setRange(id)}
-                aria-pressed={range === id}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-      {error && (
-        <div className="inline-error">
-          <CircleAlert size={15} /> 词元统计暂时不可用：{error}
-        </div>
-      )}
-      <article className="usage-spectrum-panel">
-        <section className="usage-spectrum-summary">
-          <span>
-            {range === "today"
-              ? "今日累计"
-              : range === "7d"
-                ? "7 天累计"
-                : "30 天累计"}
-            {rangeLoading ? " · 正在更新" : ""}
-          </span>
-          <strong>{displayTotal.toLocaleString("zh-CN")}</strong>
-          <small>词元</small>
-          <dl>
-            <div>
-              <dt>输入词元</dt>
-              <dd className="is-input">{input.toLocaleString("zh-CN")}</dd>
-            </div>
-            <div>
-              <dt>输出词元</dt>
-              <dd className="is-output">{output.toLocaleString("zh-CN")}</dd>
-            </div>
-            <div>
-              <dt>缓存词元</dt>
-              <dd className="is-success">{cache.toLocaleString("zh-CN")}</dd>
-            </div>
-          </dl>
-        </section>
-        <section className="usage-spectrum-trend">
-          <header>
-            <b>每日消耗光谱</b>
-            <span>
-              峰值 {peak.toLocaleString("zh-CN")} ·{" "}
-              {summary?.totalRequests ?? 0} 次请求 ·{" "}
-              {summary
-                ? `${Math.round(summary.successRate * 10) / 10}% 成功`
-                : "--"}
-            </span>
-          </header>
-          <div className="usage-spectrum-chart" aria-label="每日词元消耗光谱">
-            {trends.length ? (
-              <ResponsiveContainer
-                width="100%"
-                height="100%"
-                initialDimension={{ width: 760, height: 190 }}
-              >
-                <BarChart
-                  data={chartTrends}
-                  margin={{ top: 12, right: 16, bottom: 0, left: 0 }}
-                >
-                  <CartesianGrid vertical={false} stroke="#e8edf0" />
-                  <XAxis
-                    dataKey="date"
-                    axisLine={false}
-                    tickLine={false}
-                    minTickGap={24}
-                    tick={{ fill: "#69737d", fontSize: 9 }}
-                    tickFormatter={(value: string) => value.slice(5, 10)}
-                  />
-                  <YAxis hide domain={[0, "dataMax"]} />
-                  <Tooltip
-                    cursor={{ fill: "#eef5f6" }}
-                    contentStyle={{
-                      border: "1px solid #dfe6e9",
-                      borderRadius: 8,
-                      background: "#ffffff",
-                      color: "#20272d",
-                      fontSize: 11,
-                      boxShadow: "0 4px 8px rgba(31, 43, 51, 0.1)",
-                    }}
-                    labelStyle={{ color: "#69737d", marginBottom: 4 }}
-                    formatter={(value) => [
-                      Number(value).toLocaleString("zh-CN"),
-                      "词元",
-                    ]}
-                  />
-                  <Bar
-                    dataKey="totalTokens"
-                    radius={[4, 4, 1, 1]}
-                    maxBarSize={18}
-                  >
-                    {chartTrends.map((item, index) => (
-                      <Cell
-                        key={item.date}
-                        fill={
-                          spectrum[
-                            Math.min(
-                              spectrum.length - 1,
-                              Math.floor(
-                                (index / Math.max(1, trends.length - 1)) *
-                                  spectrum.length,
-                              ),
-                            )
-                          ]
-                        }
-                      />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="chart-empty">暂无趋势数据</div>
-            )}
-          </div>
-        </section>
-        <section className="usage-spectrum-models" aria-label="模型词元分布">
-          {topModels.length ? (
-            topModels.map((item, index) => {
-              const ratio = Math.round((item.totalTokens / modelTotal) * 100);
-              const color = spectrum[(index * 2) % spectrum.length];
-              return (
-                <div className="usage-spectrum-model" key={item.model}>
-                  <header>
-                    <code title={item.model}>{item.model}</code>
-                    <strong style={{ color }}>{ratio}%</strong>
-                  </header>
-                  <span>{item.totalTokens.toLocaleString("zh-CN")} 词元</span>
-                  <i>
-                    <u
-                      style={{
-                        width: `${Math.max(3, ratio)}%`,
-                        background: color,
-                        boxShadow: `0 0 8px ${color}80`,
-                      }}
-                    />
-                  </i>
-                </div>
-              );
-            })
-          ) : (
-            <p className="muted-copy">暂无模型统计。</p>
-          )}
-        </section>
-      </article>
-    </section>
-  );
-}
-
 function AppearanceView({
   enabled,
   onRequestSkinAction,
@@ -3785,27 +3541,18 @@ export function NewSettingsView() {
     hasUpdate,
     updateInfo,
     isChecking,
+    isInstalling: installingAppUpdate,
     error: updateError,
+    errorOperation: updateErrorOperation,
     lastCheckedAt,
+    downloadProgress: appUpdateProgress,
     stagedVersion,
     isStaging,
     checkUpdate,
+    installUpdate,
   } = useUpdate();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [appVersion, setAppVersion] = useState("正在读取版本");
-  const [installingAppUpdate, setInstallingAppUpdate] = useState(false);
-  const [appUpdateProgress, setAppUpdateProgress] =
-    useState<AppUpdateDownloadProgress | null>(null);
-  const installingAppUpdateRef = useRef(false);
-  const appUpdateProgressUnlistenRef = useRef<(() => void) | null>(null);
-
-  useEffect(() => {
-    return () => {
-      installingAppUpdateRef.current = false;
-      appUpdateProgressUnlistenRef.current?.();
-      appUpdateProgressUnlistenRef.current = null;
-    };
-  }, []);
 
   useEffect(() => {
     if (!runningInTauri) {
@@ -3860,29 +3607,13 @@ export function NewSettingsView() {
     }
   };
   const installAppUpdate = async () => {
-    if (installingAppUpdateRef.current) return;
-    installingAppUpdateRef.current = true;
-    setInstallingAppUpdate(true);
-    setAppUpdateProgress(null);
     try {
-      appUpdateProgressUnlistenRef.current?.();
-      appUpdateProgressUnlistenRef.current =
-        await listen<AppUpdateDownloadProgress>(
-          "update-download-progress",
-          (event) => setAppUpdateProgress(event.payload),
-        );
-      const installed = await settingsApi.installUpdateAndRestart();
+      const installed = await installUpdate();
       if (!installed) {
-        toast.info("该更新已不可用", { description: "正在重新检查更新" });
-        await checkUpdate();
+        toast.info("该更新已不可用", { description: "已重新检查更新" });
       }
     } catch (reason) {
       toast.error("应用更新失败", { description: String(reason) });
-    } finally {
-      appUpdateProgressUnlistenRef.current?.();
-      appUpdateProgressUnlistenRef.current = null;
-      installingAppUpdateRef.current = false;
-      setInstallingAppUpdate(false);
     }
   };
   const lastCheckedLabel = lastCheckedAt
@@ -3900,31 +3631,37 @@ export function NewSettingsView() {
           ),
         )
       : null;
-  const appUpdateTitle = isChecking
-    ? "正在检查更新"
-    : installingAppUpdate
-      ? "正在更新 Chimera++"
+  const appUpdateTitle = installingAppUpdate
+    ? "正在更新 Chimera++"
+    : isChecking
+      ? "正在检查更新"
       : hasUpdate && updateInfo
-        ? `发现 Chimera++ ${updateInfo.availableVersion}`
+        ? updateErrorOperation === "install"
+          ? "更新未完成，可以重试"
+          : `发现 Chimera++ ${updateInfo.availableVersion}`
         : updateError
           ? "检查更新失败"
           : lastCheckedAt
             ? "已是最新版本"
             : `Chimera++ ${appVersion}`;
-  const appUpdateDescription = isChecking
-    ? "正在连接稳定版更新源"
-    : installingAppUpdate
-      ? appUpdatePercent !== null
-        ? appUpdatePercent >= 100
-          ? "正在安装更新，完成后应用将自动重启"
-          : `正在下载更新 ${appUpdatePercent}%`
-        : "正在准备更新，完成后应用将自动重启"
+  const appUpdateDescription = installingAppUpdate
+    ? appUpdatePercent !== null
+      ? appUpdatePercent >= 100
+        ? "正在安装更新，完成后应用将自动重启"
+        : `正在下载更新 ${appUpdatePercent}%`
+      : "正在准备更新，完成后应用将自动重启"
+    : isChecking
+      ? "正在连接稳定版更新源"
       : hasUpdate
-        ? stagedVersion === updateInfo?.availableVersion
-          ? "更新包已下载并通过验证，安装后应用将自动重启"
-          : isStaging
-            ? "正在后台下载更新包，点击后将下载完成并安装"
-            : "新版本已通过签名验证，点击即可下载并安装"
+        ? updateErrorOperation === "install"
+          ? `${updateError ?? "安装失败"}。旧版本未被替换，可再次尝试。`
+          : updateErrorOperation === "stage"
+            ? "后台预下载未完成，点击后会重新下载、验证并安装"
+            : stagedVersion === updateInfo?.availableVersion
+              ? "更新包已下载并通过验证，安装后应用将自动重启"
+              : isStaging
+                ? "正在后台下载更新包，点击后将下载完成并安装"
+                : "新版本已通过签名验证，点击即可下载并安装"
         : updateError
           ? updateError
           : lastCheckedLabel
@@ -4020,7 +3757,7 @@ export function NewSettingsView() {
         >
           <div className="settings-app-update-row">
             <span className="settings-app-update-icon" aria-hidden="true">
-              {isChecking || installingAppUpdate ? (
+              {installingAppUpdate || isChecking ? (
                 <LoaderCircle className="spin" size={15} />
               ) : hasUpdate ? (
                 <Download size={15} />
@@ -4047,17 +3784,17 @@ export function NewSettingsView() {
                 }
               }}
             >
-              {isChecking || installingAppUpdate ? (
+              {installingAppUpdate || isChecking ? (
                 <LoaderCircle className="spin" size={14} />
               ) : hasUpdate ? (
                 <Download size={14} />
               ) : (
                 <RefreshCw size={14} />
               )}
-              {isChecking
-                ? "正在检查…"
-                : installingAppUpdate
-                  ? "正在更新…"
+              {installingAppUpdate
+                ? "正在更新…"
+                : isChecking
+                  ? "正在检查…"
                   : hasUpdate
                     ? stagedVersion === updateInfo?.availableVersion
                       ? "安装并重启"

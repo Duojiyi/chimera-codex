@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
@@ -6,6 +5,7 @@ use rusqlite::Connection;
 use serde_json::Value;
 
 use crate::hermes_config::get_hermes_dir;
+use crate::security_limits::{open_limited_regular_file, MAX_SESSION_FILE_BYTES};
 use crate::session_manager::{SessionMessage, SessionMeta};
 
 use super::utils::{
@@ -430,7 +430,8 @@ fn parse_jsonl_session(path: &Path) -> Option<SessionMeta> {
 
 /// Load messages from a Hermes JSONL transcript file.
 pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
-    let file = File::open(path).map_err(|e| format!("Failed to open session file: {e}"))?;
+    let file = open_limited_regular_file(path, MAX_SESSION_FILE_BYTES)
+        .map_err(|e| format!("Failed to open session file: {e}"))?;
     let reader = BufReader::new(file);
     let mut messages = Vec::new();
 
@@ -498,6 +499,7 @@ pub fn delete_session(_root: &Path, path: &Path, _session_id: &str) -> Result<bo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
 

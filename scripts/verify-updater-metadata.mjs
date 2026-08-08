@@ -46,6 +46,7 @@ const platformArtifacts = {
   "windows-aarch64": `Chimera++-${tag}-Windows-arm64.msi`,
   "darwin-x86_64": `Chimera++-${tag}-macOS.tar.gz`,
   "darwin-aarch64": `Chimera++-${tag}-macOS.tar.gz`,
+  "linux-x86_64": `Chimera++-${tag}-Linux-x86_64.AppImage`,
 };
 if (!metadata.platforms || typeof metadata.platforms !== "object" || Array.isArray(metadata.platforms)) throw new Error("latest.json has no updater platforms");
 const actualPlatformNames = Object.keys(metadata.platforms).sort();

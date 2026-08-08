@@ -7,6 +7,7 @@ use serde_json::Value;
 
 /// Maximum number of characters for session titles (shared across providers).
 pub const TITLE_MAX_CHARS: usize = 80;
+pub const SESSION_READ_LIMIT: u64 = crate::security_limits::MAX_SESSION_FILE_BYTES;
 
 /// Read the first `head_n` lines and last `tail_n` lines from a file.
 /// For small files (< 16 KB), reads all lines once to avoid unnecessary seeking.
@@ -15,8 +16,21 @@ pub fn read_head_tail_lines(
     head_n: usize,
     tail_n: usize,
 ) -> io::Result<(Vec<String>, Vec<String>)> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "session symlink is not allowed",
+        ));
+    }
+    let file_len = metadata.len();
+    if file_len > SESSION_READ_LIMIT {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("session file exceeds {} bytes", SESSION_READ_LIMIT),
+        ));
+    }
     let file = File::open(path)?;
-    let file_len = file.metadata()?.len();
 
     // For small files, read all lines once and split
     if file_len < 16_384 {

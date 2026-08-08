@@ -8,6 +8,7 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Duration;
 use tauri::AppHandle;
 use tauri::State;
 use tauri_plugin_opener::OpenerExt;
@@ -17,6 +18,20 @@ use std::os::windows::process::CommandExt;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+const TOOL_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+const TOOL_LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+fn bounded_command_output(
+    command: std::process::Command,
+    timeout: Duration,
+) -> std::io::Result<std::process::Output> {
+    crate::process_utils::output_with_timeout(
+        command,
+        timeout,
+        crate::security_limits::MAX_PROCESS_OUTPUT_BYTES,
+    )
+}
 
 /// 打开外部链接
 #[tauri::command]
@@ -207,10 +222,9 @@ fn run_tool_lifecycle_silently(command_line: &str, _label: &str) -> Result<(), S
     use std::process::Command;
     // command_line 是 bash 风格脚本（含 `set -e` 与多行命令）；强制用 bash 执行，
     // 避免用户默认 shell 为 fish/zsh 时 `set -e` 等语义不一致。
-    let output = Command::new("bash")
-        .arg("-c")
-        .arg(command_line)
-        .output()
+    let mut command = Command::new("bash");
+    command.arg("-c").arg(command_line);
+    let output = bounded_command_output(command, TOOL_LIFECYCLE_TIMEOUT)
         .map_err(|e| format!("启动安装进程失败: {e}"))?;
     finish_lifecycle_output(&output)
 }
@@ -226,11 +240,12 @@ fn run_tool_lifecycle_silently(command_line: &str, label: &str) -> Result<(), St
         std::env::temp_dir().join(format!("cc_switch_{}_{}.bat", label, std::process::id()));
     std::fs::write(&bat_file, command_line).map_err(|e| format!("写入批处理文件失败: {e}"))?;
 
-    let output = Command::new("cmd")
+    let mut command = Command::new("cmd");
+    command
         .arg("/C")
         .arg(&bat_file)
-        .creation_flags(CREATE_NO_WINDOW)
-        .output();
+        .creation_flags(CREATE_NO_WINDOW);
+    let output = bounded_command_output(command, TOOL_LIFECYCLE_TIMEOUT);
     let _ = std::fs::remove_file(&bat_file);
 
     finish_lifecycle_output(&output.map_err(|e| format!("启动安装进程失败: {e}"))?)
@@ -1025,10 +1040,9 @@ fn try_get_version(tool: &str) -> ShellProbe {
             .filter(|s| is_valid_shell(s))
             .unwrap_or_else(|| "sh".to_string());
         let flag = default_flag_for_shell(&shell);
-        Command::new(shell)
-            .arg(flag)
-            .arg(format!("{tool} --version"))
-            .output()
+        let mut command = Command::new(shell);
+        command.arg(flag).arg(format!("{tool} --version"));
+        bounded_command_output(command, TOOL_PROBE_TIMEOUT)
     };
 
     match output {
@@ -1052,6 +1066,14 @@ fn try_get_version(tool: &str) -> ShellProbe {
                     ShellProbe::FoundButFailed(last_lines(err.trim(), 4))
                 }
             }
+        }
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::InvalidData
+            ) =>
+        {
+            ShellProbe::FoundButFailed(format!("version probe failed: {error}"))
         }
         Err(_) => ShellProbe::NotFound(NOT_INSTALLED.to_string()),
     }
@@ -1255,10 +1277,11 @@ fn try_get_version_wsl(
         ("sh".to_string(), "-c", cmd)
     };
 
-    let output = Command::new("wsl.exe")
+    let mut command = Command::new("wsl.exe");
+    command
         .args(["-d", distro, "--", &shell, flag, &cmd])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output();
+        .creation_flags(CREATE_NO_WINDOW);
+    let output = bounded_command_output(command, TOOL_PROBE_TIMEOUT);
 
     match output {
         Ok(out) => {
@@ -1699,19 +1722,19 @@ fn run_windows_tool_version_command(
         let path = tool_path.to_string_lossy();
         let command = format!("call {} --version", win_quote_path_for_batch(&path));
         let mut cmd = Command::new("cmd");
-        return cmd
-            .args(["/D", "/S", "/C"])
+        cmd.args(["/D", "/S", "/C"])
             .raw_arg(&command)
             .env("PATH", new_path)
-            .creation_flags(CREATE_NO_WINDOW)
-            .output();
+            .creation_flags(CREATE_NO_WINDOW);
+        return bounded_command_output(cmd, TOOL_PROBE_TIMEOUT);
     }
 
-    Command::new(tool_path)
+    let mut command = Command::new(tool_path);
+    command
         .arg("--version")
         .env("PATH", new_path)
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
+        .creation_flags(CREATE_NO_WINDOW);
+    bounded_command_output(command, TOOL_PROBE_TIMEOUT)
 }
 
 /// 扫描常见路径查找 CLI（PATH 主命令未命中时的兜底单探）。
@@ -1746,27 +1769,32 @@ fn scan_cli_version(tool: &str) -> ShellProbe {
 
             #[cfg(not(target_os = "windows"))]
             let output = {
-                Command::new(&tool_path)
-                    .arg("--version")
-                    .env("PATH", &new_path)
-                    .output()
+                let mut command = Command::new(&tool_path);
+                command.arg("--version").env("PATH", &new_path);
+                bounded_command_output(command, TOOL_PROBE_TIMEOUT)
             };
 
-            if let Ok(out) = output {
-                let stdout = decode_command_output(&out.stdout).trim().to_string();
-                let stderr = decode_command_output(&out.stderr).trim().to_string();
-                if out.status.success() {
-                    let raw = if stdout.is_empty() { &stderr } else { &stdout };
-                    if !raw.is_empty() {
-                        return ShellProbe::Found(extract_version(raw));
-                    }
-                } else if exec_diagnostic.is_none() {
-                    let detail = if stderr.is_empty() { stdout } else { stderr };
-                    let detail = detail.trim();
-                    if !detail.is_empty() {
-                        exec_diagnostic = Some(last_lines(detail, 4));
+            match output {
+                Ok(out) => {
+                    let stdout = decode_command_output(&out.stdout).trim().to_string();
+                    let stderr = decode_command_output(&out.stderr).trim().to_string();
+                    if out.status.success() {
+                        let raw = if stdout.is_empty() { &stderr } else { &stdout };
+                        if !raw.is_empty() {
+                            return ShellProbe::Found(extract_version(raw));
+                        }
+                    } else if exec_diagnostic.is_none() {
+                        let detail = if stderr.is_empty() { stdout } else { stderr };
+                        let detail = detail.trim();
+                        if !detail.is_empty() {
+                            exec_diagnostic = Some(last_lines(detail, 4));
+                        }
                     }
                 }
+                Err(error) if exec_diagnostic.is_none() => {
+                    exec_diagnostic = Some(format!("version probe failed: {error}"));
+                }
+                Err(_) => {}
             }
         }
     }
@@ -1858,11 +1886,9 @@ fn resolve_path_default(tool: &str) -> Option<std::path::PathBuf> {
         .filter(|s| is_valid_shell(s))
         .unwrap_or_else(|| "sh".to_string());
     let flag = default_flag_for_shell(&shell);
-    let out = Command::new(shell)
-        .arg(flag)
-        .arg(format!("command -v {tool}"))
-        .output()
-        .ok()?;
+    let mut command = Command::new(shell);
+    command.arg(flag).arg(format!("command -v {tool}"));
+    let out = bounded_command_output(command, TOOL_PROBE_TIMEOUT).ok()?;
     if !out.status.success() {
         return None;
     }
@@ -1877,11 +1903,11 @@ fn resolve_path_default(tool: &str) -> Option<std::path::PathBuf> {
 fn resolve_path_default(tool: &str) -> Option<std::path::PathBuf> {
     use std::os::windows::process::CommandExt;
     use std::process::Command;
-    let out = Command::new("cmd")
+    let mut command = Command::new("cmd");
+    command
         .args(["/C", &format!("where {tool}")])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()?;
+        .creation_flags(CREATE_NO_WINDOW);
+    let out = bounded_command_output(command, TOOL_PROBE_TIMEOUT).ok()?;
     if !out.status.success() {
         return None;
     }
@@ -1932,10 +1958,11 @@ fn enumerate_tool_installations(tool: &str) -> Vec<ToolInstallation> {
             #[cfg(target_os = "windows")]
             let output = run_windows_tool_version_command(&tool_path, &new_path);
             #[cfg(not(target_os = "windows"))]
-            let output = Command::new(&tool_path)
-                .arg("--version")
-                .env("PATH", &new_path)
-                .output();
+            let output = {
+                let mut command = Command::new(&tool_path);
+                command.arg("--version").env("PATH", &new_path);
+                bounded_command_output(command, TOOL_PROBE_TIMEOUT)
+            };
 
             let (version, runnable, error) = match output {
                 Ok(out) if out.status.success() => {

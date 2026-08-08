@@ -22,6 +22,17 @@ import {
 
 installGlobalErrorHandlers();
 
+const updateWindowFocusState = () => {
+  document.documentElement.classList.toggle(
+    "is-window-inactive",
+    document.visibilityState !== "visible" || !document.hasFocus(),
+  );
+};
+window.addEventListener("focus", updateWindowFocusState);
+window.addEventListener("blur", updateWindowFocusState);
+document.addEventListener("visibilitychange", updateWindowFocusState);
+updateWindowFocusState();
+
 // 根据平台添加 body class，便于平台特定样式
 try {
   const ua = navigator.userAgent || "";

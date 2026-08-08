@@ -1,5 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import App from "@/App";
 
 describe("Chimera++ application shell", () => {
@@ -17,7 +23,7 @@ describe("Chimera++ application shell", () => {
     expect(screen.queryByText("OpenClaw")).not.toBeInTheDocument();
   });
 
-  it("switches between the runtime, token, appearance, and settings surfaces", () => {
+  it("switches between the runtime, token, appearance, and settings surfaces", async () => {
     render(<App />);
 
     fireEvent.click(screen.getByRole("button", { name: "更新" }));
@@ -29,17 +35,22 @@ describe("Chimera++ application shell", () => {
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "词元" }));
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     expect(
-      screen.getByRole("heading", { name: "词元消耗" }),
+      await screen.findByRole("heading", { name: "词元消耗" }),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "外观" }));
     expect(
-      screen.getByRole("heading", { name: "皮肤市场" }),
+      await screen.findByRole("heading", { name: "皮肤市场" }),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    expect(screen.getByRole("heading", { name: "设置" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "设置" }),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /^数据与日志/ }),
     ).toBeInTheDocument();

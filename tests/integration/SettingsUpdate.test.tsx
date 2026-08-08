@@ -1,34 +1,17 @@
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NewSettingsView } from "@/ChimeraApp";
-import { emitTauriEvent } from "../msw/tauriMocks";
 
-const {
-  checkUpdateMock,
-  installUpdateAndRestartMock,
-  toastInfoMock,
-  useUpdateMock,
-} = vi.hoisted(() => ({
-  checkUpdateMock: vi.fn(),
-  installUpdateAndRestartMock: vi.fn(),
-  toastInfoMock: vi.fn(),
-  useUpdateMock: vi.fn(),
-}));
+const { checkUpdateMock, installUpdateMock, toastInfoMock, useUpdateMock } =
+  vi.hoisted(() => ({
+    checkUpdateMock: vi.fn(),
+    installUpdateMock: vi.fn(),
+    toastInfoMock: vi.fn(),
+    useUpdateMock: vi.fn(),
+  }));
 
 vi.mock("@/contexts/UpdateContext", () => ({
   useUpdate: () => useUpdateMock(),
-}));
-
-vi.mock("@/lib/api/settings", () => ({
-  settingsApi: {
-    installUpdateAndRestart: installUpdateAndRestartMock,
-  },
 }));
 
 vi.mock("sonner", () => ({
@@ -54,12 +37,14 @@ describe("settings application update", () => {
       stagedVersion: null,
       isStaging: false,
       checkUpdate: checkUpdateMock,
+      installUpdate: installUpdateMock,
+      isInstalling: false,
+      downloadProgress: null,
     });
   });
 
   it("starts the download and install flow directly from the update button", async () => {
-    installUpdateAndRestartMock.mockResolvedValueOnce(false);
-    checkUpdateMock.mockResolvedValueOnce(false);
+    installUpdateMock.mockResolvedValueOnce(false);
     render(<NewSettingsView />);
 
     expect(screen.getByText(/First fix/)).toHaveTextContent(
@@ -70,13 +55,12 @@ describe("settings application update", () => {
     );
 
     await waitFor(() => {
-      expect(installUpdateAndRestartMock).toHaveBeenCalledTimes(1);
-      expect(checkUpdateMock).toHaveBeenCalledTimes(1);
+      expect(installUpdateMock).toHaveBeenCalledTimes(1);
     });
     expect(toastInfoMock).toHaveBeenCalledWith(
       "\u8be5\u66f4\u65b0\u5df2\u4e0d\u53ef\u7528",
       {
-        description: "\u6b63\u5728\u91cd\u65b0\u68c0\u67e5\u66f4\u65b0",
+        description: "\u5df2\u91cd\u65b0\u68c0\u67e5\u66f4\u65b0",
       },
     );
   });
@@ -95,6 +79,9 @@ describe("settings application update", () => {
       stagedVersion: "2.0.13",
       isStaging: false,
       checkUpdate: checkUpdateMock,
+      installUpdate: installUpdateMock,
+      isInstalling: false,
+      downloadProgress: null,
     });
     render(<NewSettingsView />);
 
@@ -108,33 +95,25 @@ describe("settings application update", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows progress while the update is downloading", async () => {
-    let resolveInstall: (installed: boolean) => void = () => undefined;
-    installUpdateAndRestartMock.mockImplementationOnce(
-      () =>
-        new Promise<boolean>((resolve) => {
-          resolveInstall = resolve;
-        }),
-    );
+  it("shows progress from the shared update context", () => {
+    useUpdateMock.mockReturnValue({
+      hasUpdate: true,
+      updateInfo: {
+        currentVersion: "2.0.12",
+        availableVersion: "2.0.13",
+        notes: "First fix",
+      },
+      isChecking: false,
+      error: null,
+      lastCheckedAt: Date.now(),
+      stagedVersion: null,
+      isStaging: false,
+      checkUpdate: checkUpdateMock,
+      installUpdate: installUpdateMock,
+      isInstalling: true,
+      downloadProgress: { downloaded: 50, total: 100 },
+    });
     render(<NewSettingsView />);
-
-    fireEvent.click(
-      screen.getByRole("button", { name: /\u4e0b\u8f7d\u5e76\u5b89\u88c5/ }),
-    );
-    await waitFor(() => {
-      expect(installUpdateAndRestartMock).toHaveBeenCalledTimes(1);
-    });
-    await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: /\u6b63\u5728\u66f4\u65b0\u2026/ }),
-      ).toBeDisabled();
-    });
-    act(() => {
-      emitTauriEvent("update-download-progress", {
-        downloaded: 50,
-        total: 100,
-      });
-    });
 
     expect(screen.getByRole("progressbar")).toHaveAttribute(
       "aria-valuenow",
@@ -146,9 +125,5 @@ describe("settings application update", () => {
     expect(
       screen.getByRole("button", { name: /\u6b63\u5728\u66f4\u65b0\u2026/ }),
     ).toBeDisabled();
-
-    await act(async () => {
-      resolveInstall(false);
-    });
   });
 });

@@ -39,14 +39,14 @@ export function AppVisibilitySettings({
   const { t } = useTranslation();
 
   const visibleApps: VisibleApps = settings.visibleApps ?? {
-    claude: true,
-    "claude-desktop": true,
+    claude: false,
+    "claude-desktop": false,
     codex: true,
-    gemini: true,
-    grokbuild: true,
-    opencode: true,
-    openclaw: true,
-    hermes: true,
+    gemini: false,
+    grokbuild: false,
+    opencode: false,
+    openclaw: false,
+    hermes: false,
   };
 
   // Count how many apps are currently visible

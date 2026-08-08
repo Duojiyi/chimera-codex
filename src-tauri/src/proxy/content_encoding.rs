@@ -5,7 +5,52 @@
 //! 共用同一套解压逻辑。
 
 use axum::http::header::HeaderMap;
-use std::io::Read;
+use std::io::{self, Read, Write};
+
+struct LimitedWriter {
+    bytes: Vec<u8>,
+    limit: u64,
+}
+
+impl LimitedWriter {
+    fn new(limit: u64) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+        }
+    }
+
+    fn finish(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+impl Write for LimitedWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let next_size = self.bytes.len() as u64 + bytes.len() as u64;
+        if next_size > self.limit {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "decompressed response exceeds {} bytes",
+                    crate::security_limits::MAX_DECOMPRESSED_RESPONSE_BYTES
+                ),
+            ));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn copy_decoded<R: Read>(mut decoder: R) -> io::Result<Vec<u8>> {
+    let mut output = LimitedWriter::new(crate::security_limits::MAX_DECOMPRESSED_RESPONSE_BYTES);
+    io::copy(&mut decoder, &mut output)?;
+    Ok(output.finish())
+}
 
 /// 把 content-encoding 值拆成有序 coding 列表（去掉 identity 与空值）。
 ///
@@ -32,36 +77,34 @@ fn decompress_single(coding: &str, body: &[u8]) -> Result<Option<Vec<u8>>, std::
     match coding {
         "gzip" | "x-gzip" => {
             let mut decoder = flate2::read::GzDecoder::new(body);
-            let mut decompressed = Vec::new();
-            decoder.read_to_end(&mut decompressed)?;
-            Ok(Some(decompressed))
+            Ok(Some(copy_decoded(&mut decoder)?))
         }
         "deflate" => {
             // RFC 9110: deflate 指 zlib 包裹格式；但部分上游 / 客户端发 raw deflate 流。
             // 先按规范尝试 zlib，失败再回退 raw —— 否则合规来源必然解压失败，
             // 原始压缩字节会被 fail-open 透传给 JSON 解析（#2234 形态 C 之一）。
-            let mut decompressed = Vec::new();
             let mut zlib = flate2::read::ZlibDecoder::new(body);
-            match zlib.read_to_end(&mut decompressed) {
-                Ok(_) => Ok(Some(decompressed)),
+            match copy_decoded(&mut zlib) {
+                Ok(output) => Ok(Some(output)),
                 Err(zlib_err) => {
                     log::debug!("deflate 按 zlib 解压失败（{zlib_err}），回退 raw deflate");
-                    let mut decompressed = Vec::new();
                     let mut raw = flate2::read::DeflateDecoder::new(body);
-                    raw.read_to_end(&mut decompressed)?;
-                    Ok(Some(decompressed))
+                    Ok(Some(copy_decoded(&mut raw)?))
                 }
             }
         }
         "br" => {
-            let mut decompressed = Vec::new();
-            brotli::BrotliDecompress(&mut std::io::Cursor::new(body), &mut decompressed)?;
-            Ok(Some(decompressed))
+            let mut output =
+                LimitedWriter::new(crate::security_limits::MAX_DECOMPRESSED_RESPONSE_BYTES);
+            brotli::BrotliDecompress(&mut std::io::Cursor::new(body), &mut output)?;
+            Ok(Some(output.finish()))
         }
         "zstd" | "zst" => {
             // Codex 登录态对请求体启用 zstd（Compression::Zstd）；上游也可能 zstd 压缩响应。
-            let decompressed = zstd::stream::decode_all(std::io::Cursor::new(body))?;
-            Ok(Some(decompressed))
+            let mut output =
+                LimitedWriter::new(crate::security_limits::MAX_DECOMPRESSED_RESPONSE_BYTES);
+            zstd::stream::copy_decode(std::io::Cursor::new(body), &mut output)?;
+            Ok(Some(output.finish()))
         }
         _ => Ok(None),
     }
@@ -79,6 +122,15 @@ pub(crate) fn decompress_body(
     let codings = split_codings(content_encoding);
     if codings.is_empty() {
         return Ok(None);
+    }
+    if codings.len() > crate::security_limits::MAX_COMPRESSION_LAYERS {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "content-encoding has too many layers (maximum {})",
+                crate::security_limits::MAX_COMPRESSION_LAYERS
+            ),
+        ));
     }
     // 任一 coding 不支持就整体放弃解压、保头透传，避免半解码的脏数据。
     if !codings.iter().all(|c| is_single_supported(c)) {
