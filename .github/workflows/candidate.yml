@@ -360,11 +360,11 @@ jobs:
           fi
           (
             cd "$smoke_root/rpm"
-            rpm2cpio "$rpm_package" | cpio -idm --quiet
-            rpm_desktop=$(find usr/share/applications \( -type f -o -type l \) -name '*.desktop' 2>/dev/null | head -1 || true)
+            rpm2cpio "$rpm_package" | cpio -idm --quiet --no-absolute-filenames
+            rpm_desktop=$(find . -path './usr/share/applications/*.desktop' \( -type f -o -type l \) -print -quit 2>/dev/null || true)
             if [[ -z "$rpm_desktop" ]]; then
               echo "::error::Extracted RPM package does not contain a desktop entry"
-              find usr/share -maxdepth 4 -type f -o -type l 2>/dev/null | sort | head -100
+              find . -maxdepth 6 \( -type f -o -type l \) 2>/dev/null | sort | head -100
               exit 1
             fi
             echo "Validated RPM desktop entry: $rpm_desktop"
