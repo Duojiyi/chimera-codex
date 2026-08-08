@@ -56,7 +56,7 @@ pub fn validate_url(url_str: &str, field_name: &str) -> Result<(), AppError> {
 /// - Both standard and URL-safe Base64 variants
 pub fn decode_base64_param(field: &str, raw: &str) -> Result<Vec<u8>, AppError> {
     const MAX_BASE64_INPUT_BYTES: usize = 8 * 1024 * 1024;
-    const MAX_DECODED_BYTES: usize = 6 * 1024 * 1024;
+    const MAX_DECODED_BYTES: usize = crate::security_limits::MAX_IMPORT_BYTES as usize;
 
     if raw.len() > MAX_BASE64_INPUT_BYTES {
         return Err(AppError::InvalidInput(format!(

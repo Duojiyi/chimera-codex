@@ -4,6 +4,7 @@ import { NewProvidersView } from "@/ChimeraApp";
 import type { Provider } from "@/types";
 
 const dismissUpdateMock = vi.fn();
+const installUpdateMock = vi.fn().mockResolvedValue(true);
 const { useUpdateMock } = vi.hoisted(() => ({
   useUpdateMock: vi.fn(),
 }));
@@ -40,18 +41,20 @@ function makeProps(
     onSwitch: vi.fn().mockResolvedValue(undefined),
     onEdit: vi.fn(),
     onAdd: vi.fn(),
-    onNavigate: vi.fn(),
     ...overrides,
   };
 }
 
 describe("providers update banner", () => {
-  it("shows the verified update banner with a path to settings", () => {
+  it("shows the verified update banner with a direct install action", () => {
     useUpdateMock.mockReturnValue({
       hasUpdate: true,
       isDismissed: false,
       updateInfo: { availableVersion: "2.1.4", currentVersion: "2.1.3" },
       dismissUpdate: dismissUpdateMock,
+      installUpdate: installUpdateMock,
+      isInstalling: false,
+      downloadProgress: null,
     });
 
     render(<NewProvidersView {...makeProps()} />);
@@ -65,7 +68,7 @@ describe("providers update banner", () => {
       screen.getByRole("button", { name: /\u7a0d\u540e/ }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /\u524d\u5f80\u66f4\u65b0/ }),
+      screen.getByRole("button", { name: /\u4e0b\u8f7d\u5e76\u5b89\u88c5/ }),
     ).toBeInTheDocument();
   });
 
@@ -118,21 +121,23 @@ describe("providers update banner", () => {
     expect(dismissUpdateMock).toHaveBeenCalledOnce();
   });
 
-  it("keeps the update visible and navigates to settings", () => {
-    const onNavigate = vi.fn();
+  it("starts installation without dismissing the update", () => {
     useUpdateMock.mockReturnValue({
       hasUpdate: true,
       isDismissed: false,
       updateInfo: { availableVersion: "2.1.4", currentVersion: "2.1.3" },
       dismissUpdate: dismissUpdateMock,
+      installUpdate: installUpdateMock,
+      isInstalling: false,
+      downloadProgress: null,
     });
 
-    render(<NewProvidersView {...makeProps({ onNavigate })} />);
+    render(<NewProvidersView {...makeProps()} />);
     fireEvent.click(
-      screen.getByRole("button", { name: /\u524d\u5f80\u66f4\u65b0/ }),
+      screen.getByRole("button", { name: /\u4e0b\u8f7d\u5e76\u5b89\u88c5/ }),
     );
     expect(dismissUpdateMock).not.toHaveBeenCalled();
-    expect(onNavigate).toHaveBeenCalledWith("settings");
+    expect(installUpdateMock).toHaveBeenCalledOnce();
   });
 
   it("says the staged package is ready to install", () => {
@@ -142,12 +147,35 @@ describe("providers update banner", () => {
       updateInfo: { availableVersion: "2.1.4", currentVersion: "2.1.3" },
       dismissUpdate: dismissUpdateMock,
       stagedVersion: "2.1.4",
+      installUpdate: installUpdateMock,
+      isInstalling: false,
+      downloadProgress: null,
     });
 
     render(<NewProvidersView {...makeProps()} />);
     expect(screen.getByRole("status")).toHaveTextContent(
       "\u5b89\u88c5\u5305\u5df2\u5728\u540e\u53f0\u4e0b\u8f7d\u5b8c\u6bd5",
     );
+    expect(
+      screen.getByRole("button", { name: /\u5b89\u88c5\u5e76\u91cd\u542f/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("disables the action and shows progress while installing", () => {
+    useUpdateMock.mockReturnValue({
+      hasUpdate: true,
+      isDismissed: false,
+      updateInfo: { availableVersion: "2.1.4", currentVersion: "2.1.3" },
+      dismissUpdate: dismissUpdateMock,
+      installUpdate: installUpdateMock,
+      isInstalling: true,
+      downloadProgress: { downloaded: 60, total: 100 },
+    });
+
+    render(<NewProvidersView {...makeProps()} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("正在下载 60%");
+    expect(screen.getByRole("button", { name: /正在更新…/ })).toBeDisabled();
   });
 
   it("does not advertise a stale staged package as ready", () => {

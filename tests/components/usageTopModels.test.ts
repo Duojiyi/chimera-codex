@@ -8,7 +8,7 @@
  * because it has no pricing entry.
  */
 import { describe, expect, it } from "vitest";
-import { USAGE_TOP_MODEL_COUNT, topModelsByTokens } from "@/ChimeraApp";
+import { USAGE_TOP_MODEL_COUNT, topModelsByTokens } from "@/views/UsageView";
 import type { ModelStats } from "@/types/usage";
 
 function stat(

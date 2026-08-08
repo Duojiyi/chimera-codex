@@ -10,14 +10,25 @@ import type { UpdateInfo } from "../lib/updater";
 import { checkForUpdate } from "../lib/updater";
 import { settingsApi } from "@/lib/api/settings";
 import { isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
-interface UpdateContextValue {
+export interface UpdateDownloadProgress {
+  downloaded: number;
+  total: number | null;
+}
+
+export type UpdateErrorOperation = "check" | "stage" | "install";
+
+export interface UpdateContextValue {
   // 更新状态
   hasUpdate: boolean;
   updateInfo: UpdateInfo | null;
   isChecking: boolean;
+  isInstalling: boolean;
   error: string | null;
+  errorOperation: UpdateErrorOperation | null;
   lastCheckedAt: number | null;
+  downloadProgress: UpdateDownloadProgress | null;
   /** 已在后台下载完成、可直接安装的版本号；未暂存时为 null。 */
   stagedVersion: string | null;
   /** 后台暂存是否正在进行。 */
@@ -29,6 +40,7 @@ interface UpdateContextValue {
 
   // 操作方法
   checkUpdate: () => Promise<boolean>;
+  installUpdate: () => Promise<boolean>;
   resetDismiss: () => void;
 }
 
@@ -36,17 +48,29 @@ const DEFAULT_UPDATE_CONTEXT: UpdateContextValue = {
   hasUpdate: false,
   updateInfo: null,
   isChecking: false,
+  isInstalling: false,
   error: null,
+  errorOperation: null,
   lastCheckedAt: null,
+  downloadProgress: null,
   stagedVersion: null,
   isStaging: false,
   isDismissed: false,
   dismissUpdate: () => undefined,
   checkUpdate: async () => false,
+  installUpdate: async () => false,
   resetDismiss: () => undefined,
 };
 
 const UpdateContext = createContext<UpdateContextValue>(DEFAULT_UPDATE_CONTEXT);
+
+const DISMISSED_VERSION_KEY = "chimera:update:dismissedVersion";
+const LEGACY_DISMISSED_KEYS = [
+  "ccswitch:update:dismissedVersion",
+  "dismissedUpdateVersion",
+] as const;
+const LAST_CHECKED_KEY = "chimera:update:lastCheckedAt";
+const LEGACY_LAST_CHECKED_KEY = "ccswitch:update:lastCheckedAt";
 
 /** How stale a successful check may get before we run another one. */
 export const UPDATE_CHECK_INTERVAL_MS = 15 * 60 * 1000;
@@ -63,19 +87,26 @@ export const UPDATE_CHECK_INTERVAL_MS = 15 * 60 * 1000;
 export const UPDATE_CHECK_POLL_MS = 60 * 1000;
 
 export function UpdateProvider({ children }: { children: React.ReactNode }) {
-  const DISMISSED_VERSION_KEY = "ccswitch:update:dismissedVersion";
-  const LEGACY_DISMISSED_KEY = "dismissedUpdateVersion"; // 兼容旧键
-  const LAST_CHECKED_KEY = "ccswitch:update:lastCheckedAt";
-
   const [hasUpdate, setHasUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [isChecking, setIsChecking] = useState(false);
+  const [isInstalling, setIsInstalling] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorOperation, setErrorOperation] =
+    useState<UpdateErrorOperation | null>(null);
   const [lastCheckedAt, setLastCheckedAt] = useState<number | null>(() => {
-    const stored = Number(localStorage.getItem(LAST_CHECKED_KEY));
+    const current = localStorage.getItem(LAST_CHECKED_KEY);
+    const legacy = localStorage.getItem(LEGACY_LAST_CHECKED_KEY);
+    const stored = Number(current ?? legacy);
+    if (!current && legacy && Number.isFinite(stored) && stored > 0) {
+      localStorage.setItem(LAST_CHECKED_KEY, legacy);
+      localStorage.removeItem(LEGACY_LAST_CHECKED_KEY);
+    }
     return Number.isFinite(stored) && stored > 0 ? stored : null;
   });
   const [isDismissed, setIsDismissed] = useState(false);
+  const [downloadProgress, setDownloadProgress] =
+    useState<UpdateDownloadProgress | null>(null);
   const [stagedVersion, setStagedVersion] = useState<string | null>(null);
   const [isStaging, setIsStaging] = useState(false);
 
@@ -86,19 +117,32 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
 
     // 读取新键；若不存在，尝试迁移旧键
     let dismissedVersion = localStorage.getItem(DISMISSED_VERSION_KEY);
-    if (!dismissedVersion) {
-      const legacy = localStorage.getItem(LEGACY_DISMISSED_KEY);
-      if (legacy) {
-        localStorage.setItem(DISMISSED_VERSION_KEY, legacy);
-        localStorage.removeItem(LEGACY_DISMISSED_KEY);
-        dismissedVersion = legacy;
+    for (const legacyKey of LEGACY_DISMISSED_KEYS) {
+      if (!dismissedVersion) {
+        const legacy = localStorage.getItem(legacyKey);
+        if (legacy) {
+          localStorage.setItem(DISMISSED_VERSION_KEY, legacy);
+          dismissedVersion = legacy;
+        }
       }
+      localStorage.removeItem(legacyKey);
     }
 
     setIsDismissed(dismissedVersion === current);
   }, [updateInfo?.availableVersion]);
 
   const isCheckingRef = useRef(false);
+  const isInstallingRef = useRef(false);
+  const progressUnlistenRef = useRef<(() => void) | null>(null);
+  const stageAttemptedRef = useRef<string | null>(null);
+
+  useEffect(
+    () => () => {
+      progressUnlistenRef.current?.();
+      progressUnlistenRef.current = null;
+    },
+    [],
+  );
 
   const checkUpdate = useCallback(async () => {
     if (!isTauri()) return false;
@@ -106,6 +150,7 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     isCheckingRef.current = true;
     setIsChecking(true);
     setError(null);
+    setErrorOperation(null);
 
     try {
       const result = await checkForUpdate({ timeout: 30000 });
@@ -113,16 +158,21 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
       if (result.status === "available") {
         setHasUpdate(true);
         setUpdateInfo(result.info);
+        setStagedVersion((current) =>
+          current === result.info.availableVersion ? current : null,
+        );
 
         // 检查是否已经关闭过这个版本的提醒
         let dismissedVersion = localStorage.getItem(DISMISSED_VERSION_KEY);
-        if (!dismissedVersion) {
-          const legacy = localStorage.getItem(LEGACY_DISMISSED_KEY);
-          if (legacy) {
-            localStorage.setItem(DISMISSED_VERSION_KEY, legacy);
-            localStorage.removeItem(LEGACY_DISMISSED_KEY);
-            dismissedVersion = legacy;
+        for (const legacyKey of LEGACY_DISMISSED_KEYS) {
+          if (!dismissedVersion) {
+            const legacy = localStorage.getItem(legacyKey);
+            if (legacy) {
+              localStorage.setItem(DISMISSED_VERSION_KEY, legacy);
+              dismissedVersion = legacy;
+            }
           }
+          localStorage.removeItem(legacyKey);
         }
         setIsDismissed(dismissedVersion === result.info.availableVersion);
         const checkedAt = Date.now();
@@ -132,6 +182,8 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
       } else {
         setHasUpdate(false);
         setUpdateInfo(null);
+        setStagedVersion(null);
+        stageAttemptedRef.current = null;
         setIsDismissed(false);
         const checkedAt = Date.now();
         setLastCheckedAt(checkedAt);
@@ -141,7 +193,7 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     } catch (err) {
       console.error("检查更新失败:", err);
       setError(err instanceof Error ? err.message : "检查更新失败");
-      setHasUpdate(false);
+      setErrorOperation("check");
       throw err; // 抛出错误让调用方处理
     } finally {
       setIsChecking(false);
@@ -153,24 +205,15 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     setIsDismissed(true);
     if (updateInfo?.availableVersion) {
       localStorage.setItem(DISMISSED_VERSION_KEY, updateInfo.availableVersion);
-      // 清理旧键
-      localStorage.removeItem(LEGACY_DISMISSED_KEY);
+      LEGACY_DISMISSED_KEYS.forEach((key) => localStorage.removeItem(key));
     }
   }, [updateInfo?.availableVersion]);
 
   const resetDismiss = useCallback(() => {
     setIsDismissed(false);
     localStorage.removeItem(DISMISSED_VERSION_KEY);
-    localStorage.removeItem(LEGACY_DISMISSED_KEY);
+    LEGACY_DISMISSED_KEYS.forEach((key) => localStorage.removeItem(key));
   }, []);
-
-  /**
-   * Last version we kicked off staging for. The dependency array already stops
-   * repeat runs for an unchanged version, so this exists for StrictMode's
-   * deliberate double-invoke in dev — without it that fires two downloads.
-   * (The backend would dedupe the second one, but not before a round trip.)
-   */
-  const stageAttemptedRef = useRef<string | null>(null);
 
   // Pre-download in the background as soon as a version is known, so pressing
   // 立即更新 installs immediately instead of waiting on a ~13 MB download.
@@ -198,6 +241,8 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
         // A failed pre-download is not user-facing: the install path falls back
         // to downloading normally, so this only costs the head start.
         console.error("预下载更新失败:", err);
+        setError(err instanceof Error ? err.message : "预下载更新失败");
+        setErrorOperation("stage");
       })
       .finally(() => {
         if (!cancelled) setIsStaging(false);
@@ -207,6 +252,45 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
     };
   }, [hasUpdate, updateInfo?.availableVersion, stagedVersion]);
+
+  const installUpdate = useCallback(async () => {
+    if (!isTauri()) return false;
+    if (isInstallingRef.current) return false;
+
+    isInstallingRef.current = true;
+    setIsInstalling(true);
+    setDownloadProgress(null);
+    setError(null);
+    setErrorOperation(null);
+
+    try {
+      progressUnlistenRef.current?.();
+      progressUnlistenRef.current = await listen<UpdateDownloadProgress>(
+        "update-download-progress",
+        (event) => setDownloadProgress(event.payload),
+      );
+
+      const installed = await settingsApi.installUpdateAndRestart();
+      if (!installed) {
+        setHasUpdate(false);
+        setUpdateInfo(null);
+        setStagedVersion(null);
+        stageAttemptedRef.current = null;
+        await checkUpdate();
+      }
+      return installed;
+    } catch (err) {
+      console.error("安装应用更新失败:", err);
+      setError(err instanceof Error ? err.message : "应用更新失败");
+      setErrorOperation("install");
+      throw err;
+    } finally {
+      progressUnlistenRef.current?.();
+      progressUnlistenRef.current = null;
+      isInstallingRef.current = false;
+      setIsInstalling(false);
+    }
+  }, [checkUpdate]);
 
   // Check shortly after launch and periodically while the app remains open.
   useEffect(() => {
@@ -239,13 +323,17 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     hasUpdate,
     updateInfo,
     isChecking,
+    isInstalling,
     error,
+    errorOperation,
     lastCheckedAt,
+    downloadProgress,
     stagedVersion,
     isStaging,
     isDismissed,
     dismissUpdate,
     checkUpdate,
+    installUpdate,
     resetDismiss,
   };
 

@@ -13,6 +13,13 @@ use url::Url;
 /// Expected format:
 /// chimera://v1/import?resource={type}&...
 pub fn parse_deeplink_url(url_str: &str) -> Result<DeepLinkImportRequest, AppError> {
+    const MAX_DEEPLINK_URL_BYTES: usize = 64 * 1024;
+    if url_str.len() > MAX_DEEPLINK_URL_BYTES {
+        return Err(AppError::InvalidInput(format!(
+            "Deep link is too large (maximum {MAX_DEEPLINK_URL_BYTES} bytes)"
+        )));
+    }
+
     // Parse URL
     let url = Url::parse(url_str)
         .map_err(|e| AppError::InvalidInput(format!("Invalid deep link URL: {e}")))?;
@@ -50,6 +57,15 @@ pub fn parse_deeplink_url(url_str: &str) -> Result<DeepLinkImportRequest, AppErr
 
     // Parse query parameters
     let params: HashMap<String, String> = url.query_pairs().into_owned().collect();
+    if params.len() > 128
+        || params
+            .iter()
+            .any(|(key, value)| key.len() > 256 || value.len() > MAX_DEEPLINK_URL_BYTES)
+    {
+        return Err(AppError::InvalidInput(
+            "Deep link contains too many or oversized parameters".to_string(),
+        ));
+    }
 
     // Extract and validate resource type
     let resource = params

@@ -18,6 +18,10 @@ use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::proxy::usage::calculator::{CostCalculator, ModelPricing};
 use crate::proxy::usage::parser::TokenUsage;
+use crate::security_limits::{
+    collect_files_with_extensions, open_limited_regular_file, MAX_SESSION_FILE_BYTES,
+    MAX_SESSION_SCAN_DEPTH,
+};
 use crate::services::session_usage::{
     get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
 };
@@ -526,19 +530,16 @@ fn collect_codex_session_files(codex_dir: &Path) -> Vec<PathBuf> {
     // 1. 扫描 sessions/YYYY/MM/DD/*.jsonl（日期分区目录）
     let sessions_dir = codex_dir.join("sessions");
     if sessions_dir.is_dir() {
-        collect_jsonl_recursive(&sessions_dir, &mut files, 0, 3);
+        collect_jsonl_recursive(&sessions_dir, &mut files, 0, MAX_SESSION_SCAN_DEPTH);
     }
 
     // 2. 扫描 archived_sessions/*.jsonl（扁平归档目录）
     let archived_dir = codex_dir.join("archived_sessions");
     if archived_dir.is_dir() {
-        if let Ok(entries) = fs::read_dir(&archived_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-                    files.push(path);
-                }
-            }
+        if let Ok(found) =
+            collect_files_with_extensions(&archived_dir, &["jsonl"], MAX_SESSION_SCAN_DEPTH)
+        {
+            files.extend(found);
         }
     }
 
@@ -560,19 +561,11 @@ fn build_rollout_index(files: &[PathBuf]) -> RolloutIndex {
 }
 
 /// 递归扫描目录下的 .jsonl 文件（限制最大深度）
-fn collect_jsonl_recursive(dir: &Path, files: &mut Vec<PathBuf>, depth: u32, max_depth: u32) {
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() && depth < max_depth {
-            collect_jsonl_recursive(&path, files, depth + 1, max_depth);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-            files.push(path);
-        }
+fn collect_jsonl_recursive(dir: &Path, files: &mut Vec<PathBuf>, depth: usize, max_depth: usize) {
+    if let Ok(found) =
+        collect_files_with_extensions(dir, &["jsonl"], max_depth.saturating_sub(depth))
+    {
+        files.extend(found);
     }
 }
 
@@ -580,8 +573,8 @@ fn parse_codex_file(
     file_path: &Path,
     root_thread_id: Option<String>,
 ) -> Result<ParsedCodexFile, AppError> {
-    let file =
-        fs::File::open(file_path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
+    let file = open_limited_regular_file(file_path, MAX_SESSION_FILE_BYTES)
+        .map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
     let reader = BufReader::new(file);
     let mut root_meta_seen = false;
     let mut root_timestamp = None;
@@ -764,7 +757,7 @@ fn parent_signatures_before(
         }
     }
 
-    let file = fs::File::open(parent_path)
+    let file = open_limited_regular_file(parent_path, MAX_SESSION_FILE_BYTES)
         .map_err(|error| format!("无法打开父 rollout {}: {error}", parent_path.display()))?;
     let mut signatures = Vec::new();
     let mut max_timestamp: Option<DateTime<Utc>> = None;

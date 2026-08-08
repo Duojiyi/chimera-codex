@@ -200,6 +200,152 @@ input[type="password"]::-ms-clear {
 }
 
 /*
+ * Chimera++ notifications.
+ *
+ * The toaster is mounted beside the app shell, so its tokens must live at the
+ * document level. Semantic colors are deliberately limited to the icon and
+ * action; the notification surface stays neutral in every state.
+ */
+.chimera-toaster {
+  --chimera-toast-surface: oklch(0.995 0.002 260);
+  --chimera-toast-ink: oklch(0.205 0.018 260);
+  --chimera-toast-muted: oklch(0.44 0.015 260);
+  --chimera-toast-accent: oklch(0.61 0.205 32);
+  --chimera-toast-success: oklch(0.62 0.13 165);
+  --chimera-toast-warning: oklch(0.66 0.15 75);
+  --chimera-toast-error: oklch(0.56 0.2 28);
+  --chimera-toast-focus: oklch(0.56 0.16 240);
+  font-family:
+    Inter, "Microsoft YaHei UI", "Segoe UI", ui-sans-serif, system-ui,
+    sans-serif;
+}
+
+.dark .chimera-toaster {
+  --chimera-toast-surface: oklch(0.235 0.012 260);
+  --chimera-toast-ink: oklch(0.96 0.006 260);
+  --chimera-toast-muted: oklch(0.75 0.01 260);
+}
+
+.chimera-toaster .chimera-toast {
+  min-height: 56px;
+  padding: 12px 42px 12px 14px;
+  gap: 10px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--chimera-toast-surface);
+  color: var(--chimera-toast-ink);
+  box-shadow: 0 8px 24px rgba(20, 24, 32, 0.14);
+}
+
+.chimera-toaster .chimera-toast-content {
+  gap: 2px;
+}
+
+.chimera-toaster .chimera-toast-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--chimera-toast-accent);
+}
+
+.chimera-toaster .chimera-toast-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2;
+}
+
+.chimera-toaster .chimera-toast[data-type="success"] .chimera-toast-icon {
+  color: var(--chimera-toast-success);
+}
+
+.chimera-toaster .chimera-toast[data-type="warning"] .chimera-toast-icon {
+  color: var(--chimera-toast-warning);
+}
+
+.chimera-toaster .chimera-toast[data-type="error"] .chimera-toast-icon {
+  color: var(--chimera-toast-error);
+}
+
+.chimera-toaster .chimera-toast-title {
+  color: var(--chimera-toast-ink);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.chimera-toaster .chimera-toast-description {
+  color: var(--chimera-toast-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.chimera-toaster .chimera-toast-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  left: auto;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--chimera-toast-muted);
+  transform: none;
+  transition:
+    background-color 150ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 150ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.chimera-toaster .chimera-toast-close:hover {
+  background: color-mix(in oklch, var(--chimera-toast-ink) 8%, transparent);
+  color: var(--chimera-toast-ink);
+}
+
+.chimera-toaster .chimera-toast-close:focus-visible,
+.chimera-toaster .chimera-toast-action:focus-visible,
+.chimera-toaster .chimera-toast-cancel:focus-visible {
+  outline: 2px solid var(--chimera-toast-focus);
+  outline-offset: 2px;
+}
+
+.chimera-toaster .chimera-toast-action,
+.chimera-toaster .chimera-toast-cancel {
+  min-height: 30px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.chimera-toaster .chimera-toast-action {
+  background: var(--chimera-toast-accent);
+  color: #fff;
+}
+
+.chimera-toaster .chimera-toast-cancel {
+  background: color-mix(in oklch, var(--chimera-toast-ink) 8%, transparent);
+  color: var(--chimera-toast-ink);
+}
+
+.chimera-toast-spinner {
+  animation: chimera-toast-spin 900ms linear infinite;
+}
+
+@keyframes chimera-toast-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chimera-toaster *,
+  .chimera-toast-spinner {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+/*
  * Usage date-range picker popover.
  *
  * The two-column layout (date fields | calendar) must depend on how much

@@ -2,6 +2,9 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use crate::security_limits::{
+    read_dir_without_links, read_to_string_limited, MAX_CONFIG_FILE_BYTES, MAX_SESSION_FILE_BYTES,
+};
 use crate::session_manager::{SessionMessage, SessionMeta};
 
 use super::utils::{parse_timestamp_to_ms, truncate_summary};
@@ -18,26 +21,26 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
     let mut sessions = Vec::new();
 
     // Iterate over project directories: tmp/<project_name>/chats/session-*.json
-    let project_dirs = match std::fs::read_dir(&tmp_dir) {
+    let project_dirs = match read_dir_without_links(&tmp_dir) {
         Ok(entries) => entries,
         Err(_) => return Vec::new(),
     };
 
-    for entry in project_dirs.flatten() {
+    for entry in project_dirs {
         let chats_dir = entry.path().join("chats");
         if !chats_dir.is_dir() {
             continue;
         }
 
-        let chat_files = match std::fs::read_dir(&chats_dir) {
+        let chat_files = match read_dir_without_links(&chats_dir) {
             Ok(entries) => entries,
             Err(_) => continue,
         };
 
         let project_root_file = entry.path().join(".project_root");
-        let project_dir = std::fs::read_to_string(project_root_file).ok();
+        let project_dir = read_to_string_limited(&project_root_file, MAX_CONFIG_FILE_BYTES).ok();
 
-        for file_entry in chat_files.flatten() {
+        for file_entry in chat_files {
             let path = file_entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
@@ -55,7 +58,8 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
 }
 
 pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
-    let data = std::fs::read_to_string(path).map_err(|e| format!("Failed to read session: {e}"))?;
+    let data = read_to_string_limited(path, MAX_SESSION_FILE_BYTES)
+        .map_err(|e| format!("Failed to read session: {e}"))?;
     let value: Value =
         serde_json::from_str(&data).map_err(|e| format!("Failed to parse session JSON: {e}"))?;
 
@@ -138,7 +142,7 @@ pub fn delete_session(_root: &Path, path: &Path, session_id: &str) -> Result<boo
 }
 
 fn parse_session(path: &Path) -> Option<SessionMeta> {
-    let data = std::fs::read_to_string(path).ok()?;
+    let data = read_to_string_limited(path, MAX_SESSION_FILE_BYTES).ok()?;
     let value: Value = serde_json::from_str(&data).ok()?;
 
     let session_id = value.get("sessionId").and_then(Value::as_str)?.to_string();

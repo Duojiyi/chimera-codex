@@ -1,5 +1,13 @@
 import { Toaster as SonnerToaster } from "sonner";
 import { useTheme } from "@/components/theme-provider";
+import {
+  CircleAlert,
+  CircleCheck,
+  Info,
+  LoaderCircle,
+  TriangleAlert,
+  X,
+} from "lucide-react";
 
 export function Toaster() {
   const { theme } = useTheme();
@@ -10,20 +18,32 @@ export function Toaster() {
 
   return (
     <SonnerToaster
+      className="chimera-toaster"
       position="top-center"
-      richColors
+      closeButton
+      visibleToasts={4}
       theme={sonnerTheme}
+      icons={{
+        success: <CircleCheck aria-hidden="true" />,
+        info: <Info aria-hidden="true" />,
+        warning: <TriangleAlert aria-hidden="true" />,
+        error: <CircleAlert aria-hidden="true" />,
+        loading: (
+          <LoaderCircle className="chimera-toast-spinner" aria-hidden="true" />
+        ),
+        close: <X aria-hidden="true" />,
+      }}
       toastOptions={{
-        duration: 2000,
+        duration: 3200,
         classNames: {
-          toast:
-            "group rounded-md border bg-background text-foreground shadow-lg",
-          title: "text-sm font-semibold",
-          description: "text-sm text-muted-foreground",
-          closeButton:
-            "absolute right-2 top-2 rounded-full p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
-          actionButton:
-            "rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90",
+          toast: "chimera-toast",
+          content: "chimera-toast-content",
+          icon: "chimera-toast-icon",
+          title: "chimera-toast-title",
+          description: "chimera-toast-description",
+          closeButton: "chimera-toast-close",
+          actionButton: "chimera-toast-action",
+          cancelButton: "chimera-toast-cancel",
         },
       }}
     />

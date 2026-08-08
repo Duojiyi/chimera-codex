@@ -2308,7 +2308,9 @@ impl RequestForwarder {
             // 自动解压 feature，这里拿到的是原始字节；不解压的话，压缩过的错误体会
             // 在 from_utf8 处变成非 UTF-8 而被丢弃，隐藏掉上游的限流/鉴权等详情。
             let encoding = get_content_encoding(response.headers());
-            let raw = response.bytes().await?;
+            let raw = response
+                .bytes_limited(crate::security_limits::MAX_PROXY_RESPONSE_BYTES)
+                .await?;
             let decoded = match encoding {
                 Some(encoding) => match decompress_body(&encoding, &raw) {
                     Ok(Some(decompressed)) => decompressed,
@@ -2346,14 +2348,17 @@ impl RequestForwarder {
         let status = response.status();
         let headers = response.headers().clone();
         let body_timeout = self.non_streaming_timeout;
-        let body = tokio::time::timeout(body_timeout, response.bytes())
-            .await
-            .map_err(|_| {
-                ProxyError::Timeout(format!(
-                    "响应体读取超时: {}s（上游发完响应头后 body 未到达）",
-                    body_timeout.as_secs()
-                ))
-            })??;
+        let body = tokio::time::timeout(
+            body_timeout,
+            response.bytes_limited(crate::security_limits::MAX_PROXY_RESPONSE_BYTES),
+        )
+        .await
+        .map_err(|_| {
+            ProxyError::Timeout(format!(
+                "响应体读取超时: {}s（上游发完响应头后 body 未到达）",
+                body_timeout.as_secs()
+            ))
+        })??;
 
         Ok(ProxyResponse::buffered(status, headers, body))
     }
@@ -2368,7 +2373,9 @@ impl RequestForwarder {
         let status = response.status();
         let headers = response.headers().clone();
         let encoding = get_content_encoding(&headers);
-        let raw = response.bytes().await?;
+        let raw = response
+            .bytes_limited(crate::security_limits::MAX_PROXY_RESPONSE_BYTES)
+            .await?;
         let decoded = match encoding {
             Some(encoding) => match decompress_body(&encoding, &raw) {
                 Ok(Some(decompressed)) => decompressed,
@@ -2393,7 +2400,9 @@ impl RequestForwarder {
         let status = response.status();
         let headers = response.headers().clone();
         let encoding = get_content_encoding(&headers);
-        let raw = response.bytes().await?;
+        let raw = response
+            .bytes_limited(crate::security_limits::MAX_PROXY_RESPONSE_BYTES)
+            .await?;
         let decoded = match encoding {
             Some(encoding) => match decompress_body(&encoding, &raw) {
                 Ok(Some(decompressed)) => decompressed,
@@ -3884,7 +3893,10 @@ mod tests {
             .expect("response should be buffered");
 
         assert_eq!(
-            prepared.bytes().await.unwrap(),
+            prepared
+                .bytes_limited(crate::security_limits::MAX_PROXY_RESPONSE_BYTES)
+                .await
+                .unwrap(),
             Bytes::from_static(b"{\"ok\":true}")
         );
     }
@@ -3929,7 +3941,10 @@ mod tests {
             .expect("stream should be primed");
 
         assert_eq!(
-            prepared.bytes().await.unwrap(),
+            prepared
+                .bytes_limited(crate::security_limits::MAX_PROXY_RESPONSE_BYTES)
+                .await
+                .unwrap(),
             Bytes::from_static(b"firstsecond")
         );
     }

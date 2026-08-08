@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 use serde_json::Value;
 
+use crate::security_limits::{
+    collect_files_with_extensions, read_to_string_limited, MAX_CONFIG_FILE_BYTES,
+    MAX_SESSION_FILE_BYTES, MAX_SESSION_SCAN_DEPTH,
+};
 use crate::session_manager::{SessionMessage, SessionMeta};
 
 use super::utils::{parse_timestamp_to_ms, path_basename, truncate_summary};
@@ -173,7 +177,7 @@ pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
     let mut entries: Vec<(i64, String, String, String)> = Vec::new();
 
     for msg_path in &msg_files {
-        let data = match std::fs::read_to_string(msg_path) {
+        let data = match read_to_string_limited(msg_path, MAX_SESSION_FILE_BYTES) {
             Ok(d) => d,
             Err(_) => continue,
         };
@@ -326,7 +330,7 @@ pub fn delete_session(storage: &Path, path: &Path, session_id: &str) -> Result<b
 
     let mut message_ids = Vec::new();
     for message_path in &message_files {
-        let data = match std::fs::read_to_string(message_path) {
+        let data = match read_to_string_limited(message_path, MAX_SESSION_FILE_BYTES) {
             Ok(data) => data,
             Err(_) => continue,
         };
@@ -421,7 +425,7 @@ pub fn delete_session_sqlite(session_id: &str, source: &str) -> Result<bool, Str
 }
 
 fn parse_session(storage: &Path, path: &Path) -> Option<SessionMeta> {
-    let data = std::fs::read_to_string(path).ok()?;
+    let data = read_to_string_limited(path, MAX_CONFIG_FILE_BYTES).ok()?;
     let value: Value = serde_json::from_str(&data).ok()?;
 
     let session_id = value.get("id").and_then(Value::as_str)?.to_string();
@@ -490,7 +494,7 @@ fn get_first_user_summary(storage: &Path, session_id: &str) -> Option<String> {
     // Collect user messages with timestamps for ordering
     let mut user_msgs: Vec<(i64, String)> = Vec::new();
     for msg_path in &msg_files {
-        let data = match std::fs::read_to_string(msg_path) {
+        let data = match read_to_string_limited(msg_path, MAX_SESSION_FILE_BYTES) {
             Ok(d) => d,
             Err(_) => continue,
         };
@@ -558,7 +562,7 @@ fn collect_parts_text(part_dir: &Path) -> String {
 
     let mut texts = Vec::new();
     for part_path in &parts {
-        let data = match std::fs::read_to_string(part_path) {
+        let data = match read_to_string_limited(part_path, MAX_SESSION_FILE_BYTES) {
             Ok(d) => d,
             Err(_) => continue,
         };
@@ -576,22 +580,8 @@ fn collect_parts_text(part_dir: &Path) -> String {
 }
 
 fn collect_json_files(root: &Path, files: &mut Vec<PathBuf>) {
-    if !root.exists() {
-        return;
-    }
-
-    let entries = match std::fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_json_files(&path, files);
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-            files.push(path);
-        }
+    if let Ok(found) = collect_files_with_extensions(root, &["json"], MAX_SESSION_SCAN_DEPTH) {
+        files.extend(found);
     }
 }
 
