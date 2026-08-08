@@ -122,41 +122,39 @@ pub fn read_to_string_limited(path: &Path, limit: u64) -> io::Result<String> {
 /// `symlink_metadata`, so a symlink/junction cannot smuggle a path outside the
 /// intended configuration/session directory.
 pub fn canonicalize_within_root(path: &Path, root: &Path) -> io::Result<PathBuf> {
-    // Check the original path before canonicalisation.  Checking only the
-    // canonical path would make a symlink look indistinguishable from a
-    // regular directory and would defeat the "do not follow links" policy.
-    let mut current = Some(path);
-    while let Some(candidate) = current {
-        match fs::symlink_metadata(candidate) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        ResourceLimitError::Symlink,
-                    ));
+    // Check the original path before canonicalisation.  Only inspect the
+    // root and descendants, not every ancestor up to the filesystem root:
+    // macOS exposes `/var` as a symlink to `/private/var`, and rejecting
+    // unrelated system-level aliases would make ordinary temp directories
+    // unusable.
+    let mut current = root.to_path_buf();
+    if let Ok(relative) = path.strip_prefix(root) {
+        for component in relative.components() {
+            match component {
+                std::path::Component::Normal(value) => current.push(value),
+                std::path::Component::CurDir => continue,
+                std::path::Component::ParentDir => {
+                    if !current.pop() || !current.starts_with(root) {
+                        break;
+                    }
+                    continue;
                 }
+                _ => continue,
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-        current = candidate.parent();
-    }
 
-    let mut current = Some(root);
-    while let Some(candidate) = current {
-        match fs::symlink_metadata(candidate) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        ResourceLimitError::Symlink,
-                    ));
+            match fs::symlink_metadata(&current) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            ResourceLimitError::Symlink,
+                        ));
+                    }
                 }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
         }
-        current = candidate.parent();
     }
 
     let canonical_root = fs::canonicalize(root)?;

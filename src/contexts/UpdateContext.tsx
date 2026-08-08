@@ -265,11 +265,10 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
 
     try {
       progressUnlistenRef.current?.();
-      progressUnlistenRef.current =
-        await listen<UpdateDownloadProgress>(
-          "update-download-progress",
-          (event) => setDownloadProgress(event.payload),
-        );
+      progressUnlistenRef.current = await listen<UpdateDownloadProgress>(
+        "update-download-progress",
+        (event) => setDownloadProgress(event.payload),
+      );
 
       const installed = await settingsApi.installUpdateAndRestart();
       if (!installed) {
