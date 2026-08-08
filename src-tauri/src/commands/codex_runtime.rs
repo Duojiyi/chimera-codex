@@ -483,9 +483,12 @@ Start-Process ("shell:AppsFolder\" + $pkg.PackageFamilyName + "!" + $id)
         command.creation_flags(0x08000000);
     }
 
-    let output = command
-        .output()
-        .map_err(|error| format!("无法调用 PowerShell 启动 MSIX Codex: {error}"))?;
+    let output = crate::process_utils::output_with_timeout(
+        command,
+        Duration::from_secs(15),
+        crate::security_limits::MAX_PROCESS_OUTPUT_BYTES,
+    )
+    .map_err(|error| format!("无法调用 PowerShell 启动 MSIX Codex: {error}"))?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if detail.is_empty() {

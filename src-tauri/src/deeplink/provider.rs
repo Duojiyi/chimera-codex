@@ -25,6 +25,7 @@ pub async fn import_provider_from_deeplink(
     state: &AppState,
     request: DeepLinkImportRequest,
 ) -> Result<String, AppError> {
+    validate_request_limits(&request)?;
     // Verify this is a provider request
     if request.resource != "provider" {
         return Err(AppError::InvalidInput(format!(
@@ -620,6 +621,7 @@ fn build_hermes_settings(request: &DeepLinkImportRequest) -> serde_json::Value {
 pub fn parse_and_merge_config(
     request: &DeepLinkImportRequest,
 ) -> Result<DeepLinkImportRequest, AppError> {
+    validate_request_limits(request)?;
     // If no config provided, return original request
     if request.config.is_none() && request.config_url.is_none() {
         return Ok(request.clone());
@@ -689,6 +691,27 @@ pub fn parse_and_merge_config(
     }
 
     Ok(merged)
+}
+
+fn validate_request_limits(request: &DeepLinkImportRequest) -> Result<(), AppError> {
+    let max_string = crate::security_limits::MAX_IMPORT_BYTES as usize;
+    for (field, value) in [
+        ("name", request.name.as_deref()),
+        ("endpoint", request.endpoint.as_deref()),
+        ("api_key", request.api_key.as_deref()),
+        ("notes", request.notes.as_deref()),
+        ("config", request.config.as_deref()),
+        ("config_url", request.config_url.as_deref()),
+        ("usage_script", request.usage_script.as_deref()),
+        ("usage_access_token", request.usage_access_token.as_deref()),
+    ] {
+        if value.is_some_and(|value| value.len() > max_string.saturating_mul(2)) {
+            return Err(AppError::InvalidInput(format!(
+                "Deep link field '{field}' is too large"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Merge Claude configuration from config file

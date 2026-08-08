@@ -1,6 +1,6 @@
 {
   "name": "chimera-plus-plus",
-  "version": "2.4.1",
+  "version": "2.4.2",
   "description": "Clean Codex provider switcher and desktop runtime manager",
   "type": "module",
   "scripts": {
@@ -9,6 +9,8 @@
     "tauri": "tauri",
     "dev:renderer": "vite",
     "build:renderer": "vite build",
+    "build:renderer:check": "pnpm build:renderer && node scripts/check-bundle-budget.mjs",
+    "check:bundle": "node scripts/check-bundle-budget.mjs",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.{js,jsx,ts,tsx,css,json}\"",
     "format:check": "prettier --check \"src/**/*.{js,jsx,ts,tsx,css,json}\"",

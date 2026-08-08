@@ -10,6 +10,10 @@ use crate::codex_state_db::codex_state_db_paths;
 use crate::config::{atomic_write, copy_file, get_app_config_dir};
 use crate::database::{is_official_seed_id, Database};
 use crate::error::AppError;
+use crate::security_limits::{
+    open_limited_regular_file, read_to_string_limited, MAX_CONFIG_FILE_BYTES,
+    MAX_SESSION_FILE_BYTES,
+};
 use crate::settings::{
     CodexOfficialHistoryUnifyMigration, CodexProviderTemplateMigration,
     CodexThirdPartyHistoryProviderBucketMigration,
@@ -359,7 +363,7 @@ fn collect_session_meta_provider_ids_from_head(path: &Path, ids: &mut BTreeSet<S
     /// 只看开头这些行：足够覆盖 meta 位置的微小变动，又不会退化成整文件扫描。
     const MAX_SCANNED_LINES: usize = 16;
 
-    let Ok(file) = fs::File::open(path) else {
+    let Ok(file) = open_limited_regular_file(path, MAX_SESSION_FILE_BYTES) else {
         return;
     };
     for line in std::io::BufReader::new(file)
@@ -666,7 +670,8 @@ fn collect_official_ledger(
 /// 早期版本的备份没有 meta，而那个时期不存在切目录场景；误纳的代价也被
 /// "按会话 id 精确匹配 + 仅改写 custom"双重条件兜底。
 fn backup_generation_matches_dir(generation: &Path, codex_dir_key: &str) -> bool {
-    let Ok(text) = fs::read_to_string(generation.join("meta.json")) else {
+    let Ok(text) = read_to_string_limited(&generation.join("meta.json"), MAX_CONFIG_FILE_BYTES)
+    else {
         return true;
     };
     serde_json::from_str::<Value>(&text)
@@ -681,7 +686,7 @@ fn backup_generation_matches_dir(generation: &Path, codex_dir_key: &str) -> bool
 }
 
 fn collect_official_session_ids_from_backup(path: &Path, session_ids: &mut HashSet<String>) {
-    let Ok(content) = fs::read_to_string(path) else {
+    let Ok(content) = read_to_string_limited(path, MAX_SESSION_FILE_BYTES) else {
         log::debug!("Failed to read unify backup file {}", path.display());
         return;
     };
@@ -746,7 +751,13 @@ fn collect_files_with_extension(
     depth: u8,
     max_depth: u8,
 ) {
-    if depth > max_depth || !dir.is_dir() {
+    if depth > max_depth {
+        return;
+    }
+    let Ok(dir_metadata) = fs::symlink_metadata(dir) else {
+        return;
+    };
+    if dir_metadata.file_type().is_symlink() || !dir_metadata.is_dir() {
         return;
     }
     let Ok(entries) = fs::read_dir(dir) else {
@@ -754,9 +765,17 @@ fn collect_files_with_extension(
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        if metadata.is_dir() {
             collect_files_with_extension(&path, extension, files, depth + 1, max_depth);
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some(extension) {
+        } else if metadata.is_file()
+            && path.extension().and_then(|ext| ext.to_str()) == Some(extension)
+        {
             files.push(path);
         }
     }
@@ -1181,7 +1200,13 @@ fn migrate_codex_jsonl_files(
 }
 
 fn collect_jsonl_files(dir: &Path, files: &mut Vec<PathBuf>, depth: u8, max_depth: u8) {
-    if depth > max_depth || !dir.is_dir() {
+    if depth > max_depth {
+        return;
+    }
+    let Ok(dir_metadata) = fs::symlink_metadata(dir) else {
+        return;
+    };
+    if dir_metadata.file_type().is_symlink() || !dir_metadata.is_dir() {
         return;
     }
 
@@ -1198,9 +1223,17 @@ fn collect_jsonl_files(dir: &Path, files: &mut Vec<PathBuf>, depth: u8, max_dept
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        if metadata.is_dir() {
             collect_jsonl_files(&path, files, depth + 1, max_depth);
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
+        } else if metadata.is_file()
+            && path.extension().and_then(|ext| ext.to_str()) == Some("jsonl")
+        {
             files.push(path);
         }
     }
@@ -1223,10 +1256,17 @@ fn rewrite_codex_session_file_lines(
     backup_root: &Path,
     rewrite_line: impl Fn(&str) -> Option<String>,
 ) -> Result<bool, AppError> {
-    let metadata_before = fs::metadata(path).map_err(|e| AppError::io(path, e))?;
+    let metadata_before = fs::symlink_metadata(path).map_err(|e| AppError::io(path, e))?;
+    if metadata_before.file_type().is_symlink() {
+        return Err(AppError::Config(format!(
+            "拒绝改写符号链接会话文件: {}",
+            path.display()
+        )));
+    }
     let modified_before = metadata_before.modified().ok();
     let len_before = metadata_before.len();
-    let content = fs::read_to_string(path).map_err(|e| AppError::io(path, e))?;
+    let content =
+        read_to_string_limited(path, MAX_SESSION_FILE_BYTES).map_err(|e| AppError::io(path, e))?;
 
     let mut rewritten = String::with_capacity(content.len());
     let mut changed = false;

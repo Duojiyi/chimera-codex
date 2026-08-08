@@ -317,21 +317,32 @@ fn finish_codex_rebuild(
     result
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexUsageRebuildResult {
+    pub backup_path: Option<String>,
+    #[serde(flatten)]
+    pub sync: crate::services::session_usage::SessionSyncResult,
+}
+
 /// 备份数据库后，仅重建 Codex session 用量。锁覆盖 backup → reset → import
 /// 整个序列，避免后台同步在清理和重导之间插入数据。
 #[tauri::command]
 pub async fn rebuild_codex_usage(
     state: State<'_, AppState>,
-) -> Result<crate::services::session_usage::SessionSyncResult, AppError> {
+) -> Result<CodexUsageRebuildResult, AppError> {
     let db = state.db.clone();
     let _guard = crate::services::session_usage::session_sync_mutex()
         .lock()
         .await;
     tauri::async_runtime::spawn_blocking(move || {
-        db.backup_database_file()?;
+        let backup_path = db
+            .backup_database_file()?
+            .map(|path| path.to_string_lossy().into_owned());
         db.reset_codex_usage()?;
         let result = crate::services::session_usage_codex::sync_codex_usage(&db);
-        finish_codex_rebuild(result)
+        let sync = finish_codex_rebuild(result)?;
+        Ok(CodexUsageRebuildResult { backup_path, sync })
     })
     .await
     .map_err(|error| AppError::Message(format!("Codex 用量重建任务失败: {error}")))?

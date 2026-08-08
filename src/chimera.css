@@ -199,6 +199,9 @@
     transform: rotate(360deg);
   }
 }
+.is-window-inactive .chimera-shell * {
+  animation-play-state: paused !important;
+}
 /* ===== End global button variants ===== */
 
 /* ===== Base classes for live components =====
@@ -872,6 +875,13 @@ select:focus-visible {
   border: 1px solid var(--shell-edge);
   border-radius: var(--r-xl);
   pointer-events: none;
+}
+.route-loading {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  color: var(--ch-muted);
+  font-size: 12px;
 }
 .chimera-main {
   position: relative;
@@ -3221,6 +3231,29 @@ body.is-mac
 .usage-refresh:disabled {
   opacity: 0.55;
 }
+.usage-rebuild {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 1px solid #dce4e8;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  color: #52606a;
+  font-size: 10px;
+  font-weight: 650;
+  box-shadow:
+    inset 0 1px 0 #fff,
+    0 3px 6px rgba(32, 40, 48, 0.06);
+}
+.usage-rebuild:hover:not(:disabled) {
+  border-color: #bccbd1;
+  color: #25333b;
+}
+.usage-rebuild:disabled {
+  opacity: 0.55;
+}
 .advanced-options {
   overflow: hidden;
   border: 1px solid #e5e9ec;
@@ -3941,6 +3974,60 @@ body.is-mac
 }
 .usage-spectrum .usage-heading p {
   max-width: 620px;
+}
+.usage-rebuild-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: -2px 0 12px;
+  padding: 10px 13px;
+  border: 1px solid;
+  border-radius: 9px;
+  font-size: 10px;
+}
+.usage-rebuild-result.is-success {
+  border-color: #c8e8dc;
+  background: #f1fbf7;
+  color: #176b50;
+}
+.usage-rebuild-result.is-error {
+  border-color: #f0cec8;
+  background: #fff5f3;
+  color: #9b3e30;
+}
+.usage-rebuild-result > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.usage-rebuild-result > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.usage-rebuild-result strong {
+  font-size: 11px;
+}
+.usage-rebuild-result span {
+  overflow-wrap: anywhere;
+  color: #52606a;
+}
+.usage-rebuild-result small {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #71808a;
+}
+.usage-rebuild-result button {
+  width: fit-content;
+  margin-top: 3px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .usage-spectrum-panel {
   position: relative;

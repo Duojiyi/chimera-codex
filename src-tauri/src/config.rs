@@ -226,11 +226,17 @@ pub fn get_provider_config_path(provider_id: &str, provider_name: Option<&str>) 
 
 /// 读取 JSON 配置文件
 pub fn read_json_file<T: for<'a> Deserialize<'a>>(path: &Path) -> Result<T, AppError> {
-    if !path.exists() {
-        return Err(AppError::Config(format!("文件不存在: {}", path.display())));
-    }
-
-    let content = fs::read_to_string(path).map_err(|e| AppError::io(path, e))?;
+    let content = crate::security_limits::read_to_string_limited(
+        path,
+        crate::security_limits::MAX_CONFIG_FILE_BYTES,
+    )
+    .map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            AppError::Config(format!("文件不存在: {}", path.display()))
+        } else {
+            AppError::io(path, error)
+        }
+    })?;
 
     serde_json::from_str(&content).map_err(|e| AppError::json(path, e))
 }

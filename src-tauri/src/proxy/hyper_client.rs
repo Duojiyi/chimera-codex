@@ -158,25 +158,49 @@ impl ProxyResponse {
     }
 
     /// Consume the response and collect the full body into `Bytes`.
-    pub async fn bytes(self) -> Result<Bytes, ProxyError> {
+    /// Consume the response while enforcing a hard maximum body size.
+    pub async fn bytes_limited(self, limit: u64) -> Result<Bytes, ProxyError> {
         match self {
             Self::Hyper(r) => {
-                let collected = r.into_body().collect().await.map_err(|e| {
-                    ProxyError::ForwardFailed(format!("Failed to read response body: {e}"))
-                })?;
-                Ok(collected.to_bytes())
+                let mut body = bytes::BytesMut::new();
+                let mut incoming = r.into_body();
+                while let Some(frame) = incoming.frame().await {
+                    let frame = frame.map_err(|e| {
+                        ProxyError::ForwardFailed(format!("Failed to read response body: {e}"))
+                    })?;
+                    if let Ok(data) = frame.into_data() {
+                        append_limited(&mut body, &data, limit)?;
+                    }
+                }
+                Ok(body.freeze())
             }
-            Self::Reqwest(r) => r.bytes().await.map_err(|e| {
-                ProxyError::ForwardFailed(format!("Failed to read response body: {e}"))
-            }),
-            Self::Buffered { body, .. } => Ok(body),
+            Self::Reqwest(r) => {
+                if r.content_length().is_some_and(|size| size > limit) {
+                    return Err(body_limit_error(limit));
+                }
+                let mut body = bytes::BytesMut::new();
+                let mut stream = r.bytes_stream();
+                while let Some(chunk) = stream.next().await {
+                    let chunk = chunk.map_err(|e| {
+                        ProxyError::ForwardFailed(format!("Failed to read response body: {e}"))
+                    })?;
+                    append_limited(&mut body, &chunk, limit)?;
+                }
+                Ok(body.freeze())
+            }
+            Self::Buffered { body, .. } => {
+                if body.len() as u64 > limit {
+                    return Err(body_limit_error(limit));
+                }
+                Ok(body)
+            }
             Self::Streamed { mut stream, .. } => {
                 let mut body = bytes::BytesMut::new();
                 while let Some(chunk) = stream.next().await {
                     let chunk = chunk.map_err(|e| {
                         ProxyError::ForwardFailed(format!("Failed to read response body: {e}"))
                     })?;
-                    body.extend_from_slice(&chunk);
+                    append_limited(&mut body, &chunk, limit)?;
                 }
                 Ok(body.freeze())
             }
@@ -224,6 +248,20 @@ impl ProxyResponse {
             Self::Streamed { stream, .. } => stream,
         }
     }
+}
+
+fn body_limit_error(limit: u64) -> ProxyError {
+    ProxyError::ForwardFailed(format!(
+        "response body exceeds configured limit of {limit} bytes"
+    ))
+}
+
+fn append_limited(body: &mut bytes::BytesMut, chunk: &[u8], limit: u64) -> Result<(), ProxyError> {
+    if body.len() as u64 + chunk.len() as u64 > limit {
+        return Err(body_limit_error(limit));
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
 }
 
 /// Send an HTTP request with header-case preservation.

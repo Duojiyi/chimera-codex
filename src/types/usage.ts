@@ -45,6 +45,10 @@ export interface SessionSyncResult {
   errors: string[];
 }
 
+export interface CodexUsageRebuildResult extends SessionSyncResult {
+  backupPath: string | null;
+}
+
 export interface DataSourceSummary {
   dataSource: string;
   requestCount: number;

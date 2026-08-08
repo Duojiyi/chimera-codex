@@ -221,7 +221,6 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
   const [isLoadingVersion, setIsLoadingVersion] = useState(
     () => appVersionCache === null,
   );
-  const [isDownloading, setIsDownloading] = useState(false);
   const [toolVersions, setToolVersions] = useState<ToolVersion[]>(
     () => toolVersionsCache?.data ?? [],
   );
@@ -238,8 +237,16 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
   );
   const [showInstallCommands, setShowInstallCommands] = useState(false);
 
-  const { hasUpdate, updateInfo, checkUpdate, resetDismiss, isChecking } =
-    useUpdate();
+  const {
+    hasUpdate,
+    updateInfo,
+    checkUpdate,
+    installUpdate,
+    resetDismiss,
+    isChecking,
+    isInstalling,
+    stagedVersion,
+  } = useUpdate();
 
   const [wslShellByTool, setWslShellByTool] = useState<
     Record<string, WslShellPreference>
@@ -437,13 +444,13 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
 
       if (!displayVersion) {
         await settingsApi.openExternal(
-          "https://github.com/farion1231/cc-switch/releases",
+          "https://github.com/Duojiyi/chimera-codex/releases",
         );
         return;
       }
 
       await settingsApi.openExternal(
-        `https://github.com/farion1231/cc-switch/releases/tag/${displayVersion}`,
+        `https://github.com/Duojiyi/chimera-codex/releases/tag/${displayVersion}`,
       );
     } catch (error) {
       console.error("[AboutSection] Failed to open release notes", error);
@@ -455,19 +462,25 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
     if (hasUpdate) {
       if (isPortable) {
         try {
-          await settingsApi.checkUpdates();
+          await settingsApi.openExternal(
+            "https://github.com/Duojiyi/chimera-codex/releases/latest",
+          );
+          toast.info(t("settings.portableMode"), { closeButton: true });
         } catch (error) {
-          console.error("[AboutSection] Portable update failed", error);
+          console.error(
+            "[AboutSection] Failed to open portable release",
+            error,
+          );
+          toast.error(t("settings.openReleaseNotesFailed"));
         }
         return;
       }
 
-      setIsDownloading(true);
       try {
         resetDismiss();
-        const installed = await settingsApi.installUpdateAndRestart();
+        const installed = await installUpdate();
         if (!installed) {
-          toast.success(t("settings.upToDate"), { closeButton: true });
+          toast.info(t("settings.upToDate"), { closeButton: true });
         }
       } catch (error) {
         console.error("[AboutSection] Update failed", error);
@@ -475,16 +488,6 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
           description: extractErrorMessage(error) || undefined,
           closeButton: true,
         });
-        try {
-          await settingsApi.checkUpdates();
-        } catch (fallbackError) {
-          console.error(
-            "[AboutSection] Failed to open fallback updater",
-            fallbackError,
-          );
-        }
-      } finally {
-        setIsDownloading(false);
       }
       return;
     }
@@ -498,7 +501,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
       console.error("[AboutSection] Check update failed", error);
       toast.error(t("settings.checkUpdateFailed"));
     }
-  }, [checkUpdate, hasUpdate, isPortable, resetDismiss, t]);
+  }, [checkUpdate, hasUpdate, installUpdate, isPortable, resetDismiss, t]);
 
   const handleCopyInstallCommands = useCallback(async () => {
     try {
@@ -883,7 +886,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
               size="sm"
               onClick={() =>
                 settingsApi.openExternal(
-                  "https://github.com/farion1231/cc-switch",
+                  "https://github.com/Duojiyi/chimera-codex",
                 )
               }
               className="h-8 gap-1.5 text-xs"
@@ -905,10 +908,10 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
               type="button"
               size="sm"
               onClick={handleCheckUpdate}
-              disabled={isChecking || isDownloading}
+              disabled={isChecking || isInstalling}
               className="h-8 gap-1.5 text-xs"
             >
-              {isDownloading ? (
+              {isInstalling ? (
                 <>
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   {t("settings.updating")}
@@ -916,9 +919,13 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
               ) : hasUpdate ? (
                 <>
                   <Download className="h-3.5 w-3.5" />
-                  {t("settings.updateTo", {
-                    version: updateInfo?.availableVersion ?? "",
-                  })}
+                  {isPortable
+                    ? t("settings.updateTo", {
+                        version: updateInfo?.availableVersion ?? "",
+                      })
+                    : stagedVersion === updateInfo?.availableVersion
+                      ? "安装并重启"
+                      : "下载并安装"}
                 </>
               ) : isChecking ? (
                 <>

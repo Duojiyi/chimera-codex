@@ -121,6 +121,20 @@ const platformSpecs = [
       "build-provenance-macos-universal.json",
     ],
   },
+  {
+    platform: "linux-x86_64",
+    target: "x86_64-unknown-linux-gnu",
+    updater: `Chimera++-${tag}-Linux-x86_64.AppImage`,
+    required: [
+      `Chimera++-${tag}-Linux-x86_64.AppImage`,
+      `Chimera++-${tag}-Linux-x86_64.AppImage.sig`,
+      `Chimera++-${tag}-Linux-x86_64.deb`,
+      `Chimera++-${tag}-Linux-x86_64.rpm`,
+      "frontend-sbom-linux-x86_64.json",
+      "rust-sbom-linux-x86_64.json",
+      "build-provenance-linux-x86_64.json",
+    ],
+  },
 ];
 
 function verifyChecksumManifest(spec) {

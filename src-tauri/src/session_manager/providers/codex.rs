@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -91,28 +89,15 @@ fn load_thread_titles_from_paths(
 }
 
 fn load_thread_titles_from_session_index(index_path: &Path) -> HashMap<String, String> {
-    if !index_path.exists() {
+    let Ok(content) = crate::security_limits::read_to_string_limited(
+        index_path,
+        crate::security_limits::MAX_CONFIG_FILE_BYTES,
+    ) else {
         return HashMap::new();
-    }
-
-    let file = match File::open(index_path) {
-        Ok(file) => file,
-        Err(err) => {
-            log::warn!(
-                "Failed to open Codex session index {}: {err}",
-                index_path.display()
-            );
-            return HashMap::new();
-        }
     };
 
-    let reader = BufReader::new(file);
     let mut titles = HashMap::new();
-    for line in reader.lines() {
-        let line = match line {
-            Ok(line) => line,
-            Err(_) => continue,
-        };
+    for line in content.lines() {
         let Ok(entry) = serde_json::from_str::<SessionIndexEntry>(line.trim()) else {
             continue;
         };
@@ -202,16 +187,15 @@ fn load_thread_titles_from_db(db_path: &Path) -> HashMap<String, String> {
 }
 
 pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
-    let file = File::open(path).map_err(|e| format!("Failed to open session file: {e}"))?;
-    let reader = BufReader::new(file);
+    let content = crate::security_limits::read_to_string_limited(
+        path,
+        crate::security_limits::MAX_SESSION_FILE_BYTES,
+    )
+    .map_err(|e| format!("Failed to read session file: {e}"))?;
     let mut messages = Vec::new();
 
-    for line in reader.lines() {
-        let line = match line {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-        let value: Value = match serde_json::from_str(&line) {
+    for line in content.lines() {
+        let value: Value = match serde_json::from_str(line) {
             Ok(parsed) => parsed,
             Err(_) => continue,
         };
@@ -502,20 +486,44 @@ fn infer_session_id_from_filename(path: &Path) -> Option<String> {
 }
 
 fn collect_jsonl_files(root: &Path, files: &mut Vec<PathBuf>) {
-    if !root.exists() {
+    collect_jsonl_files_at_depth(root, files, 0);
+}
+
+fn collect_jsonl_files_at_depth(root: &Path, files: &mut Vec<PathBuf>, depth: usize) {
+    if depth > crate::security_limits::MAX_SESSION_SCAN_DEPTH {
+        log::warn!(
+            "Skipping Codex session directory beyond scan depth: {}",
+            root.display()
+        );
+        return;
+    }
+    let metadata = match std::fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(_) => return,
+    };
+    if metadata.file_type().is_symlink() {
         return;
     }
 
-    let entries = match std::fs::read_dir(root) {
+    let entries = match crate::security_limits::read_dir_without_links(root) {
         Ok(entries) => entries,
         Err(_) => return,
     };
 
-    for entry in entries.flatten() {
+    for entry in entries {
         let path = entry.path();
-        if path.is_dir() {
-            collect_jsonl_files(&path, files);
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        if metadata.is_dir() {
+            collect_jsonl_files_at_depth(&path, files, depth + 1);
+        } else if metadata.is_file()
+            && metadata.len() <= crate::security_limits::MAX_SESSION_FILE_BYTES
+            && path.extension().and_then(|ext| ext.to_str()) == Some("jsonl")
+        {
             files.push(path);
         }
     }

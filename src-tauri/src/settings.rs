@@ -21,6 +21,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_false() -> bool {
+    false
+}
+
 fn default_codex_update_source() -> String {
     "auto".to_string()
 }
@@ -28,6 +32,8 @@ fn default_codex_update_source() -> String {
 fn default_codex_install_mode() -> String {
     "standard".to_string()
 }
+
+const CURRENT_SETTINGS_MIGRATION_VERSION: u32 = 1;
 
 const MAX_CODEX_PORTABLE_ROOT_BYTES: usize = 4096;
 
@@ -278,7 +284,7 @@ pub fn resolve_codex_portable_root() -> Result<PathBuf, String> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VisibleApps {
-    #[serde(default = "default_true")]
+    #[serde(default = "default_false")]
     pub claude: bool,
     #[serde(
         rename = "claude-desktop",
@@ -289,13 +295,13 @@ pub struct VisibleApps {
     pub claude_desktop: bool,
     #[serde(default = "default_true")]
     pub codex: bool,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_false")]
     pub gemini: bool,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_false")]
     pub grokbuild: bool,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_false")]
     pub opencode: bool,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_false")]
     pub openclaw: bool,
     #[serde(default)]
     pub hermes: bool,
@@ -304,13 +310,13 @@ pub struct VisibleApps {
 impl Default for VisibleApps {
     fn default() -> Self {
         Self {
-            claude: true,
-            claude_desktop: true,
+            claude: false,
+            claude_desktop: false,
             codex: true,
-            gemini: true,
-            grokbuild: true,
-            opencode: true,
-            openclaw: true,
+            gemini: false,
+            grokbuild: false,
+            opencode: false,
+            openclaw: false,
             hermes: false, // 默认不显示，需用户手动启用
         }
     }
@@ -638,8 +644,9 @@ pub struct AppSettings {
     pub preserve_codex_official_auth_on_switch: bool,
     /// Run official Codex providers under the shared "custom" model_provider id
     /// so official sessions share one resume-history bucket with third-party
-    /// providers. Opt-in: defaults to false.
-    #[serde(default)]
+    /// providers. New installs default to enabled; an existing serialized
+    /// `false` remains an explicit user opt-out.
+    #[serde(default = "default_true")]
     pub unify_codex_session_history: bool,
     /// User opted in (via the enable dialog checkbox) to migrate existing
     /// official sessions ("openai" bucket) into the shared bucket. Persisted so
@@ -759,6 +766,9 @@ pub struct AppSettings {
     // ===== 本机自动迁移状态 =====
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_migrations: Option<LocalMigrations>,
+    /// Version of the settings migration pass applied by Chimera++.
+    #[serde(default)]
+    pub settings_migration_version: u32,
 }
 
 fn default_show_in_tray() -> bool {
@@ -794,7 +804,7 @@ impl Default for AppSettings {
             enable_failover_toggle: false,
             show_profile_switcher: true,
             preserve_codex_official_auth_on_switch: true,
-            unify_codex_session_history: false,
+            unify_codex_session_history: true,
             unify_codex_migrate_existing: None,
             failover_confirmed: None,
             first_run_notice_confirmed: None,
@@ -830,6 +840,7 @@ impl Default for AppSettings {
             backup_retain_count: None,
             preferred_terminal: None,
             local_migrations: None,
+            settings_migration_version: CURRENT_SETTINGS_MIGRATION_VERSION,
         }
     }
 }
@@ -930,8 +941,20 @@ impl AppSettings {
         let Some(path) = Self::settings_path() else {
             return Self::default();
         };
-        if let Ok(content) = fs::read_to_string(&path) {
-            match serde_json::from_str::<AppSettings>(&content) {
+        if let Ok(content) = crate::security_limits::read_to_string_limited(
+            &path,
+            crate::security_limits::MAX_CONFIG_FILE_BYTES,
+        ) {
+            match serde_json::from_str::<serde_json::Value>(&content).and_then(|raw| {
+                let has_unify_setting = raw.get("unifyCodexSessionHistory").is_some();
+                let mut settings = serde_json::from_value::<AppSettings>(raw)?;
+                if !has_unify_setting {
+                    settings.unify_codex_session_history = true;
+                }
+                settings.settings_migration_version =
+                    CURRENT_SETTINGS_MIGRATION_VERSION.max(settings.settings_migration_version);
+                Ok::<_, serde_json::Error>(settings)
+            }) {
                 Ok(mut settings) => {
                     settings.normalize_paths();
                     settings

@@ -14,6 +14,7 @@ use super::{
     ProxyError,
 };
 use crate::database::PRICING_SOURCE_REQUEST;
+use crate::security_limits::MAX_PROXY_RESPONSE_BYTES;
 use axum::http::{header::HeaderMap, HeaderName};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
@@ -87,16 +88,19 @@ pub(crate) async fn read_decoded_body(
     let mut headers = response.headers().clone();
     let status = response.status();
     let raw_bytes = if body_timeout.is_zero() {
-        response.bytes().await?
+        response.bytes_limited(MAX_PROXY_RESPONSE_BYTES).await?
     } else {
-        tokio::time::timeout(body_timeout, response.bytes())
-            .await
-            .map_err(|_| {
-                ProxyError::Timeout(format!(
-                    "响应体读取超时: {}s（上游发完响应头后 body 未到达）",
-                    body_timeout.as_secs()
-                ))
-            })??
+        tokio::time::timeout(
+            body_timeout,
+            response.bytes_limited(MAX_PROXY_RESPONSE_BYTES),
+        )
+        .await
+        .map_err(|_| {
+            ProxyError::Timeout(format!(
+                "响应体读取超时: {}s（上游发完响应头后 body 未到达）",
+                body_timeout.as_secs()
+            ))
+        })??
     };
 
     log::debug!(

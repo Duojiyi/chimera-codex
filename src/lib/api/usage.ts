@@ -11,6 +11,7 @@ import type {
   ProviderLimitStatus,
   PaginatedLogs,
   SessionSyncResult,
+  CodexUsageRebuildResult,
   DataSourceSummary,
 } from "@/types/usage";
 import type { UsageResult } from "@/types";
@@ -184,7 +185,7 @@ export const usageApi = {
     return invoke("sync_codex_session_usage");
   },
 
-  rebuildCodexUsage: async (): Promise<SessionSyncResult> => {
+  rebuildCodexUsage: async (): Promise<CodexUsageRebuildResult> => {
     return invoke("rebuild_codex_usage");
   },
 

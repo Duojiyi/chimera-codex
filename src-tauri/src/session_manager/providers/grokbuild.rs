@@ -1,10 +1,12 @@
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::security_limits::{
+    canonicalize_within_root, collect_files_with_extensions, read_to_string_limited,
+    MAX_SESSION_FILE_BYTES, MAX_SESSION_SCAN_DEPTH,
+};
 use crate::session_manager::{SessionMessage, SessionMeta};
 
 use super::utils::{extract_text, parse_timestamp_to_ms, truncate_summary, TITLE_MAX_CHARS};
@@ -55,13 +57,12 @@ pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
         .parent()
         .ok_or_else(|| format!("Invalid Grok Build session path: {}", path.display()))?;
     let chat_path = session_dir.join("chat_history.jsonl");
-    let file = File::open(&chat_path)
+    let content = read_to_string_limited(&chat_path, MAX_SESSION_FILE_BYTES)
         .map_err(|e| format!("Failed to open Grok Build chat history: {e}"))?;
-    let reader = BufReader::new(file);
     let mut messages = Vec::new();
 
-    for line in reader.lines().map_while(Result::ok) {
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+    for line in content.lines() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
         let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
@@ -90,19 +91,22 @@ pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
 }
 
 pub fn delete_session(root: &Path, path: &Path, session_id: &str) -> Result<bool, String> {
-    if !path.starts_with(root) {
-        return Err(format!(
+    let path = canonicalize_within_root(path, root).map_err(|_| {
+        format!(
             "Grok Build session source is outside the session root: {}",
             path.display()
-        ));
-    }
+        )
+    })?;
+    let root = root
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize Grok Build root: {e}"))?;
     if path.file_name().and_then(|name| name.to_str()) != Some("summary.json") {
         return Err(format!(
             "Unexpected Grok Build session source: {}",
             path.display()
         ));
     }
-    let summary = read_summary(path)?;
+    let summary = read_summary(&path)?;
     if summary.info.id != session_id {
         return Err(format!(
             "Grok Build session ID mismatch: expected {session_id}, found {}",
@@ -134,21 +138,18 @@ pub fn delete_session(root: &Path, path: &Path, session_id: &str) -> Result<bool
 }
 
 fn collect_summary_files(root: &Path, files: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(root) else {
+    let Ok(found) = collect_files_with_extensions(root, &["json"], MAX_SESSION_SCAN_DEPTH) else {
         return;
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_summary_files(&path, files);
-        } else if path.file_name().and_then(|name| name.to_str()) == Some("summary.json") {
-            files.push(path);
-        }
-    }
+    files.extend(
+        found
+            .into_iter()
+            .filter(|path| path.file_name().and_then(|name| name.to_str()) == Some("summary.json")),
+    );
 }
 
 fn read_summary(path: &Path) -> Result<GrokSessionSummary, String> {
-    let text = std::fs::read_to_string(path)
+    let text = read_to_string_limited(path, MAX_SESSION_FILE_BYTES)
         .map_err(|e| format!("Failed to read Grok Build session summary: {e}"))?;
     serde_json::from_str(&text)
         .map_err(|e| format!("Failed to parse Grok Build session summary: {e}"))

@@ -11,6 +11,7 @@ use once_cell::sync::OnceCell;
 use serde_json::{json, Value};
 use std::fs;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 use toml_edit::DocumentMut;
 
 pub const CC_SWITCH_CODEX_MODEL_PROVIDER_ID: &str = "custom";
@@ -992,17 +993,28 @@ fn codex_runtime_models_command(candidate: &Path, codex_home: &Path) -> Command 
 fn load_codex_model_template_from_bundled() -> Result<Option<Value>, AppError> {
     for candidate in codex_cli_candidates() {
         let candidate_label = candidate.to_string_lossy();
-        let output = match codex_bundled_models_command(&candidate).output() {
+        let output = match crate::process_utils::output_with_timeout(
+            codex_bundled_models_command(&candidate),
+            Duration::from_secs(10),
+            crate::security_limits::MAX_PROCESS_OUTPUT_BYTES,
+        ) {
             Ok(output) => output,
             Err(err) => {
-                log::debug!("failed to run `{candidate_label} debug models --bundled`: {err}");
+                log::debug!(
+                    "failed to run Codex bundled-model probe ({}): {}",
+                    candidate_label,
+                    err.kind()
+                );
                 continue;
             }
         };
 
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            log::debug!("`{candidate_label} debug models --bundled` failed: {stderr}");
+            log::debug!(
+                "Codex bundled-model probe exited unsuccessfully ({}): {:?}",
+                candidate_label,
+                output.status.code()
+            );
             continue;
         }
 
@@ -1124,7 +1136,11 @@ pub fn probe_codex_runtime_models() -> Result<Vec<CodexRuntimeModel>, AppError> 
     }
 
     for candidate in codex_cli_candidates() {
-        let output = match codex_runtime_models_command(&candidate, &codex_home).output() {
+        let output = match crate::process_utils::output_with_timeout(
+            codex_runtime_models_command(&candidate, &codex_home),
+            Duration::from_secs(10),
+            crate::security_limits::MAX_PROCESS_OUTPUT_BYTES,
+        ) {
             Ok(output) => output,
             Err(error) => {
                 log::debug!(
