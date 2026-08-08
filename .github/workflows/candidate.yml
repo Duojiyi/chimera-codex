@@ -300,33 +300,72 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          appimage=$(find src-tauri/target/release/bundle -type f -name '*.AppImage' -print -quit)
-          deb=$(find src-tauri/target/release/bundle -type f -name '*.deb' -print -quit)
-          rpm_package=$(find src-tauri/target/release/bundle -type f -name '*.rpm' -print -quit)
-          test -s "$appimage"
-          test -s "$appimage.sig"
-          test -s "$deb"
-          test -s "$rpm_package"
+          bundle_root="$GITHUB_WORKSPACE/src-tauri/target/release/bundle"
+          appimage=$(find "$bundle_root" -type f -name '*.AppImage' -print -quit)
+          deb=$(find "$bundle_root" -type f -name '*.deb' -print -quit)
+          rpm_package=$(find "$bundle_root" -type f -name '*.rpm' -print -quit)
+          appimage_sig="${appimage}.sig"
+
+          for artifact in "$appimage" "$appimage_sig" "$deb" "$rpm_package"; do
+            if [[ ! -s "$artifact" ]]; then
+              echo "::error::Missing or empty Linux candidate artifact: ${artifact:-<empty path>}"
+              exit 1
+            fi
+            echo "Validated artifact: $artifact"
+          done
+
           chmod +x "$appimage"
           smoke_root="$RUNNER_TEMP/chimera-linux-smoke"
           rm -rf "$smoke_root"
           mkdir -p "$smoke_root/appimage" "$smoke_root/deb" "$smoke_root/rpm"
           (
             cd "$smoke_root/appimage"
-            "$GITHUB_WORKSPACE/$appimage" --appimage-extract >/dev/null
-            test -x squashfs-root/AppRun
-            find squashfs-root -type f -name '*.desktop' -print -quit | grep -q .
+            "$appimage" --appimage-extract >/dev/null
+            if [[ ! -x squashfs-root/AppRun ]]; then
+              echo "::error::AppImage extraction did not produce an executable AppRun"
+              exit 1
+            fi
+            desktop_entry=$(find squashfs-root -type f -o -type l | grep -E '/[^/]+\.desktop$' | head -1 || true)
+            if [[ -z "$desktop_entry" ]]; then
+              echo "::error::AppImage does not contain a desktop entry"
+              find squashfs-root -maxdepth 4 -type f -o -type l | sort | head -100
+              exit 1
+            fi
+            echo "Validated AppImage desktop entry: $desktop_entry"
           )
           dpkg-deb --info "$deb" >/dev/null
-          dpkg-deb --contents "$deb" | grep -E '/usr/share/applications/|/usr/share/icons/' >/dev/null
+          deb_contents=$(dpkg-deb --contents "$deb")
+          if ! grep -Eq '^\s*\./usr/share/applications/|^\s*\./usr/share/icons/' <<<"$deb_contents"; then
+            echo "::error::Deb package does not contain a desktop entry or icon"
+            printf '%s\n' "$deb_contents"
+            exit 1
+          fi
           dpkg-deb --extract "$deb" "$smoke_root/deb"
-          test -d "$smoke_root/deb/usr/share/applications"
+          deb_desktop=$(find "$smoke_root/deb/usr/share/applications" -type f -o -type l 2>/dev/null | head -1 || true)
+          if [[ -z "$deb_desktop" ]]; then
+            echo "::error::Extracted deb package does not contain a desktop entry"
+            find "$smoke_root/deb/usr/share" -maxdepth 4 -type f -o -type l 2>/dev/null | sort | head -100
+            exit 1
+          fi
+          echo "Validated deb desktop entry: $deb_desktop"
+
           rpm -qip "$rpm_package" >/dev/null
-          rpm -qlp "$rpm_package" | grep -E '/usr/share/applications/|/usr/share/icons/' >/dev/null
+          rpm_contents=$(rpm -qlp "$rpm_package")
+          if ! grep -Eq '^/usr/share/applications/|^/usr/share/icons/' <<<"$rpm_contents"; then
+            echo "::error::RPM package does not contain a desktop entry or icon"
+            printf '%s\n' "$rpm_contents"
+            exit 1
+          fi
           (
             cd "$smoke_root/rpm"
-            rpm2cpio "$GITHUB_WORKSPACE/$rpm_package" | cpio -idm --quiet
-            test -d usr/share/applications
+            rpm2cpio "$rpm_package" | cpio -idm --quiet
+            rpm_desktop=$(find usr/share/applications -type f -o -type l 2>/dev/null | head -1 || true)
+            if [[ -z "$rpm_desktop" ]]; then
+              echo "::error::Extracted RPM package does not contain a desktop entry"
+              find usr/share -maxdepth 4 -type f -o -type l 2>/dev/null | sort | head -100
+              exit 1
+            fi
+            echo "Validated RPM desktop entry: $rpm_desktop"
           )
 
       - name: Collect candidate evidence
