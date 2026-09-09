@@ -54,7 +54,7 @@ const REASONING_CONTENT_PRESERVE_VENDOR_HINTS: &[&str] =
 // 本机 A/B 实测确认）。两个头必须成对发送，缺一即 404；version 需 ≥ 目标模型
 // catalog 的 minimal_client_version（luna=0.144.0），新模型抬门槛时同步 bump。
 const CODEX_OAUTH_ORIGINATOR: &str = "codex_cli_rs";
-const CODEX_OAUTH_CLIENT_VERSION: &str = "0.144.1";
+const CODEX_OAUTH_CLIENT_VERSION: &str = "0.153.4";
 
 /// 获取 Claude 供应商的 API 格式
 ///

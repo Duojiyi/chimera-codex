@@ -10,7 +10,12 @@ use std::time::Duration;
 const CODEX_OAUTH_MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models";
 const CODEX_OAUTH_FETCH_TIMEOUT_SECS: u64 = 15;
 const ERROR_BODY_MAX_CHARS: usize = 512;
-const CODEX_OAUTH_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+// The backend filters the catalog by `client_version >= minimal_client_version`
+// (gpt-6-astra requires 0.153.0). Must stay identical to the `originator` /
+// `version` headers the forwarding path sends (`proxy/providers/claude.rs`),
+// otherwise the list shows models the request path is not allowed to use.
+const CODEX_OAUTH_CLIENT_VERSION: &str = "0.153.4";
+const CODEX_OAUTH_ORIGINATOR: &str = "codex_cli_rs";
 
 pub async fn fetch_models_with_token(
     token: &str,
@@ -21,7 +26,7 @@ pub async fn fetch_models_with_token(
         .get(CODEX_OAUTH_MODELS_URL)
         .query(&[("client_version", CODEX_OAUTH_CLIENT_VERSION)])
         .header("Authorization", format!("Bearer {token}"))
-        .header("originator", "cc-switch")
+        .header("originator", CODEX_OAUTH_ORIGINATOR)
         .header("chatgpt-account-id", account_id)
         .timeout(Duration::from_secs(CODEX_OAUTH_FETCH_TIMEOUT_SECS))
         .send()
@@ -173,6 +178,20 @@ mod tests {
 
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id, "gpt-5.4");
+    }
+
+    #[test]
+    fn codex_oauth_client_version_meets_gpt6_astra_floor() {
+        let parts: Vec<u64> = CODEX_OAUTH_CLIENT_VERSION
+            .split('.')
+            .map(|part| part.parse().expect("numeric version component"))
+            .collect();
+        assert_eq!(parts.len(), 3);
+        assert!(
+            (parts[0], parts[1], parts[2]) >= (0, 153, 0),
+            "gpt-6-astra requires minimal_client_version 0.153.0"
+        );
+        assert_eq!(CODEX_OAUTH_ORIGINATOR, "codex_cli_rs");
     }
 
     #[test]

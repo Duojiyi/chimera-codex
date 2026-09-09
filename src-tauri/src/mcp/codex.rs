@@ -42,6 +42,161 @@ fn collect_enabled_servers(cfg: &McpConfig) -> HashMap<String, Value> {
     out
 }
 
+/// Convert one live `[mcp_servers.<id>]` table into the unified JSON spec.
+///
+/// Codex's own schema has no `type` key: it infers stdio from `command` and
+/// streamable HTTP from `url` (`RawMcpServerConfig`, Codex 0.153.4). A table
+/// written by Codex itself or by hand therefore never carries `type`, so the
+/// transport must be inferred the same way here instead of defaulting to
+/// stdio — which used to make every native HTTP server fail import with
+/// "缺少有效的 command 字段". An explicit `type` (written by older Chimera++
+/// builds) is still honoured. Returns `None` for tables Codex could not load
+/// either (unknown transport).
+fn codex_mcp_table_to_spec(id: &str, entry_tbl: &toml::value::Table) -> Option<Value> {
+    let typ = match entry_tbl.get("type").and_then(|v| v.as_str()) {
+        Some("streamable_http") => "http",
+        Some(explicit) => explicit,
+        None if entry_tbl.contains_key("command") => "stdio",
+        None if entry_tbl.contains_key("url") => "http",
+        None => "stdio",
+    };
+
+    // 构建 JSON 规范
+    let mut spec = serde_json::Map::new();
+    spec.insert("type".into(), json!(typ));
+
+    // 核心字段（需要手动处理的字段）
+    let core_fields = match typ {
+        "stdio" => vec!["type", "command", "args", "env", "cwd"],
+        // DB 中的统一规范使用 headers，Codex TOML 使用 http_headers。
+        // 两者都必须视为核心字段，避免鉴权值落入通用日志路径。
+        "http" | "sse" => vec!["type", "url", "headers", "http_headers"],
+        _ => vec!["type"],
+    };
+
+    // 1. 处理核心字段（强类型）
+    match typ {
+        "stdio" => {
+            if let Some(cmd) = entry_tbl.get("command").and_then(|v| v.as_str()) {
+                spec.insert("command".into(), json!(cmd));
+            }
+            if let Some(args) = entry_tbl.get("args").and_then(|v| v.as_array()) {
+                let arr = args
+                    .iter()
+                    .filter_map(|x| x.as_str())
+                    .map(|s| json!(s))
+                    .collect::<Vec<_>>();
+                if !arr.is_empty() {
+                    spec.insert("args".into(), serde_json::Value::Array(arr));
+                }
+            }
+            if let Some(cwd) = entry_tbl.get("cwd").and_then(|v| v.as_str()) {
+                if !cwd.trim().is_empty() {
+                    spec.insert("cwd".into(), json!(cwd));
+                }
+            }
+            if let Some(env_tbl) = entry_tbl.get("env").and_then(|v| v.as_table()) {
+                let mut env_json = serde_json::Map::new();
+                for (k, v) in env_tbl.iter() {
+                    if let Some(sv) = v.as_str() {
+                        env_json.insert(k.clone(), json!(sv));
+                    }
+                }
+                if !env_json.is_empty() {
+                    spec.insert("env".into(), serde_json::Value::Object(env_json));
+                }
+            }
+        }
+        "http" | "sse" => {
+            if let Some(url) = entry_tbl.get("url").and_then(|v| v.as_str()) {
+                spec.insert("url".into(), json!(url));
+            }
+            // Read from http_headers (correct Codex format) or headers (legacy) with priority to http_headers
+            let headers_tbl = entry_tbl
+                .get("http_headers")
+                .and_then(|v| v.as_table())
+                .or_else(|| entry_tbl.get("headers").and_then(|v| v.as_table()));
+
+            if let Some(headers_tbl) = headers_tbl {
+                let mut headers_json = serde_json::Map::new();
+                for (k, v) in headers_tbl.iter() {
+                    if let Some(sv) = v.as_str() {
+                        headers_json.insert(k.clone(), json!(sv));
+                    }
+                }
+                if !headers_json.is_empty() {
+                    spec.insert("headers".into(), serde_json::Value::Object(headers_json));
+                }
+            }
+        }
+        _ => {
+            log::warn!("跳过未知类型 '{typ}' 的 Codex MCP 项 '{id}'");
+            return None;
+        }
+    }
+
+    // 2. 处理扩展字段和其他未知字段（通用 TOML → JSON 转换）
+    for (key, toml_val) in entry_tbl.iter() {
+        // 跳过已处理的核心字段
+        if core_fields.contains(&key.as_str()) {
+            continue;
+        }
+
+        // 通用 TOML 值到 JSON 值转换
+        let json_val = match toml_val {
+            toml::Value::String(s) => Some(json!(s)),
+            toml::Value::Integer(i) => Some(json!(i)),
+            toml::Value::Float(f) => Some(json!(f)),
+            toml::Value::Boolean(b) => Some(json!(b)),
+            toml::Value::Array(arr) => {
+                // 只支持简单类型数组
+                let json_arr: Vec<serde_json::Value> = arr
+                    .iter()
+                    .filter_map(|item| match item {
+                        toml::Value::String(s) => Some(json!(s)),
+                        toml::Value::Integer(i) => Some(json!(i)),
+                        toml::Value::Float(f) => Some(json!(f)),
+                        toml::Value::Boolean(b) => Some(json!(b)),
+                        _ => None,
+                    })
+                    .collect();
+                if !json_arr.is_empty() {
+                    Some(serde_json::Value::Array(json_arr))
+                } else {
+                    log::debug!("跳过复杂数组字段 '{key}' (TOML → JSON)");
+                    None
+                }
+            }
+            toml::Value::Table(tbl) => {
+                // 浅层表转为 JSON 对象（仅支持字符串值）
+                let mut json_obj = serde_json::Map::new();
+                for (k, v) in tbl.iter() {
+                    if let Some(s) = v.as_str() {
+                        json_obj.insert(k.clone(), json!(s));
+                    }
+                }
+                if !json_obj.is_empty() {
+                    Some(serde_json::Value::Object(json_obj))
+                } else {
+                    log::debug!("跳过复杂对象字段 '{key}' (TOML → JSON)");
+                    None
+                }
+            }
+            toml::Value::Datetime(_) => {
+                log::debug!("跳过日期时间字段 '{key}' (TOML → JSON)");
+                None
+            }
+        };
+
+        if let Some(val) = json_val {
+            spec.insert(key.clone(), val);
+            log::debug!("导入扩展字段 '{key}'（值已省略）");
+        }
+    }
+
+    Some(serde_json::Value::Object(spec))
+}
+
 /// 从 ~/.codex/config.toml 导入 MCP 到统一结构（v3.7.0+）
 ///
 /// 格式支持：
@@ -71,146 +226,9 @@ pub fn import_from_codex(config: &mut MultiAppConfig) -> Result<usize, AppError>
                 continue;
             };
 
-            // type 缺省为 stdio
-            let typ = entry_tbl
-                .get("type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("stdio");
-
-            // 构建 JSON 规范
-            let mut spec = serde_json::Map::new();
-            spec.insert("type".into(), json!(typ));
-
-            // 核心字段（需要手动处理的字段）
-            let core_fields = match typ {
-                "stdio" => vec!["type", "command", "args", "env", "cwd"],
-                // DB 中的统一规范使用 headers，Codex TOML 使用 http_headers。
-                // 两者都必须视为核心字段，避免鉴权值落入通用日志路径。
-                "http" | "sse" => vec!["type", "url", "headers", "http_headers"],
-                _ => vec!["type"],
+            let Some(spec_v) = codex_mcp_table_to_spec(id, entry_tbl) else {
+                continue;
             };
-
-            // 1. 处理核心字段（强类型）
-            match typ {
-                "stdio" => {
-                    if let Some(cmd) = entry_tbl.get("command").and_then(|v| v.as_str()) {
-                        spec.insert("command".into(), json!(cmd));
-                    }
-                    if let Some(args) = entry_tbl.get("args").and_then(|v| v.as_array()) {
-                        let arr = args
-                            .iter()
-                            .filter_map(|x| x.as_str())
-                            .map(|s| json!(s))
-                            .collect::<Vec<_>>();
-                        if !arr.is_empty() {
-                            spec.insert("args".into(), serde_json::Value::Array(arr));
-                        }
-                    }
-                    if let Some(cwd) = entry_tbl.get("cwd").and_then(|v| v.as_str()) {
-                        if !cwd.trim().is_empty() {
-                            spec.insert("cwd".into(), json!(cwd));
-                        }
-                    }
-                    if let Some(env_tbl) = entry_tbl.get("env").and_then(|v| v.as_table()) {
-                        let mut env_json = serde_json::Map::new();
-                        for (k, v) in env_tbl.iter() {
-                            if let Some(sv) = v.as_str() {
-                                env_json.insert(k.clone(), json!(sv));
-                            }
-                        }
-                        if !env_json.is_empty() {
-                            spec.insert("env".into(), serde_json::Value::Object(env_json));
-                        }
-                    }
-                }
-                "http" | "sse" => {
-                    if let Some(url) = entry_tbl.get("url").and_then(|v| v.as_str()) {
-                        spec.insert("url".into(), json!(url));
-                    }
-                    // Read from http_headers (correct Codex format) or headers (legacy) with priority to http_headers
-                    let headers_tbl = entry_tbl
-                        .get("http_headers")
-                        .and_then(|v| v.as_table())
-                        .or_else(|| entry_tbl.get("headers").and_then(|v| v.as_table()));
-
-                    if let Some(headers_tbl) = headers_tbl {
-                        let mut headers_json = serde_json::Map::new();
-                        for (k, v) in headers_tbl.iter() {
-                            if let Some(sv) = v.as_str() {
-                                headers_json.insert(k.clone(), json!(sv));
-                            }
-                        }
-                        if !headers_json.is_empty() {
-                            spec.insert("headers".into(), serde_json::Value::Object(headers_json));
-                        }
-                    }
-                }
-                _ => {
-                    log::warn!("跳过未知类型 '{typ}' 的 Codex MCP 项 '{id}'");
-                    return changed;
-                }
-            }
-
-            // 2. 处理扩展字段和其他未知字段（通用 TOML → JSON 转换）
-            for (key, toml_val) in entry_tbl.iter() {
-                // 跳过已处理的核心字段
-                if core_fields.contains(&key.as_str()) {
-                    continue;
-                }
-
-                // 通用 TOML 值到 JSON 值转换
-                let json_val = match toml_val {
-                    toml::Value::String(s) => Some(json!(s)),
-                    toml::Value::Integer(i) => Some(json!(i)),
-                    toml::Value::Float(f) => Some(json!(f)),
-                    toml::Value::Boolean(b) => Some(json!(b)),
-                    toml::Value::Array(arr) => {
-                        // 只支持简单类型数组
-                        let json_arr: Vec<serde_json::Value> = arr
-                            .iter()
-                            .filter_map(|item| match item {
-                                toml::Value::String(s) => Some(json!(s)),
-                                toml::Value::Integer(i) => Some(json!(i)),
-                                toml::Value::Float(f) => Some(json!(f)),
-                                toml::Value::Boolean(b) => Some(json!(b)),
-                                _ => None,
-                            })
-                            .collect();
-                        if !json_arr.is_empty() {
-                            Some(serde_json::Value::Array(json_arr))
-                        } else {
-                            log::debug!("跳过复杂数组字段 '{key}' (TOML → JSON)");
-                            None
-                        }
-                    }
-                    toml::Value::Table(tbl) => {
-                        // 浅层表转为 JSON 对象（仅支持字符串值）
-                        let mut json_obj = serde_json::Map::new();
-                        for (k, v) in tbl.iter() {
-                            if let Some(s) = v.as_str() {
-                                json_obj.insert(k.clone(), json!(s));
-                            }
-                        }
-                        if !json_obj.is_empty() {
-                            Some(serde_json::Value::Object(json_obj))
-                        } else {
-                            log::debug!("跳过复杂对象字段 '{key}' (TOML → JSON)");
-                            None
-                        }
-                    }
-                    toml::Value::Datetime(_) => {
-                        log::debug!("跳过日期时间字段 '{key}' (TOML → JSON)");
-                        None
-                    }
-                };
-
-                if let Some(val) = json_val {
-                    spec.insert(key.clone(), val);
-                    log::debug!("导入扩展字段 '{key}'（值已省略）");
-                }
-            }
-
-            let spec_v = serde_json::Value::Object(spec);
 
             // 校验：单项失败继续处理
             if let Err(e) = validate_server_spec(&spec_v) {
@@ -553,61 +571,130 @@ fn json_value_to_toml_item(value: &Value, field_name: &str) -> Option<toml_edit:
     }
 }
 
+/// Optional `[mcp_servers.*]` keys Codex 0.153.4 accepts for every transport
+/// (`RawMcpServerConfig`, codex-rs/config/src/mcp_types.rs). Codex has no
+/// `type` key: the transport is inferred from `command` (stdio) vs `url`
+/// (streamable HTTP). A key from the other transport is a hard error
+/// ("url is not supported for stdio"), a table with neither is "invalid
+/// transport", and under `--strict-config` any key Codex does not know is an
+/// "unknown configuration field" — each of these rejects the WHOLE
+/// config.toml, not just that server. Only these keys are projected.
+const CODEX_MCP_SHARED_FIELDS: &[&str] = &[
+    "enabled",
+    "required",
+    "environment_id",
+    "startup_timeout_sec",
+    "startup_timeout_ms",
+    "tool_timeout_sec",
+    "supports_parallel_tool_calls",
+    "omit_tools_from",
+    "default_tools_approval_mode",
+    "enabled_tools",
+    "disabled_tools",
+    "scopes",
+    "name",
+    "tools",
+];
+const CODEX_MCP_STDIO_FIELDS: &[&str] = &["command", "args", "env", "env_vars", "cwd"];
+const CODEX_MCP_HTTP_FIELDS: &[&str] = &[
+    "url",
+    "bearer_token_env_var",
+    "http_headers",
+    "env_http_headers",
+    "http_headers_helper",
+    "oauth",
+    "oauth_resource",
+    "auth",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexMcpTransport {
+    Stdio,
+    StreamableHttp,
+}
+
+/// Resolve the transport Codex will load for a unified server spec. An explicit
+/// `type` wins when Codex can serve it (`sse` is kept as an alias of streamable
+/// HTTP because the unified spec still carries it); without `type` the
+/// transport is inferred from `command`/`url` exactly like Codex itself does.
+fn codex_mcp_transport(
+    spec: &serde_json::Map<String, Value>,
+) -> Result<CodexMcpTransport, AppError> {
+    let has_command = spec
+        .get("command")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+    let has_url = spec
+        .get("url")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+
+    let transport = match spec.get("type").and_then(Value::as_str).map(str::trim) {
+        Some("stdio") => CodexMcpTransport::Stdio,
+        Some("http" | "sse" | "streamable_http") => CodexMcpTransport::StreamableHttp,
+        None | Some("") if has_command => CodexMcpTransport::Stdio,
+        None | Some("") if has_url => CodexMcpTransport::StreamableHttp,
+        None | Some("") => {
+            return Err(AppError::McpValidation(
+                "MCP 服务器缺少 command（stdio）或 url（HTTP），Codex 会以 invalid transport 拒绝整个 config.toml"
+                    .into(),
+            ));
+        }
+        Some(other) => {
+            return Err(AppError::McpValidation(format!(
+                "MCP 服务器 type '{other}' 不是 Codex 支持的传输（stdio/http/sse），已拒绝写入"
+            )));
+        }
+    };
+
+    match transport {
+        CodexMcpTransport::Stdio if !has_command => Err(AppError::McpValidation(
+            "stdio 类型的 MCP 服务器缺少 command，Codex 会拒绝加载整个 config.toml".into(),
+        )),
+        CodexMcpTransport::StreamableHttp if !has_url => Err(AppError::McpValidation(
+            "HTTP/SSE 类型的 MCP 服务器缺少 url，Codex 会拒绝加载整个 config.toml".into(),
+        )),
+        transport => Ok(transport),
+    }
+}
+
 /// Helper: 将 JSON MCP 服务器规范转换为 toml_edit::Table
 ///
 /// 策略：
-/// 1. 核心字段（type, command, args, url, headers, env, cwd）使用强类型处理
-/// 2. 扩展字段（timeout、retry 等）通过白名单列表自动转换
-/// 3. 其他未知字段使用通用转换器尝试转换
+/// 1. 传输由 `codex_mcp_transport` 决定；缺 command/url 或未知 type 直接报错，
+///    绝不写出 Codex 会整份拒载的表
+/// 2. 核心字段（command, args, env, cwd / url, headers→http_headers）强类型处理
+/// 3. 其余字段仅写出 Codex 0.153.4 识别的键（按传输过滤），未知键记录字段名后跳过
 pub(super) fn json_server_to_toml_table(spec: &Value) -> Result<toml_edit::Table, AppError> {
     use toml_edit::{Array, Item, Table};
 
-    let mut t = Table::new();
-    let typ = spec.get("type").and_then(|v| v.as_str()).unwrap_or("stdio");
-    t["type"] = toml_edit::value(typ);
+    let obj = spec
+        .as_object()
+        .ok_or_else(|| AppError::McpValidation("MCP 服务器连接定义必须为 JSON 对象".into()))?;
+    let transport = codex_mcp_transport(obj)?;
 
-    // 定义核心字段（已在下方处理，跳过通用转换）
-    let core_fields = match typ {
-        "stdio" => vec!["type", "command", "args", "env", "cwd"],
-        "http" | "sse" => vec!["type", "url", "headers", "http_headers"],
-        _ => vec!["type"],
+    let mut t = Table::new();
+    // Keys handled by the strongly-typed block below; `type` is our own marker
+    // and never reaches Codex.
+    let core_fields: &[&str] = match transport {
+        CodexMcpTransport::Stdio => &["type", "command", "args", "env", "cwd"],
+        CodexMcpTransport::StreamableHttp => &["type", "url", "headers", "http_headers"],
+    };
+    let transport_fields: &[&str] = match transport {
+        CodexMcpTransport::Stdio => CODEX_MCP_STDIO_FIELDS,
+        CodexMcpTransport::StreamableHttp => CODEX_MCP_HTTP_FIELDS,
     };
 
-    // 定义扩展字段白名单（Codex 常见可选字段）
-    let extended_fields = [
-        // 通用字段
-        "timeout",
-        "timeout_ms",
-        "startup_timeout_ms",
-        "startup_timeout_sec",
-        "connection_timeout",
-        "read_timeout",
-        "debug",
-        "log_level",
-        "disabled",
-        // stdio 特有
-        "shell",
-        "encoding",
-        "working_dir",
-        "restart_on_exit",
-        "max_restart_count",
-        // http/sse 特有
-        "retry_count",
-        "max_retry_attempts",
-        "retry_delay",
-        "cache_tools_list",
-        "verify_ssl",
-        "insecure",
-        "proxy",
-    ];
-
-    // 1. 处理核心字段（强类型）
-    match typ {
-        "stdio" => {
-            let cmd = spec.get("command").and_then(|v| v.as_str()).unwrap_or("");
+    match transport {
+        CodexMcpTransport::Stdio => {
+            let cmd = obj
+                .get("command")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default();
             t["command"] = toml_edit::value(cmd);
 
-            if let Some(args) = spec.get("args").and_then(|v| v.as_array()) {
+            if let Some(args) = obj.get("args").and_then(|v| v.as_array()) {
                 let mut arr_v = Array::default();
                 for a in args.iter().filter_map(|x| x.as_str()) {
                     arr_v.push(a);
@@ -617,13 +704,13 @@ pub(super) fn json_server_to_toml_table(spec: &Value) -> Result<toml_edit::Table
                 }
             }
 
-            if let Some(cwd) = spec.get("cwd").and_then(|v| v.as_str()) {
+            if let Some(cwd) = obj.get("cwd").and_then(|v| v.as_str()) {
                 if !cwd.trim().is_empty() {
                     t["cwd"] = toml_edit::value(cwd);
                 }
             }
 
-            if let Some(env) = spec.get("env").and_then(|v| v.as_object()) {
+            if let Some(env) = obj.get("env").and_then(|v| v.as_object()) {
                 let mut env_tbl = Table::new();
                 for (k, v) in env.iter() {
                     if let Some(s) = v.as_str() {
@@ -635,11 +722,22 @@ pub(super) fn json_server_to_toml_table(spec: &Value) -> Result<toml_edit::Table
                 }
             }
         }
-        "http" | "sse" => {
-            let url = spec.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        CodexMcpTransport::StreamableHttp => {
+            let url = obj
+                .get("url")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default();
             t["url"] = toml_edit::value(url);
 
-            if let Some(headers) = spec.get("headers").and_then(|v| v.as_object()) {
+            // The unified spec stores `headers`; Codex reads `http_headers`.
+            // Accept either spelling so a spec imported with Codex's own key
+            // does not silently lose its authentication headers.
+            let headers = obj
+                .get("headers")
+                .and_then(|v| v.as_object())
+                .or_else(|| obj.get("http_headers").and_then(|v| v.as_object()));
+            if let Some(headers) = headers {
                 let mut h_tbl = Table::new();
                 for (k, v) in headers.iter() {
                     if let Some(s) = v.as_str() {
@@ -651,28 +749,24 @@ pub(super) fn json_server_to_toml_table(spec: &Value) -> Result<toml_edit::Table
                 }
             }
         }
-        _ => {}
     }
 
-    // 2. 处理扩展字段和其他未知字段
-    if let Some(obj) = spec.as_object() {
-        for (key, value) in obj {
-            // 跳过已处理的核心字段
-            if core_fields.contains(&key.as_str()) {
-                continue;
-            }
-
-            // 尝试使用通用转换器
-            if let Some(toml_item) = json_value_to_toml_item(value, key) {
-                t[&key[..]] = toml_item;
-
-                // 只记录字段名：未知字段同样可能携带 token / secret。
-                if extended_fields.contains(&key.as_str()) {
-                    log::debug!("已转换扩展字段 '{key}'（值已省略）");
-                } else {
-                    log::debug!("已转换自定义字段 '{key}'（值已省略）");
-                }
-            }
+    for (key, value) in obj {
+        if core_fields.contains(&key.as_str()) {
+            continue;
+        }
+        // 只记录字段名：未知字段同样可能携带 token / secret。
+        if !CODEX_MCP_SHARED_FIELDS.contains(&key.as_str())
+            && !transport_fields.contains(&key.as_str())
+        {
+            log::warn!(
+                "跳过 Codex 不识别的 MCP 字段 '{key}'（值已省略，strict-config 会拒绝未知键）"
+            );
+            continue;
+        }
+        if let Some(toml_item) = json_value_to_toml_item(value, key) {
+            t[&key[..]] = toml_item;
+            log::debug!("已转换扩展字段 '{key}'（值已省略）");
         }
     }
 
@@ -692,7 +786,7 @@ mod tests {
                 "Authorization": "Bearer top-secret",
                 "X-Api-Key": "also-secret"
             },
-            "timeout": 30
+            "startup_timeout_sec": 30
         }))
         .unwrap();
 
@@ -709,8 +803,187 @@ mod tests {
             "legacy headers must not be emitted a second time"
         );
         assert_eq!(
-            table.get("timeout").and_then(|item| item.as_integer()),
+            table
+                .get("startup_timeout_sec")
+                .and_then(|item| item.as_integer()),
             Some(30)
         );
+        assert!(
+            table.get("type").is_none(),
+            "Codex has no `type` key; strict-config rejects it as unknown"
+        );
+    }
+
+    #[test]
+    fn http_spec_with_codex_native_http_headers_key_keeps_headers() {
+        let table = json_server_to_toml_table(&json!({
+            "type": "http",
+            "url": "https://mcp.example.com",
+            "http_headers": { "Authorization": "Bearer top-secret" }
+        }))
+        .unwrap();
+        let headers = table
+            .get("http_headers")
+            .and_then(|item| item.as_table())
+            .expect("http_headers spelled Codex-style must survive");
+        assert_eq!(
+            headers.get("Authorization").and_then(|item| item.as_str()),
+            Some("Bearer top-secret")
+        );
+    }
+
+    #[test]
+    fn transport_without_command_or_url_is_rejected_before_write() {
+        // Each of these would make Codex reject the WHOLE config.toml
+        // ("invalid transport" / "missing field"), so the writer must fail
+        // instead of producing the table.
+        for spec in [
+            json!({ "type": "stdio" }),
+            json!({ "type": "stdio", "command": "   " }),
+            json!({ "type": "http" }),
+            json!({ "type": "sse", "url": "" }),
+            json!({ "args": ["--flag"] }),
+            json!({}),
+        ] {
+            assert!(
+                json_server_to_toml_table(&spec).is_err(),
+                "spec must be rejected: {spec}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_transport_type_is_rejected_before_write() {
+        let err = json_server_to_toml_table(&json!({
+            "type": "websocket",
+            "url": "wss://mcp.example.com"
+        }))
+        .expect_err("unknown transport must not be written");
+        assert!(err.to_string().contains("websocket"), "got: {err}");
+    }
+
+    #[test]
+    fn transport_is_inferred_from_command_or_url_when_type_is_absent() {
+        let stdio = json_server_to_toml_table(&json!({ "command": "npx", "args": ["-y", "x"] }))
+            .expect("command implies stdio");
+        assert_eq!(
+            stdio.get("command").and_then(|item| item.as_str()),
+            Some("npx")
+        );
+        assert!(stdio.get("url").is_none());
+
+        let http = json_server_to_toml_table(&json!({ "url": "https://mcp.example.com/mcp" }))
+            .expect("url implies streamable http");
+        assert_eq!(
+            http.get("url").and_then(|item| item.as_str()),
+            Some("https://mcp.example.com/mcp")
+        );
+        assert!(http.get("command").is_none());
+    }
+
+    #[test]
+    fn cross_transport_and_codex_unknown_keys_are_not_written() {
+        // `url`/`http_headers` on a stdio table are hard Codex errors
+        // ("url is not supported for stdio"); `timeout`/`verify_ssl` are
+        // unknown to Codex and fail --strict-config. Codex-known optional
+        // keys must still be projected.
+        let table = json_server_to_toml_table(&json!({
+            "type": "stdio",
+            "command": "uvx",
+            "url": "https://leak.example",
+            "http_headers": { "Authorization": "Bearer nope" },
+            "timeout": 30,
+            "verify_ssl": false,
+            "startup_timeout_sec": 20,
+            "enabled_tools": ["read_file"],
+            "cwd": "/srv"
+        }))
+        .unwrap();
+
+        for forbidden in ["type", "url", "http_headers", "timeout", "verify_ssl"] {
+            assert!(
+                table.get(forbidden).is_none(),
+                "`{forbidden}` must not reach Codex config"
+            );
+        }
+        assert_eq!(
+            table
+                .get("startup_timeout_sec")
+                .and_then(|item| item.as_integer()),
+            Some(20)
+        );
+        assert!(table.get("enabled_tools").is_some());
+        assert_eq!(
+            table.get("cwd").and_then(|item| item.as_str()),
+            Some("/srv")
+        );
+
+        let http = json_server_to_toml_table(&json!({
+            "type": "http",
+            "url": "https://mcp.example.com",
+            "args": ["--should-not-leak"],
+            "env": { "TOKEN": "x" },
+            "bearer_token_env_var": "MCP_TOKEN"
+        }))
+        .unwrap();
+        assert!(http.get("args").is_none(), "args is a stdio-only key");
+        assert!(http.get("env").is_none(), "env is a stdio-only key");
+        assert_eq!(
+            http.get("bearer_token_env_var")
+                .and_then(|item| item.as_str()),
+            Some("MCP_TOKEN")
+        );
+    }
+
+    #[test]
+    fn import_infers_transport_for_codex_native_tables() {
+        // Codex itself never writes `type`; a native `url = ...` table used to
+        // be read as stdio and dropped for lacking `command`.
+        let root: toml::Table = toml::from_str(
+            r#"
+[mcp_servers.remote]
+url = "https://mcp.example.com/mcp"
+bearer_token_env_var = "MCP_TOKEN"
+
+[mcp_servers.remote.http_headers]
+X-Team = "core"
+
+[mcp_servers.local]
+command = "npx"
+args = ["-y", "server"]
+
+[mcp_servers.legacy_sse]
+type = "sse"
+url = "https://sse.example.com"
+
+[mcp_servers.newer]
+type = "streamable_http"
+url = "https://new.example.com/mcp"
+"#,
+        )
+        .unwrap();
+        let servers = root["mcp_servers"].as_table().unwrap();
+
+        let remote = codex_mcp_table_to_spec("remote", servers["remote"].as_table().unwrap())
+            .expect("url table imports");
+        assert_eq!(remote["type"], "http");
+        assert_eq!(remote["url"], "https://mcp.example.com/mcp");
+        assert_eq!(remote["headers"]["X-Team"], "core");
+        assert_eq!(remote["bearer_token_env_var"], "MCP_TOKEN");
+        validate_server_spec(&remote).expect("imported http spec validates");
+
+        let local = codex_mcp_table_to_spec("local", servers["local"].as_table().unwrap())
+            .expect("command table imports");
+        assert_eq!(local["type"], "stdio");
+        assert_eq!(local["command"], "npx");
+
+        let legacy =
+            codex_mcp_table_to_spec("legacy_sse", servers["legacy_sse"].as_table().unwrap())
+                .expect("explicit sse type is honoured");
+        assert_eq!(legacy["type"], "sse");
+
+        let newer = codex_mcp_table_to_spec("newer", servers["newer"].as_table().unwrap())
+            .expect("streamable_http maps to http");
+        assert_eq!(newer["type"], "http");
     }
 }
