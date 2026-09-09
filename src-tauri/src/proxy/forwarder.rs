@@ -65,9 +65,25 @@ pub struct ForwardResult {
     /// usage 归因不能依赖 ctx.request_model（映射前的客户端别名）：上游响应
     /// 缺失 model 或回显别名时，接管流量会被记成 claude-* 并按其定价计费。
     pub outbound_model: Option<String>,
+    /// How a Codex request was bridged to its upstream, decided once when the
+    /// request body was transformed. Response handling dispatches on this
+    /// instead of re-deriving the protocol from the provider's default: with a
+    /// mixed catalog the default is wrong for exactly the models that were
+    /// mapped to another protocol, which fed Chat streams to the Responses
+    /// passthrough and native streams to the Chat converter.
+    pub codex_bridge: Option<super::codex_url::CodexUpstreamProtocol>,
     /// 活跃连接 RAII guard：随响应一起流转到 response_processor / handle_claude_transform，
     /// 最终被 move 进流式 body future（或非流式响应作用域），覆盖整个响应生命周期。
     pub(crate) connection_guard: Option<ActiveConnectionGuard>,
+}
+
+/// Successful upstream exchange as returned by [`Forwarder::forward`] to the
+/// retry loop, before provider bookkeeping wraps it into a [`ForwardResult`].
+pub(crate) struct Forwarded {
+    pub response: ProxyResponse,
+    pub claude_api_format: Option<String>,
+    pub outbound_model: Option<String>,
+    pub codex_bridge: Option<super::codex_url::CodexUpstreamProtocol>,
 }
 
 pub struct ForwardError {
@@ -490,7 +506,12 @@ impl RequestForwarder {
                 )
                 .await
             {
-                Ok((response, claude_api_format, outbound_model)) => {
+                Ok(Forwarded {
+                    response,
+                    claude_api_format,
+                    outbound_model,
+                    codex_bridge,
+                }) => {
                     // 成功：普通闭合熔断状态异步记录，避免阻塞流式首包返回；
                     // HalfOpen 探测仍同步等待，保证 permit 与熔断状态及时释放。
                     self.record_success_result(&provider.id, app_type_str, used_half_open_permit)
@@ -539,6 +560,7 @@ impl RequestForwarder {
                         provider: provider.clone(),
                         claude_api_format,
                         outbound_model,
+                        codex_bridge,
                         connection_guard: None,
                     });
                 }
@@ -589,7 +611,12 @@ impl RequestForwarder {
                                 )
                                 .await
                             {
-                                Ok((response, claude_api_format, outbound_model)) => {
+                                Ok(Forwarded {
+                                    response,
+                                    claude_api_format,
+                                    outbound_model,
+                                    codex_bridge,
+                                }) => {
                                     log::info!(
                                         "[{app_type_str}] [Media] Unsupported-image retry succeeded"
                                     );
@@ -642,6 +669,7 @@ impl RequestForwarder {
                                         provider: provider.clone(),
                                         claude_api_format,
                                         outbound_model,
+                                        codex_bridge,
                                         connection_guard: None,
                                     });
                                 }
@@ -735,7 +763,12 @@ impl RequestForwarder {
                                     )
                                     .await
                                 {
-                                    Ok((response, claude_api_format, outbound_model)) => {
+                                    Ok(Forwarded {
+                                        response,
+                                        claude_api_format,
+                                        outbound_model,
+                                        codex_bridge,
+                                    }) => {
                                         log::info!("[{app_type_str}] [RECT-002] 整流重试成功");
                                         self.record_success_result(
                                             &provider.id,
@@ -791,6 +824,7 @@ impl RequestForwarder {
                                             provider: provider.clone(),
                                             claude_api_format,
                                             outbound_model,
+                                            codex_bridge,
                                             connection_guard: None,
                                         });
                                     }
@@ -901,7 +935,12 @@ impl RequestForwarder {
                                 )
                                 .await
                             {
-                                Ok((response, claude_api_format, outbound_model)) => {
+                                Ok(Forwarded {
+                                    response,
+                                    claude_api_format,
+                                    outbound_model,
+                                    codex_bridge,
+                                }) => {
                                     log::info!("[{app_type_str}] [RECT-011] budget 整流重试成功");
                                     self.record_success_result(
                                         &provider.id,
@@ -951,6 +990,7 @@ impl RequestForwarder {
                                         provider: provider.clone(),
                                         claude_api_format,
                                         outbound_model,
+                                        codex_bridge,
                                         connection_guard: None,
                                     });
                                 }
@@ -1109,8 +1149,8 @@ impl RequestForwarder {
 
     /// 转发单个请求（使用适配器）
     ///
-    /// 成功时返回 `(response, claude_api_format, outbound_model)`，其中
-    /// `outbound_model` 是最终发往上游的模型名（所有映射/改写之后）。
+    /// 成功时返回 [`Forwarded`]，其中 `outbound_model` 是最终发往上游的模型名
+    /// （所有映射/改写之后），`codex_bridge` 是本次请求实际使用的 Codex 桥接协议。
     #[allow(clippy::too_many_arguments)]
     async fn forward(
         &self,
@@ -1122,7 +1162,7 @@ impl RequestForwarder {
         headers: &axum::http::HeaderMap,
         extensions: &Extensions,
         adapter: &dyn ProviderAdapter,
-    ) -> Result<(ProxyResponse, Option<String>, Option<String>), ProxyError> {
+    ) -> Result<Forwarded, ProxyError> {
         // 使用适配器提取 base_url
         let mut base_url = adapter.extract_base_url(provider)?;
 
@@ -1183,10 +1223,17 @@ impl RequestForwarder {
                 codex_upstream_model.as_deref(),
             )
         {
-            return Err(ProxyError::ConfigError(format!(
-                "模型「{}」尚未完成自动协议探测。请在 Chimera++ 中重新保存该线路以完成探测，或手动选择上游协议。",
-                codex_upstream_model.as_deref().unwrap_or("未命名模型")
-            )));
+            // Fail open: the model was not probed when the line was saved (an
+            // aggregator's catalog is far larger than what a save can probe),
+            // so it follows the line's default protocol for this request. The
+            // handler records the bridge that worked, or probes the model in
+            // the background if it did not, so the next request is routed
+            // correctly. Refusing here used to make such models unusable.
+            log::warn!(
+                "[Codex] 模型「{}」没有协议映射，本次按线路默认协议转发（provider={}）",
+                codex_upstream_model.as_deref().unwrap_or("未命名模型"),
+                provider.id
+            );
         }
         let codex_responses_to_chat = matches!(app_type, AppType::Codex | AppType::GrokBuild)
             && super::providers::should_convert_codex_responses_to_chat_for_model(
@@ -1437,16 +1484,18 @@ impl RequestForwarder {
             )
         };
 
-        let codex_chat_base_is_full_endpoint =
-            codex_responses_to_chat && base_url_is_full_endpoint(&base_url, "/chat/completions");
-
-        // Defensive fallback mirroring `codex_chat_base_is_full_endpoint`: if a user pastes
-        // a base URL already ending in the Anthropic `/v1/messages` endpoint but leaves the
-        // "full URL" switch off, treat it as a full endpoint so we don't double-append
-        // `/v1/messages` (→ `.../v1/messages/v1/messages`, a non-retryable 400). Matches the
-        // exact endpoint suffix, so prefixed gateways like `.../api/v1/messages` are covered.
-        let codex_anthropic_base_is_full_endpoint =
-            codex_responses_to_anthropic && base_url_is_full_endpoint(&base_url, "/v1/messages");
+        // Every Codex upstream URL — native or converted — comes from the same
+        // resolver the protocol probe uses, so a probe can never confirm a
+        // protocol against a URL the router would then not call.
+        let codex_protocol = (adapter.name() == "Codex").then(|| {
+            if codex_responses_to_chat {
+                super::codex_url::CodexUpstreamProtocol::Chat
+            } else if codex_responses_to_anthropic {
+                super::codex_url::CodexUpstreamProtocol::Anthropic
+            } else {
+                super::codex_url::CodexUpstreamProtocol::Native
+            }
+        });
 
         let url = if matches!(resolved_claude_api_format.as_deref(), Some("gemini_native")) {
             super::gemini_url::resolve_gemini_native_url(
@@ -1454,10 +1503,16 @@ impl RequestForwarder {
                 &effective_endpoint,
                 is_full_url,
             )
-        } else if is_full_url
-            || codex_chat_base_is_full_endpoint
-            || codex_anthropic_base_is_full_endpoint
-        {
+        } else if let Some(protocol) = codex_protocol {
+            super::codex_url::codex_upstream_url(
+                &base_url,
+                is_full_url,
+                protocol,
+                &effective_endpoint,
+            )
+            .map_err(|error| ProxyError::ConfigError(format!("上游地址无效: {error}")))?
+            .to_string()
+        } else if is_full_url {
             append_query_to_full_url(&base_url, passthrough_query.as_deref())
         } else {
             adapter.build_url(&base_url, &effective_endpoint)
@@ -2390,7 +2445,12 @@ impl RequestForwarder {
                     response = self.validate_responses_stream_start(response).await?;
                 }
             }
-            Ok((response, resolved_claude_api_format, outbound_model))
+            Ok(Forwarded {
+                response,
+                claude_api_format: resolved_claude_api_format,
+                outbound_model,
+                codex_bridge: codex_protocol,
+            })
         } else {
             let status_code = status.as_u16();
             // 错误响应同样可能被上游压缩（content-encoding）。reqwest 未启用任何
@@ -2990,24 +3050,6 @@ fn prepend_claude_code_system_prompt(body: &mut Value) {
 /// stainless SDK layer) do. Dropped for every Codex→Anthropic request so the upstream sees a
 /// clean Anthropic client fingerprint. Centralized here so the set stays in one place and future
 /// additions can't miss a code path. `key_str` is already lowercased by the http crate.
-/// Whether `base_url` already ends in `endpoint_suffix` (e.g. `/v1/messages` or
-/// `/chat/completions`), ignoring surrounding whitespace, any `?query`/`#fragment`, and a
-/// trailing slash. Used to avoid double-appending the endpoint when a user pastes a full
-/// URL but leaves the "full URL" switch off (`.../v1/messages` → `.../v1/messages/v1/messages`,
-/// a non-retryable 400). `endpoint_suffix` must be lowercase.
-fn base_url_is_full_endpoint(base_url: &str, endpoint_suffix: &str) -> bool {
-    let trimmed = base_url.trim();
-    // Match against the path only: a `?query`/`#fragment` on a full endpoint URL must not
-    // hide the suffix (`.../v1/messages?beta=true` still ends in the endpoint).
-    let path = match trimmed.split_once(['?', '#']) {
-        Some((head, _)) => head,
-        None => trimmed,
-    };
-    path.trim_end_matches('/')
-        .to_ascii_lowercase()
-        .ends_with(endpoint_suffix)
-}
-
 fn is_codex_client_fingerprint_header(key_str: &str) -> bool {
     matches!(
         key_str,
@@ -4267,58 +4309,93 @@ mod tests {
 
     #[test]
     fn codex_anthropic_full_endpoint_guard_avoids_double_messages() {
-        // On the Codex→Anthropic path a base URL already ending in `/v1/messages` (switch
-        // off) must be treated as a full endpoint by the real `base_url_is_full_endpoint`.
+        use super::super::codex_url::{codex_upstream_url, CodexUpstreamProtocol};
 
-        // Without the guard, build_url would concatenate the pasted endpoint with the
-        // rewritten `/v1/messages` target, producing a broken double suffix.
-        use super::super::providers::ProviderAdapter;
-        let doubled = super::super::providers::CodexAdapter::new()
-            .build_url("https://host.example/v1/messages", "/v1/messages");
-        assert_eq!(doubled, "https://host.example/v1/messages/v1/messages");
-
-        // With the guard, the pasted URL is used verbatim (plus preserved query). Includes
-        // query/fragment/whitespace suffixes, which must not hide the endpoint (fix: a base
-        // like `.../v1/messages?beta=true` previously evaded the suffix check).
-        for base in [
-            "https://host.example/v1/messages",
-            "https://host.example/v1/messages/",
-            "https://host.example/api/v1/messages", // prefixed gateway
-            "https://host.example/v1/messages?beta=true",
-            "https://host.example/v1/messages/?beta=true",
-            "https://host.example/v1/messages#frag",
-            "  https://host.example/v1/messages  ",
+        // A base URL already ending in `/v1/messages` with the full-URL switch off is
+        // used verbatim, so the rewritten `/v1/messages` target is never appended a
+        // second time. Query/fragment/whitespace suffixes must not hide the endpoint.
+        for (base, expected) in [
+            (
+                "https://host.example/v1/messages",
+                "https://host.example/v1/messages",
+            ),
+            (
+                "https://host.example/v1/messages/",
+                "https://host.example/v1/messages/",
+            ),
+            (
+                "https://host.example/api/v1/messages",
+                "https://host.example/api/v1/messages",
+            ),
+            (
+                "https://host.example/v1/messages?beta=true",
+                "https://host.example/v1/messages?beta=true",
+            ),
+            (
+                "https://host.example/v1/messages#frag",
+                "https://host.example/v1/messages#frag",
+            ),
+            (
+                "  https://host.example/v1/messages  ",
+                "https://host.example/v1/messages",
+            ),
         ] {
-            assert!(
-                base_url_is_full_endpoint(base, "/v1/messages"),
-                "expected full-endpoint match: {base:?}"
-            );
+            let url = codex_upstream_url(
+                base,
+                false,
+                CodexUpstreamProtocol::Anthropic,
+                "/v1/messages",
+            )
+            .unwrap();
+            assert_eq!(url.to_string(), expected, "base {base:?}");
         }
+        let with_query = codex_upstream_url(
+            "https://host.example/v1/messages",
+            false,
+            CodexUpstreamProtocol::Anthropic,
+            "/v1/messages?x=1",
+        )
+        .unwrap();
         assert_eq!(
-            append_query_to_full_url("https://host.example/v1/messages", Some("x=1")),
+            with_query.to_string(),
             "https://host.example/v1/messages?x=1"
         );
-        // A base URL that already carries its own query is preserved verbatim (no double
-        // `/v1/messages`, query kept).
-        assert_eq!(
-            append_query_to_full_url("https://host.example/v1/messages?beta=true", None),
-            "https://host.example/v1/messages?beta=true"
-        );
 
-        // A non-endpoint base (origin/prefix) must NOT match, so build_url still appends.
-        assert!(!base_url_is_full_endpoint(
-            "https://host.example",
-            "/v1/messages"
-        ));
-        assert!(!base_url_is_full_endpoint(
-            "https://host.example/v1",
-            "/v1/messages"
-        ));
-        // The shared helper also backs the Chat path's `/chat/completions` guard.
-        assert!(base_url_is_full_endpoint(
-            "https://host.example/v1/chat/completions?api-version=2024",
-            "/chat/completions"
-        ));
+        // Origin and `/v1` bases are not endpoints, so the target is appended.
+        assert_eq!(
+            codex_upstream_url(
+                "https://host.example",
+                false,
+                CodexUpstreamProtocol::Anthropic,
+                "/v1/messages"
+            )
+            .unwrap()
+            .to_string(),
+            "https://host.example/v1/messages"
+        );
+        assert_eq!(
+            codex_upstream_url(
+                "https://host.example/v1",
+                false,
+                CodexUpstreamProtocol::Anthropic,
+                "/v1/messages"
+            )
+            .unwrap()
+            .to_string(),
+            "https://host.example/v1/messages"
+        );
+        // The Chat path's `/chat/completions` guard behaves the same way.
+        assert_eq!(
+            codex_upstream_url(
+                "https://host.example/v1/chat/completions?api-version=2024",
+                false,
+                CodexUpstreamProtocol::Chat,
+                "/chat/completions",
+            )
+            .unwrap()
+            .to_string(),
+            "https://host.example/v1/chat/completions?api-version=2024"
+        );
     }
 
     #[test]

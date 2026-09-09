@@ -65,10 +65,10 @@ fn codex_api_format_for_model<'a>(provider: &'a Provider, model: Option<&str>) -
         })
 }
 
-/// Once automatic per-model detection is enabled, accepting an unmapped model
-/// would be unsafe: it would inherit the default model's protocol and can send
-/// a Responses request to a Chat/Anthropic-only model. The caller must reject
-/// the request with actionable configuration guidance instead.
+/// Whether an auto-detected line has no protocol recorded for `model`. Such a
+/// request is forwarded with the line's default protocol; the caller uses this
+/// to decide whether to record the outcome (or probe the model) afterwards so
+/// the mapping fills itself in over time.
 pub fn codex_model_protocol_mapping_is_missing(provider: &Provider, model: Option<&str>) -> bool {
     let Some(model) = model
         .map(crate::proxy::model_mapper::strip_one_m_suffix_for_upstream)

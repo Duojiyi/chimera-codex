@@ -8,6 +8,7 @@
 //! - Claude 的格式转换逻辑保留在此文件（用于 OpenRouter 旧接口回退）
 
 use super::{
+    codex_url::CodexUpstreamProtocol,
     content_encoding::{decompress_body, get_content_encoding, is_supported_content_encoding},
     error_mapper::{get_error_message, map_proxy_error_to_status},
     forwarder::ActiveConnectionGuard,
@@ -867,7 +868,15 @@ fn body_indicates_unsupported_responses_endpoint(body: Option<&str>) -> bool {
 fn should_try_codex_chat_auto_fallback(error: &ProxyError) -> bool {
     match error {
         ProxyError::UpstreamError { status, body } => match *status {
-            400 | 404 | 405 | 406 | 415 | 422 | 501 => true,
+            404 | 405 | 406 | 415 | 501 => true,
+            // A 400/422 whose body is a Responses-shaped validation error comes
+            // from an endpoint that speaks Responses; the request itself was at
+            // fault. Flipping the whole line to Chat on it (and persisting that)
+            // is how lines used to end up permanently on the wrong bridge.
+            400 | 422 => !crate::services::model_fetch::error_body_confirms_responses_protocol(
+                *status,
+                body.as_deref(),
+            ),
             503 => body_indicates_unsupported_responses_endpoint(body.as_deref()),
             _ => false,
         },
@@ -893,6 +902,129 @@ fn codex_auto_fallback_error_class(error: &ProxyError) -> String {
         ProxyError::ForwardFailed(_) => "forward_failed".to_string(),
         _ => "other".to_string(),
     }
+}
+
+/// Fill in the protocol of a model the line had no mapping for.
+///
+/// Saving a line probes only its default model and the user's own mapping
+/// rows; everything else in an aggregator's catalog is forwarded with the
+/// line's default protocol. When such a request succeeds, the bridge that
+/// carried it is the answer and is recorded directly (no probe, no extra
+/// request). When it fails, the model is probed once in the background so the
+/// next request takes the right bridge: the user pays one failed request
+/// instead of being unable to use the model at all.
+enum CodexModelRequestOutcome {
+    /// The request went through on this bridge.
+    Succeeded(CodexUpstreamProtocol),
+    /// The request failed; the protocol is unknown and worth probing.
+    Failed,
+}
+
+fn learn_codex_model_protocol(
+    state: &ProxyState,
+    app_type: &AppType,
+    app_type_str: &'static str,
+    provider: &Provider,
+    model: Option<&str>,
+    outcome: CodexModelRequestOutcome,
+) {
+    let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) else {
+        return;
+    };
+    if !super::providers::codex_model_protocol_mapping_is_missing(provider, Some(model)) {
+        return;
+    }
+    let db = state.db.clone();
+    let provider_id = provider.id.clone();
+    let model = model.to_string();
+
+    if let CodexModelRequestOutcome::Succeeded(protocol) = outcome {
+        tokio::spawn(async move {
+            match db.merge_provider_codex_model_api_format(
+                app_type_str,
+                &provider_id,
+                &model,
+                protocol.api_format(),
+            ) {
+                Ok(true) => log::info!(
+                    "[Codex] 模型「{model}」按线路默认协议 {} 请求成功，已记录该协议（provider={provider_id}）",
+                    protocol.api_format()
+                ),
+                Ok(false) => {}
+                Err(error) => log::warn!(
+                    "[Codex] 记录模型「{model}」的协议失败（provider={provider_id}）: {error}"
+                ),
+            }
+        });
+        return;
+    }
+
+    let adapter = get_adapter(app_type);
+    let Ok(base_url) = adapter.extract_base_url(provider) else {
+        return;
+    };
+    let Some(auth) = adapter.extract_auth(provider) else {
+        return;
+    };
+    let is_full_url = provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.is_full_url)
+        .unwrap_or(false);
+    let user_agent = provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.custom_user_agent.as_deref())
+        .and_then(|ua| {
+            crate::provider::parse_custom_user_agent(Some(ua))
+                .ok()
+                .flatten()
+        });
+    let api_key = auth.api_key;
+    tokio::spawn(async move {
+        let report = match crate::services::model_fetch::detect_codex_api_formats(
+            &base_url,
+            &api_key,
+            is_full_url,
+            vec![model.clone()],
+            user_agent,
+        )
+        .await
+        {
+            Ok(report) => report,
+            Err(error) => {
+                log::warn!(
+                    "[Codex] 模型「{model}」的懒探测未能执行（provider={provider_id}）: {error}"
+                );
+                return;
+            }
+        };
+        match report.detected.get(&model) {
+            Some(detected) => match db.merge_provider_codex_model_api_format(
+                app_type_str,
+                &provider_id,
+                &model,
+                &detected.api_format,
+            ) {
+                Ok(true) => log::info!(
+                    "[Codex] 懒探测：模型「{model}」识别为 {}，下次请求生效（provider={provider_id}）",
+                    detected.api_format
+                ),
+                Ok(false) => {}
+                Err(error) => log::warn!(
+                    "[Codex] 记录模型「{model}」的懒探测结果失败（provider={provider_id}）: {error}"
+                ),
+            },
+            None => log::warn!(
+                "[Codex] 懒探测未能识别模型「{model}」的协议（provider={provider_id}）: {}",
+                report
+                    .failures
+                    .get(&model)
+                    .map(String::as_str)
+                    .unwrap_or("no diagnostic")
+            ),
+        }
+    });
 }
 
 fn persist_codex_auto_detected_api_format(
@@ -1161,6 +1293,16 @@ async fn handle_responses_for_app(
                 }
             }
 
+            // The request failed on the line's default protocol; if the model
+            // simply had no mapping yet, find its protocol for next time.
+            learn_codex_model_protocol(
+                &state,
+                &app_type,
+                app_type_str,
+                &ctx.provider,
+                Some(ctx.request_model.as_str()),
+                CodexModelRequestOutcome::Failed,
+            );
             log_forward_error(&state, &ctx, is_stream, &err.error);
             return build_codex_proxy_error_response(&ctx, &endpoint, &err.error);
         }
@@ -1170,6 +1312,17 @@ async fn handle_responses_for_app(
     ctx.outbound_model = result.outbound_model.take();
     ctx.provider = result.provider;
     let response = result.response;
+    let codex_bridge = result.codex_bridge;
+    if let Some(bridge) = codex_bridge {
+        learn_codex_model_protocol(
+            &state,
+            &app_type,
+            app_type_str,
+            &ctx.provider,
+            ctx.outbound_model.as_deref(),
+            CodexModelRequestOutcome::Succeeded(bridge),
+        );
+    }
 
     // Responses 直接成功 → 上游就是原生 Responses 网关，记录并持久化这个结论。
     // 只有 Chat 回退成功才落库是不对称的：原生 Responses 供应商的
@@ -1186,28 +1339,33 @@ async fn handle_responses_for_app(
         }
     }
 
-    if super::providers::should_convert_codex_responses_to_anthropic(&ctx.provider, &endpoint) {
-        return handle_codex_anthropic_to_responses_transform(
-            response,
-            &ctx,
-            &state,
-            is_stream,
-            connection_guard,
-            codex_tool_context,
-        )
-        .await;
-    }
-
-    if super::providers::should_convert_codex_responses_to_chat(&ctx.provider, &endpoint) {
-        return handle_codex_chat_to_responses_transform(
-            response,
-            &ctx,
-            &state,
-            is_stream,
-            connection_guard,
-            codex_tool_context,
-        )
-        .await;
+    // Dispatch on the bridge the forwarder actually used for this request, not
+    // on the provider's default protocol: in a mixed catalog the two differ for
+    // every model mapped away from the default.
+    match codex_bridge {
+        Some(CodexUpstreamProtocol::Anthropic) => {
+            return handle_codex_anthropic_to_responses_transform(
+                response,
+                &ctx,
+                &state,
+                is_stream,
+                connection_guard,
+                codex_tool_context,
+            )
+            .await;
+        }
+        Some(CodexUpstreamProtocol::Chat) => {
+            return handle_codex_chat_to_responses_transform(
+                response,
+                &ctx,
+                &state,
+                is_stream,
+                connection_guard,
+                codex_tool_context,
+            )
+            .await;
+        }
+        Some(CodexUpstreamProtocol::Native) | None => {}
     }
 
     // Native Responses passthrough to a strict gateway (xAI): the request-side
@@ -1416,6 +1574,14 @@ async fn handle_responses_compact_for_app(
                 }
             }
 
+            learn_codex_model_protocol(
+                &state,
+                &app_type,
+                app_type_str,
+                &ctx.provider,
+                Some(ctx.request_model.as_str()),
+                CodexModelRequestOutcome::Failed,
+            );
             log_forward_error(&state, &ctx, is_stream, &err.error);
             return build_codex_proxy_error_response(&ctx, &endpoint, &err.error);
         }
@@ -1425,6 +1591,17 @@ async fn handle_responses_compact_for_app(
     ctx.outbound_model = result.outbound_model.take();
     ctx.provider = result.provider;
     let response = result.response;
+    let codex_bridge = result.codex_bridge;
+    if let Some(bridge) = codex_bridge {
+        learn_codex_model_protocol(
+            &state,
+            &app_type,
+            app_type_str,
+            &ctx.provider,
+            ctx.outbound_model.as_deref(),
+            CodexModelRequestOutcome::Succeeded(bridge),
+        );
+    }
 
     // 与 /responses 同理：直接成功即证明上游是原生 Responses 网关。
     if let Some(detected_provider) = auto_detect_provider.as_ref() {
@@ -1438,28 +1615,30 @@ async fn handle_responses_compact_for_app(
         }
     }
 
-    if super::providers::should_convert_codex_responses_to_anthropic(&ctx.provider, &endpoint) {
-        return handle_codex_anthropic_to_responses_transform(
-            response,
-            &ctx,
-            &state,
-            is_stream,
-            connection_guard,
-            codex_tool_context,
-        )
-        .await;
-    }
-
-    if super::providers::should_convert_codex_responses_to_chat(&ctx.provider, &endpoint) {
-        return handle_codex_chat_to_responses_transform(
-            response,
-            &ctx,
-            &state,
-            is_stream,
-            connection_guard,
-            codex_tool_context,
-        )
-        .await;
+    match codex_bridge {
+        Some(CodexUpstreamProtocol::Anthropic) => {
+            return handle_codex_anthropic_to_responses_transform(
+                response,
+                &ctx,
+                &state,
+                is_stream,
+                connection_guard,
+                codex_tool_context,
+            )
+            .await;
+        }
+        Some(CodexUpstreamProtocol::Chat) => {
+            return handle_codex_chat_to_responses_transform(
+                response,
+                &ctx,
+                &state,
+                is_stream,
+                connection_guard,
+                codex_tool_context,
+            )
+            .await;
+        }
+        Some(CodexUpstreamProtocol::Native) | None => {}
     }
 
     if super::providers::provider_needs_responses_namespace_flatten(&ctx.provider)
@@ -3156,6 +3335,37 @@ mod tests {
         assert!(!should_try_codex_chat_auto_fallback(&ProxyError::Timeout(
             "upstream timed out".to_string()
         )));
+    }
+
+    #[test]
+    fn responses_shaped_400_does_not_flip_the_line_to_chat() {
+        // The endpoint speaks Responses and rejected this particular request;
+        // the line's protocol is right and must not be reclassified.
+        assert!(!should_try_codex_chat_auto_fallback(
+            &ProxyError::UpstreamError {
+                status: 400,
+                body: Some(
+                    r#"{"error":{"message":"Invalid type for 'max_output_tokens': expected an integer, but got an object instead.","param":"max_output_tokens","code":"invalid_type"}}"#
+                        .to_string(),
+                ),
+            }
+        ));
+        // A Chat-only endpoint naming our field as unknown is evidence to flip.
+        assert!(should_try_codex_chat_auto_fallback(
+            &ProxyError::UpstreamError {
+                status: 400,
+                body: Some(
+                    r#"{"error":{"message":"Unrecognized request argument supplied: input"}}"#
+                        .to_string(),
+                ),
+            }
+        ));
+        assert!(should_try_codex_chat_auto_fallback(
+            &ProxyError::UpstreamError {
+                status: 422,
+                body: Some(r#"{"error":{"message":"request validation failed"}}"#.to_string()),
+            }
+        ));
     }
 
     #[test]

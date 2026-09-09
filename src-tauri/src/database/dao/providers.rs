@@ -399,6 +399,55 @@ impl Database {
         Ok(true)
     }
 
+    /// Record the protocol the router detected for one model of an
+    /// auto-detected line (`meta.codexModelApiFormats[model] = api_format`).
+    ///
+    /// Read-modify-write of the single row under the connection lock, so a
+    /// concurrent save of unrelated fields is not clobbered. Returns `false`
+    /// without writing when the line is no longer auto-detected, the user has
+    /// meanwhile mapped the model explicitly, or the value is already there.
+    pub fn merge_provider_codex_model_api_format(
+        &self,
+        app_type: &str,
+        provider_id: &str,
+        model: &str,
+        api_format: &str,
+    ) -> Result<bool, AppError> {
+        let model = model.trim();
+        if model.is_empty() {
+            return Ok(false);
+        }
+        let conn = lock_conn!(self.conn);
+
+        let current_meta_text: String = conn
+            .query_row(
+                "SELECT meta FROM providers WHERE id = ?1 AND app_type = ?2",
+                params![provider_id, app_type],
+                |row| row.get(0),
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let mut meta: ProviderMeta = serde_json::from_str(&current_meta_text)
+            .map_err(|e| AppError::Database(format!("invalid provider meta: {e}")))?;
+
+        if meta.api_format_auto_detected != Some(true) {
+            return Ok(false);
+        }
+        if meta.codex_model_api_formats.contains_key(model) {
+            return Ok(false);
+        }
+        meta.codex_model_api_formats
+            .insert(model.to_string(), api_format.to_string());
+
+        let new_meta =
+            serde_json::to_string(&meta).map_err(|e| AppError::Database(e.to_string()))?;
+        conn.execute(
+            "UPDATE providers SET meta = ?1 WHERE id = ?2 AND app_type = ?3",
+            params![new_meta, provider_id, app_type],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(true)
+    }
+
     pub fn add_custom_endpoint(
         &self,
         app_type: &str,
