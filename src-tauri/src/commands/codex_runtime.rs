@@ -6,9 +6,9 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use chimera_platform::lock::{LockGuard, OperationLock};
+use chimera_platform::lock::{LockError, LockGuard, OperationLock};
 use chimera_runtime::manager::{
     detect_portable_codex, detect_windows_codex, diagnose_windows_codex,
     fetch_windows_release_plan, install_windows_release, latest_portable_rollback,
@@ -959,12 +959,52 @@ fn operation_lock() -> OperationLock {
     OperationLock::new(runtime_root().join("operation.lock"))
 }
 
-fn acquire_operation_lock(operation: &str) -> Result<LockGuard, String> {
+/// Runtime operations are user-initiated and mostly short, but a restart holds
+/// the lock for as long as Codex takes to close and come back (tens of seconds
+/// on MSIX). Failing the instant the lock is busy turned any overlap into a
+/// dead end, so wait for a plausibly-short holder before reporting contention.
+const OPERATION_LOCK_WAIT: Duration = Duration::from_secs(15);
+
+/// Shared by every Codex runtime mutation, including the skin operations in
+/// `skin_catalog`: applying a skin closes and relaunches Codex on the same
+/// install root an update may be mid-swap on, so the two must exclude each
+/// other. They previously derived this path independently, where any drift
+/// would have silently removed that guarantee.
+pub(crate) fn acquire_operation_lock(operation: &str) -> Result<LockGuard, String> {
     let root = runtime_root();
     std::fs::create_dir_all(&root).map_err(|_| "无法创建 Chimera++ 运行时目录".to_string())?;
-    operation_lock()
-        .try_acquire(operation)
-        .map_err(|_| "另一个 Chimera++ 操作正在进行".to_string())
+    let lock = operation_lock();
+    let deadline = Instant::now() + OPERATION_LOCK_WAIT;
+    loop {
+        match lock.try_acquire(operation) {
+            Ok(guard) => return Ok(guard),
+            Err(LockError::Io { source, .. }) => {
+                return Err(format!("无法打开 Chimera++ 运行时锁: {source}"));
+            }
+            Err(LockError::AlreadyHeld { holder_pid }) => {
+                if Instant::now() >= deadline {
+                    return Err(describe_lock_contention(holder_pid));
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        }
+    }
+}
+
+/// The lock is an OS advisory lock, so the holder is always a live process:
+/// the operating system drops it when that process exits. Reporting "another
+/// Chimera++" for our own pid sent users hunting for a second window that was
+/// never there, so name what actually holds it.
+fn describe_lock_contention(holder_pid: Option<u32>) -> String {
+    match holder_pid {
+        Some(pid) if pid == std::process::id() => {
+            "上一个 Codex 运行时操作还没结束，请等它完成后再试".to_string()
+        }
+        Some(pid) => {
+            format!("另一个 Chimera++（进程 {pid}）正在执行 Codex 运行时操作，请等它完成后再试")
+        }
+        None => "另一个 Chimera++ 操作正在进行".to_string(),
+    }
 }
 
 fn parse_source(value: Option<String>) -> Result<UpdateSource, String> {

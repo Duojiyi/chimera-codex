@@ -11,7 +11,6 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
-use chimera_platform::lock::OperationLock;
 use codex_theme_engine::native::NativeThemePaths;
 
 const SKINS_BASE: &str = "https://skins.agentsmirror.com";
@@ -119,16 +118,8 @@ fn active_path() -> PathBuf {
     data_root().join("active-codex-skin.txt")
 }
 
-fn runtime_root() -> PathBuf {
-    data_root().join("codex-runtime")
-}
-
 fn portable_root() -> Result<PathBuf, String> {
     crate::settings::resolve_codex_portable_root()
-}
-
-fn operation_lock() -> PathBuf {
-    runtime_root().join("operation.lock")
 }
 
 // A fixed, source-code-visible debug port here would let any other local
@@ -236,14 +227,10 @@ pub async fn install_catalog_skin(
 ) -> Result<CatalogSkin, String> {
     let data_root = data_root();
     let root = themes_root();
-    let lock_path = operation_lock();
     // 先经应用内客户端抓取目录，再在阻塞线程上执行加锁与安装。
     let catalog = fetch_catalog().await?;
     tauri::async_runtime::spawn_blocking(move || {
-        let lock = OperationLock::new(lock_path);
-        let _guard = lock
-            .try_acquire("install_catalog_skin")
-            .map_err(|_| "Another Chimera++ operation is already running.".to_string())?;
+        let _guard = super::codex_runtime::acquire_operation_lock("install_catalog_skin")?;
         let skin = catalog
             .into_iter()
             .find(|entry| entry.id == skin_id)
@@ -290,12 +277,8 @@ pub async fn install_catalog_skin(
 pub async fn import_skin_package(path: String) -> Result<String, String> {
     let root = themes_root();
     let archive = PathBuf::from(path);
-    let lock_path = operation_lock();
     tauri::async_runtime::spawn_blocking(move || {
-        let lock = OperationLock::new(lock_path);
-        let _guard = lock
-            .try_acquire("import_skin_package")
-            .map_err(|_| "Another Chimera++ operation is already running.".to_string())?;
+        let _guard = super::codex_runtime::acquire_operation_lock("import_skin_package")?;
         codex_theme_engine::import::import_codexskin(&archive, &root)
             .map(|summary| summary.id)
             .map_err(|error| error.to_string())
@@ -359,14 +342,10 @@ pub async fn apply_skin_package(skin_id: String, confirm: bool) -> Result<(), St
     let portable_root = portable_root()?;
     let native = native_paths();
     let active = active_path();
-    let lock_path = operation_lock();
     let id = skin_id.clone();
     let apply_root = root.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let lock = OperationLock::new(lock_path);
-        let _guard = lock
-            .try_acquire("apply_skin_package")
-            .map_err(|_| "Another Chimera++ operation is already running.".to_string())?;
+        let _guard = super::codex_runtime::acquire_operation_lock("apply_skin_package")?;
         let dir = codex_theme_engine::theme::resolve_theme_dir(&apply_root, &id)
             .map_err(|error| error.to_string())?;
         let loaded =
@@ -390,21 +369,22 @@ pub async fn apply_skin_package(skin_id: String, confirm: bool) -> Result<(), St
     .await
     .map_err(|_| "The skin apply operation was interrupted.".to_string())??;
     inject_skin(root, &skin_id).await?;
-    let selection_lock = OperationLock::new(operation_lock());
-    let _selection_guard = selection_lock
-        .try_acquire("save_active_skin")
-        .map_err(|_| {
-            "The skin was applied, but another operation prevented saving it.".to_string()
-        })?;
-    let temporary = active.with_extension("tmp");
-    std::fs::write(&temporary, &skin_id)
-        .and_then(|_| {
-            if active.exists() {
-                std::fs::remove_file(&active)?;
-            }
-            std::fs::rename(&temporary, &active)
-        })
-        .map_err(|_| "The skin was applied but its selection could not be saved.".to_string())
+    // Acquiring the lock can wait, so keep it off the async executor.
+    tauri::async_runtime::spawn_blocking(move || {
+        let _selection_guard = super::codex_runtime::acquire_operation_lock("save_active_skin")
+            .map_err(|reason| format!("皮肤已应用，但保存选择失败：{reason}"))?;
+        let temporary = active.with_extension("tmp");
+        std::fs::write(&temporary, &skin_id)
+            .and_then(|_| {
+                if active.exists() {
+                    std::fs::remove_file(&active)?;
+                }
+                std::fs::rename(&temporary, &active)
+            })
+            .map_err(|_| "The skin was applied but its selection could not be saved.".to_string())
+    })
+    .await
+    .map_err(|_| "Saving the skin selection was interrupted.".to_string())?
 }
 
 /// Try a skin live without changing native settings or the persisted selection.
@@ -415,17 +395,13 @@ pub async fn try_skin_package(skin_id: String, confirm: bool) -> Result<(), Stri
     }
     let root = themes_root();
     let portable_root = portable_root()?;
-    let lock_path = operation_lock();
     tauri::async_runtime::spawn_blocking(move || {
         // Must take the same cross-process lock as apply/restore/install: this
         // closes and relaunches Codex, which can otherwise race an in-flight
         // runtime update/install that is mid rename-swap on the same install
         // root (the update would see its freshly-launched process holding the
         // directory open and fail, or trigger a spurious auto-rollback).
-        let lock = OperationLock::new(lock_path);
-        let _guard = lock
-            .try_acquire("try_skin_package")
-            .map_err(|_| "Another Chimera++ operation is already running.".to_string())?;
+        let _guard = super::codex_runtime::acquire_operation_lock("try_skin_package")?;
         close_and_launch(&portable_root, Some(theme_cdp_port()))
     })
     .await
@@ -442,12 +418,8 @@ pub async fn restore_skin_package(confirm: bool) -> Result<(), String> {
     let portable_root = portable_root()?;
     let native = native_paths();
     let active = active_path();
-    let lock_path = operation_lock();
     tauri::async_runtime::spawn_blocking(move || {
-        let lock = OperationLock::new(lock_path);
-        let _guard = lock
-            .try_acquire("restore_skin_package")
-            .map_err(|_| "Another Chimera++ operation is already running.".to_string())?;
+        let _guard = super::codex_runtime::acquire_operation_lock("restore_skin_package")?;
         let installed = codex_win_engine::detect_installed_codex(&portable_root)
             .ok_or_else(|| "Codex is not installed.".to_string())?;
         close_codex(&installed, &portable_root)
