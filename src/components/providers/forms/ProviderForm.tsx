@@ -1461,7 +1461,7 @@ function ProviderFormFull({
             ].filter(Boolean),
           ),
         );
-        const detectedFormats = await detectCodexApiFormats(
+        const { detected: detectedFormats } = await detectCodexApiFormats(
           codexBaseUrl,
           codexApiKey,
           detectionModels,

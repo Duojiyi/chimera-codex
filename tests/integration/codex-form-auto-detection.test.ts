@@ -61,11 +61,33 @@ describe("Codex auto protocol detection in provider forms", () => {
     expect(providerFormSource).toContain("无法确认以下模型的上游协议：");
   });
 
-  it("ChimeraApp editor save probes every catalog model and rejects undetected ones", () => {
+  it("ChimeraApp editor probes only the default model and the user's mapping rows", () => {
     expect(appSource).toContain("const catalogModels = buildCodexModelCatalog");
-    expect(appSource).toContain("const detectionModels = catalogModels");
+    // Probing every fetched model made a save impossible against aggregators,
+    // whose catalogs always contain embedding/image models that cannot answer
+    // a chat probe. Only the default model and the rows the user typed are
+    // probed; the rest follow the line protocol and the router's lazy probe.
+    expect(appSource).toContain(
+      "const probeModels = codexProbeModels(draft.model, draft.catalogModels);",
+    );
+    expect(appSource).not.toContain("const detectionModels = catalogModels");
+  });
+
+  it("ChimeraApp blocks a save only when the default model is undetected", () => {
+    // The default model's protocol decides whether the local router takes
+    // over, so it cannot be guessed; an undetected mapping row can.
+    expect(appSource).toContain(
+      "const defaultDetection = detectedFormats[draft.model.trim()];",
+    );
     expect(appSource).toContain("findCodexCatalogModelsWithoutProtocol");
-    expect(appSource).toContain("无法确认以下模型的上游协议：");
+    expect(appSource).toContain("const undetectedMappedModels =");
+    expect(appSource).toContain("个映射模型未识别协议，将沿用");
+    expect(appSource).not.toContain("无法确认以下模型的上游协议：");
+  });
+
+  it("ChimeraApp reports each probe failure and offers a manual protocol", () => {
+    expect(appSource).toContain("describeCodexDetectionFailure");
+    expect(appSource).toContain("也可以直接指定协议保存：");
   });
 });
 

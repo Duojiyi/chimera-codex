@@ -35,9 +35,12 @@ describe("GrokBuildProviderForm", () => {
   beforeEach(() => {
     modelFetchApiMock.detectCodexApiFormats.mockReset();
     modelFetchApiMock.detectCodexApiFormats.mockResolvedValue({
-      "grok-4.5": {
-        apiFormat: "openai_responses",
+      detected: {
+        "grok-4.5": {
+          apiFormat: "openai_responses",
+        },
       },
+      failures: {},
     });
   });
   it("offers curated Grok Build presets and applies one", async () => {

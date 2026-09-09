@@ -3,6 +3,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -28,7 +29,6 @@ import {
   LoaderCircle,
   FolderOpen,
   MessagesSquare,
-  MoreHorizontal,
   Package,
   Paintbrush,
   Pencil,
@@ -38,11 +38,9 @@ import {
   Route,
   Search,
   Settings2,
-  ShieldCheck,
   Trash2,
   Wrench,
   X,
-  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import type {
@@ -59,7 +57,6 @@ import { vscodeApi } from "@/lib/api/vscode";
 import { getCurrentVersion } from "@/lib/updater";
 import { WindowControls } from "@/components/WindowControls";
 import { useUpdate } from "@/contexts/UpdateContext";
-import type { RequestLog } from "@/types/usage";
 import type { Settings } from "@/types";
 import {
   detectCodexApiFormats,
@@ -80,19 +77,26 @@ import {
   setCodexWireApi,
 } from "@/utils/providerConfigUtils";
 import { generateUUID } from "@/utils/uuid";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 import {
   activityStorageKey,
   buildCodexModelCatalog,
+  codexApprovalPolicyWarning,
+  codexProbeModels,
+  describeCodexDetectionFailure,
+  extractCodexMappingRows,
   findCodexCatalogModelsWithoutProtocol,
-  formatDuration,
-  formatVersion,
   loadOperationRecords,
+  persistedCodexModelApiFormats,
+  pickDefaultFetchedModel,
+  previousCatalogAsFetched,
   resolveCurrentProvider,
   saveOperationRecords,
   setCodexProviderApiKey,
   type ConnectionState,
   type OperationRecord,
 } from "./chimeraUtils";
+import { Empty } from "@/components/Empty";
 import routeGateIcon from "@/assets/icons/chimera-dragon-mark.png";
 import RouteGlobe from "@/components/RouteGlobe";
 import "./chimera.css";
@@ -119,6 +123,7 @@ const UsageView = lazy(() =>
     default: view,
   })),
 );
+const AppearanceView = lazy(() => import("./views/AppearanceView"));
 const SessionManagerPage = lazy(() =>
   import("./components/sessions/SessionManagerPage").then(
     ({ SessionManagerPage: page }) => ({
@@ -126,65 +131,6 @@ const SessionManagerPage = lazy(() =>
     }),
   ),
 );
-
-function useDialogFocus<T extends HTMLElement>(
-  onClose: () => void,
-  enabled = true,
-  returnFocusRef?: { current: HTMLElement | null },
-) {
-  const dialogRef = useRef<T>(null);
-  const closeRef = useRef(onClose);
-  useEffect(() => {
-    closeRef.current = onClose;
-  }, [onClose]);
-  useEffect(() => {
-    if (!enabled) return;
-    const previousFocus = document.activeElement as HTMLElement | null;
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    const focusableSelector =
-      'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
-    const focusFirst = () => {
-      const preferred = dialog.querySelector<HTMLElement>("[data-autofocus]");
-      const first = dialog.querySelector<HTMLElement>(focusableSelector);
-      (preferred ?? first ?? dialog).focus();
-    };
-    const focusFrame = requestAnimationFrame(focusFirst);
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closeRef.current();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const focusable = Array.from(
-        dialog.querySelectorAll<HTMLElement>(focusableSelector),
-      ).filter((element) => element.offsetParent !== null);
-      if (!focusable.length) {
-        event.preventDefault();
-        dialog.focus();
-        return;
-      }
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      cancelAnimationFrame(focusFrame);
-      document.removeEventListener("keydown", onKeyDown);
-      const returnTarget = returnFocusRef?.current ?? previousFocus;
-      if (returnTarget?.isConnected) returnTarget.focus();
-    };
-  }, [enabled, returnFocusRef]);
-  return dialogRef;
-}
 
 type View =
   "providers" | "runtime" | "usage" | "appearance" | "sessions" | "settings";
@@ -297,35 +243,6 @@ type CodexInstallRecoveryEntry = {
   detail?: string | null;
   backupPath?: string | null;
 };
-type CatalogSkin = {
-  id: string;
-  name: string;
-  description?: string;
-  version: string;
-  author?: string;
-  appearance?: "dark" | "light" | "dual" | string | null;
-  preview: string;
-  installed: boolean;
-  applied: boolean;
-};
-
-function skinToneClass(skin: CatalogSkin) {
-  const identity = `${skin.id} ${skin.name}`.toLowerCase();
-  if (identity.includes("oled") || identity.includes("mono")) {
-    return "skin-tone-oled";
-  }
-  if (identity.includes("sakura") || identity.includes("pink")) {
-    return "skin-tone-sakura";
-  }
-  return "skin-tone-nerv";
-}
-
-function skinPreviewUrl(preview: string) {
-  return preview.startsWith("/")
-    ? preview
-    : `https://skins.agentsmirror.com/${preview.replace(/^\/+/, "")}`;
-}
-
 const nav: Array<[View, string, typeof Command]> = [
   ["providers", "供应商", Route],
   ["runtime", "更新", Package],
@@ -369,10 +286,12 @@ type CodexEndpointInput = {
   customUserAgent: string;
 };
 
+// Protocol probe results for one upstream identity. `formats` may cover more
+// models than the current probe set; whatever is missing is probed on save.
 type CodexApiFormatDetection = {
   identity: string;
-  result: DetectedCodexApiFormat;
   formats: Record<string, DetectedCodexApiFormat>;
+  failures: Record<string, string>;
 };
 
 function codexEndpointIdentity(input: CodexEndpointInput): string {
@@ -385,11 +304,27 @@ function codexEndpointIdentity(input: CodexEndpointInput): string {
   ]);
 }
 
-function codexDetectionIdentity(
-  input: CodexEndpointInput,
-  probeModel: string,
-): string {
-  return JSON.stringify([codexEndpointIdentity(input), probeModel.trim()]);
+// The fields a protocol probe actually depends on. `modelsUrl` only affects
+// model discovery, so changing it must not throw detection results away.
+function codexProtocolIdentity(input: CodexEndpointInput): string {
+  return JSON.stringify([
+    input.baseUrl.trim(),
+    input.apiKey,
+    input.isFullUrl,
+    input.customUserAgent.trim(),
+  ]);
+}
+
+function isEditorDraftDirty(
+  draft: ReturnType<typeof providerDraft>,
+  baseline: string | null,
+): boolean {
+  return baseline !== null && editorDraftSignature(draft) !== baseline;
+}
+
+function editorDraftSignature(draft: ReturnType<typeof providerDraft>): string {
+  const { original: _original, ...rest } = draft;
+  return JSON.stringify(rest);
 }
 
 function codexApiFormatLabel(format: CodexApiFormat): string {
@@ -420,11 +355,6 @@ function providerDraft(provider?: Provider | null, suggestedName?: string) {
     meta.apiKeyField === "ANTHROPIC_API_KEY"
       ? "ANTHROPIC_API_KEY"
       : "ANTHROPIC_AUTH_TOKEN";
-  const catalogModels = Array.isArray(
-    provider?.settingsConfig?.modelCatalog?.models,
-  )
-    ? provider.settingsConfig.modelCatalog.models
-    : [];
   return {
     id: provider?.id ?? generateUUID(),
     name: provider?.name ?? suggestedName ?? template.name,
@@ -453,9 +383,24 @@ function providerDraft(provider?: Provider | null, suggestedName?: string) {
     goalModeEnabled: isCodexGoalModeEnabled(config),
     remoteCompactionEnabled: isCodexRemoteCompactionEnabled(config),
     commonConfigEnabled: meta.commonConfigEnabled === true,
-    catalogModels: catalogModels as CodexCatalogModel[],
+    // The user's mapping rows only. The generated Codex catalog (default +
+    // rows + fetched models) is rebuilt on save and never read back here.
+    catalogModels: extractCodexMappingRows(provider),
     original: provider ?? null,
   };
+}
+
+// Detection results saved with a provider, keyed to the draft's protocol
+// identity so a re-opened editor saves without re-probing until the endpoint,
+// key, full-URL flag or User-Agent changes.
+function detectionFromProvider(
+  provider: Provider | null | undefined,
+  draft: ReturnType<typeof providerDraft>,
+): CodexApiFormatDetection | null {
+  if (!provider || draft.apiFormat !== "auto") return null;
+  const formats = persistedCodexModelApiFormats(provider.meta);
+  if (!Object.keys(formats).length) return null;
+  return { identity: codexProtocolIdentity(draft), formats, failures: {} };
 }
 
 export default function ChimeraApp() {
@@ -466,6 +411,7 @@ export default function ChimeraApp() {
     "live" | "stored" | "external" | "none"
   >("none");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [codexProcess, setCodexProcess] = useState<CodexProcessStatus | null>(
     null,
@@ -509,10 +455,12 @@ export default function ChimeraApp() {
   const [activity, setActivity] = useState<OperationRecord[]>([]);
   const activityKeyRef = useRef<string | null>(null);
   const startupProviderCheckRef = useRef(false);
+  const startupRuntimeCheckRef = useRef(false);
   const fetchModelsSeqRef = useRef(0);
   const protocolProbeSeqRef = useRef(0);
   const runtimeCheckSeqRef = useRef(0);
   const testConnectionSeqRef = useRef(0);
+  const draftTestSeqRef = useRef(0);
   const providerSaveInFlightRef = useRef(false);
   const editorRef = useRef(editor);
   const [connection, setConnection] = useState<ConnectionState>({
@@ -532,8 +480,18 @@ export default function ChimeraApp() {
     execute: () => void;
   } | null>(null);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [pendingEditorDiscard, setPendingEditorDiscard] = useState(false);
+  // Editor-local connection test result: the home banner reflects the active
+  // line only and must never change because a draft was tested.
+  const [draftConnection, setDraftConnection] = useState<ConnectionState>({
+    kind: "unknown",
+    message: "尚未测试",
+  });
+  const editorBaselineRef = useRef<string | null>(null);
+  const codexProcessSeqRef = useRef(0);
 
   const activeEndpointIdentity = editor ? codexEndpointIdentity(editor) : null;
+  const activeProtocolIdentity = editor ? codexProtocolIdentity(editor) : null;
 
   useEffect(() => {
     editorRef.current = editor;
@@ -541,25 +499,54 @@ export default function ChimeraApp() {
 
   useEffect(() => {
     fetchModelsSeqRef.current += 1;
-    protocolProbeSeqRef.current += 1;
     setModels(null);
     setModelFetchIdentity(null);
     setModelFetchError(null);
-    setApiFormatDetectionError(null);
     setModelPickerOpen(false);
-
-    setApiFormatDetection(null);
   }, [activeEndpointIdentity, editor?.id]);
 
   useEffect(() => {
     protocolProbeSeqRef.current += 1;
-    if (!editor?.model.trim()) return;
-    const expectedIdentity = codexDetectionIdentity(editor, editor.model);
     setApiFormatDetection((current) =>
-      current?.identity === expectedIdentity ? current : null,
+      current && current.identity === activeProtocolIdentity ? current : null,
     );
     setApiFormatDetectionError(null);
-  }, [activeEndpointIdentity, editor?.model]);
+  }, [activeProtocolIdentity, editor?.id]);
+
+  useEffect(() => {
+    setShowKey(false);
+    setPendingEditorDiscard(false);
+    setDraftConnection({ kind: "unknown", message: "尚未测试" });
+    draftTestSeqRef.current += 1;
+  }, [editor?.id]);
+
+  const openEditor = (draft: ReturnType<typeof providerDraft>) => {
+    setModels(null);
+    setModelFetchError(null);
+    editorBaselineRef.current = editorDraftSignature(draft);
+    setEditor(draft);
+    setApiFormatDetection(detectionFromProvider(draft.original, draft));
+  };
+
+  const closeEditor = () => {
+    editorBaselineRef.current = null;
+    setPendingEditorDiscard(false);
+    setEditor(null);
+  };
+
+  // Escape and backdrop clicks ask first when the draft has unsaved input.
+  const requestCloseEditor = () => {
+    const draft = editorRef.current;
+    if (!draft) return;
+    if (
+      isEditorDraftDirty(draft, editorBaselineRef.current) ||
+      commonConfigDirty
+    ) {
+      setPendingEditorDiscard(true);
+      return;
+    }
+    closeEditor();
+  };
   const [onboardingDeferred, setOnboardingDeferred] = useState(false);
   void activity;
 
@@ -691,11 +678,18 @@ export default function ChimeraApp() {
       setProviders(sorted);
       setCurrentId(resolution.provider?.id ?? "");
       setCurrentSource(resolution.source);
+      setLoadError(null);
     } catch (error) {
+      setLoadError(String(error));
       toast.error("无法读取 Codex 供应商", { description: String(error) });
     } finally {
       setLoading(false);
     }
+  };
+
+  const retryLoadProviders = async () => {
+    setLoading(true);
+    await loadProviders();
   };
 
   const loadRuntime = async () => {
@@ -753,10 +747,16 @@ export default function ChimeraApp() {
       setRendererUnlock(null);
       return status;
     }
+    // Polls, focus events and launch/switch flows all call this; a slow older
+    // probe resolving after a newer one must not roll the status backwards.
+    const seq = ++codexProcessSeqRef.current;
     try {
       const status = await invoke<CodexProcessStatus>(
         "get_codex_process_status",
       );
+      if (seq !== codexProcessSeqRef.current) {
+        return codexProcessRef.current ?? status;
+      }
       codexProcessRef.current = status;
       setCodexProcess(status);
       void refreshRendererUnlock();
@@ -774,6 +774,7 @@ export default function ChimeraApp() {
         installMode: null,
         officialLoginAvailable: false,
       };
+      if (seq !== codexProcessSeqRef.current) return status;
       codexProcessRef.current = status;
       setCodexProcess(status);
       setRendererUnlock(null);
@@ -1008,20 +1009,26 @@ export default function ChimeraApp() {
     }
   };
 
-  const testConnection = async (baseUrl: string, providerName = "Codex") => {
+  const testConnection = async (
+    baseUrl: string,
+    providerName = "Codex",
+    target: "home" | "draft" = "home",
+  ) => {
     const started = performance.now();
-    const seq = ++testConnectionSeqRef.current;
-    setConnection({ kind: "checking", message: "正在测试 API 地址" });
+    const seqRef = target === "draft" ? draftTestSeqRef : testConnectionSeqRef;
+    const setState = target === "draft" ? setDraftConnection : setConnection;
+    const seq = ++seqRef.current;
+    setState({ kind: "checking", message: "正在测试 API 地址" });
     try {
       const [result] = await vscodeApi.testApiEndpoints([baseUrl], {
         timeoutSecs: 12,
       });
       // A newer test started while this one was in flight; let that one own
       // the connection banner and skip this stale response entirely.
-      if (seq !== testConnectionSeqRef.current) return false;
+      if (seq !== seqRef.current) return false;
       if (!result || result.latency == null)
         throw new Error(result?.error || "服务未响应");
-      setConnection({
+      setState({
         kind: "connected",
         message: `${result.latency}ms`,
         modelCount: models?.length ?? 0,
@@ -1038,8 +1045,8 @@ export default function ChimeraApp() {
       });
       return true;
     } catch (error) {
-      if (seq !== testConnectionSeqRef.current) return false;
-      setConnection({ kind: "error", message: String(error) });
+      if (seq !== seqRef.current) return false;
+      setState({ kind: "error", message: String(error) });
       note(
         "连接测试",
         "error",
@@ -1071,9 +1078,20 @@ export default function ChimeraApp() {
       });
   }, [currentId, loading, providers]);
 
-  const saveProvider = async () => {
+  // `formatOverride` backs the "按 Chat / Responses / Anthropic 保存" quick
+  // actions shown when detection fails: the choice is applied to the draft and
+  // saved in one step, so a failed probe never strands the user.
+  const saveProvider = async (formatOverride?: CodexApiFormat) => {
     if (!editor) return;
-    const draft = editor;
+    const draft =
+      formatOverride && formatOverride !== editor.apiFormat
+        ? { ...editor, apiFormat: formatOverride }
+        : editor;
+    if (draft !== editor) {
+      editorRef.current = draft;
+      setEditor(draft);
+      setApiFormatDetectionError(null);
+    }
     if (
       !draft.name.trim() ||
       !draft.baseUrl.trim() ||
@@ -1091,6 +1109,7 @@ export default function ChimeraApp() {
 
     try {
       const endpointIdentity = codexEndpointIdentity(draft);
+      const protocolIdentity = codexProtocolIdentity(draft);
       let fetchedForSave =
         models !== null && modelFetchIdentity === endpointIdentity
           ? models
@@ -1126,45 +1145,50 @@ export default function ChimeraApp() {
         }
       }
 
+      // Without a fresh list the catalog keeps what it already held, so an
+      // edit made offline never shrinks the model picker in Codex.
+      if (!fetchedForSave.length) {
+        fetchedForSave = previousCatalogAsFetched(draft.original);
+      }
+
       let resolvedApiFormat: CodexApiFormat =
         draft.apiFormat === "auto" ? "openai_responses" : draft.apiFormat;
       let resolvedAnthropicAuthField = draft.anthropicAuthField;
-      let detectedModelFormats: Record<string, DetectedCodexApiFormat> = {};
-      // The saved catalog is the union of the default model, user-mapped rows,
-      // and fetched /models entries. Detection must cover exactly this set so a
-      // later addition to the mapping table can never be saved undetected.
+      // Only the default model and the user's mapping rows are probed. The
+      // generated catalog still carries every fetched model; those follow the
+      // provider protocol and the router's lazy probe at request time.
+      const probeModels = codexProbeModels(draft.model, draft.catalogModels);
+      const probeRows = probeModels.map((model) => ({ model }));
+      const modelRoutes = draft.original?.meta?.codexModelRoutes;
+      let detectedFormats: Record<string, DetectedCodexApiFormat> = {};
       const catalogModels = buildCodexModelCatalog(
         draft.model,
         draft.catalogModels,
         fetchedForSave,
       );
       if (draft.apiFormat === "auto") {
-        const detectionIdentity = codexDetectionIdentity(draft, draft.model);
-        const cachedDetection =
-          apiFormatDetection?.identity === detectionIdentity
-            ? apiFormatDetection.result
+        const cached =
+          apiFormatDetection?.identity === protocolIdentity
+            ? apiFormatDetection
             : null;
-        if (cachedDetection) {
-          resolvedApiFormat = cachedDetection.apiFormat;
-          resolvedAnthropicAuthField =
-            cachedDetection.anthropicAuthField ?? draft.anthropicAuthField;
-          detectedModelFormats =
-            apiFormatDetection?.formats ??
-            (draft.model.trim()
-              ? { [draft.model.trim()]: cachedDetection }
-              : {});
-        } else {
+        detectedFormats = { ...cached?.formats };
+        let failures: Record<string, string> = { ...cached?.failures };
+        // Results persisted with the provider or produced by an earlier probe
+        // are reused; only models still unknown for this identity are probed.
+        const pendingModels = findCodexCatalogModelsWithoutProtocol(
+          probeRows,
+          detectedFormats,
+          modelRoutes,
+        );
+        if (pendingModels.length > 0) {
           const seq = ++protocolProbeSeqRef.current;
           setFetchingModels(true);
           setApiFormatDetectionError(null);
           try {
-            const detectionModels = catalogModels
-              .map((model) => model.model.trim())
-              .filter(Boolean);
-            const detectedFormats = await detectCodexApiFormats(
+            const report = await detectCodexApiFormats(
               draft.baseUrl,
               draft.apiKey,
-              detectionModels,
+              pendingModels,
               draft.isFullUrl,
               draft.customUserAgent.trim() || undefined,
             );
@@ -1175,54 +1199,58 @@ export default function ChimeraApp() {
               toast.info("线路配置已变化，请重新保存");
               return;
             }
-            detectedModelFormats = detectedFormats;
-            const defaultDetection = detectedFormats[draft.model.trim()];
-            if (!defaultDetection) {
-              throw new Error("默认模型未能识别上游协议，请手动选择协议后重试");
+            detectedFormats = { ...detectedFormats, ...report.detected };
+            failures = { ...failures, ...report.failures };
+            for (const model of Object.keys(report.detected)) {
+              delete failures[model];
             }
-            resolvedApiFormat = defaultDetection.apiFormat;
-            resolvedAnthropicAuthField =
-              defaultDetection.anthropicAuthField ?? draft.anthropicAuthField;
-            setApiFormatDetection({
-              identity: detectionIdentity,
-              result: defaultDetection,
-              formats: detectedFormats,
-            });
-            toast.success(
-              `已识别 ${Object.keys(detectedFormats).length} 个模型的上游协议`,
-            );
           } catch (error) {
-            const message = String(error);
-            setApiFormatDetectionError(
-              "无法自动识别上游协议，请重试或手动选择协议。",
-            );
-            toast.error("无法自动识别上游 API 协议", {
-              description: message,
-            });
-            return;
+            if (
+              seq !== protocolProbeSeqRef.current ||
+              editorRef.current !== draft
+            ) {
+              toast.info("线路配置已变化，请重新保存");
+              return;
+            }
+            const reason = String(error);
+            for (const model of pendingModels) failures[model] = reason;
           } finally {
             if (seq === protocolProbeSeqRef.current) setFetchingModels(false);
           }
+          setApiFormatDetection({
+            identity: protocolIdentity,
+            formats: detectedFormats,
+            failures,
+          });
         }
-        // Also covers the cached path: a mapping row added without changing the
-        // detection identity would otherwise be saved undetected and fail closed
-        // (HTTP 400) on the first request. Models routed to a dedicated upstream
-        // with an explicit protocol are exempt (the request follows the route).
-        const undetectedCatalogModels = findCodexCatalogModelsWithoutProtocol(
-          catalogModels,
-          detectedModelFormats,
-          draft.original?.meta?.codexModelRoutes,
-        );
-        if (undetectedCatalogModels.length > 0) {
+        const defaultDetection = detectedFormats[draft.model.trim()];
+        if (!defaultDetection) {
           setApiFormatDetectionError(
-            "无法自动识别上游协议，请重试或手动选择协议。",
+            "未能识别默认模型的上游协议。可查看下方原因后重试，或直接按指定协议保存。",
           );
           toast.error("无法自动识别上游 API 协议", {
-            description: `无法确认以下模型的上游协议：${undetectedCatalogModels.join(
-              "、",
-            )}。请重试自动识别、移除这些模型，或在高级设置中手动选择协议。`,
+            description:
+              failures[draft.model.trim()] ??
+              "请查看编辑器中的失败原因，或按 Chat / Responses / Anthropic 保存。",
           });
           return;
+        }
+        resolvedApiFormat = defaultDetection.apiFormat;
+        resolvedAnthropicAuthField =
+          defaultDetection.anthropicAuthField ?? draft.anthropicAuthField;
+        setApiFormatDetectionError(null);
+        // Mapping rows that stayed undetected no longer block the save: they
+        // follow the default protocol and are listed so the user can fix them.
+        const undetectedMappedModels = findCodexCatalogModelsWithoutProtocol(
+          probeRows,
+          detectedFormats,
+          modelRoutes,
+        );
+        if (undetectedMappedModels.length > 0) {
+          toast.warning(
+            `${undetectedMappedModels.length} 个映射模型未识别协议，将沿用 ${codexApiFormatLabel(resolvedApiFormat)}`,
+            { description: undetectedMappedModels.join("、") },
+          );
         }
       }
 
@@ -1268,9 +1296,9 @@ export default function ChimeraApp() {
           codexModelApiFormats:
             draft.apiFormat === "auto"
               ? Object.fromEntries(
-                  Object.entries(detectedModelFormats).map(
-                    ([model, detected]) => [model, detected.apiFormat],
-                  ),
+                  probeModels
+                    .filter((model) => detectedFormats[model])
+                    .map((model) => [model, detectedFormats[model].apiFormat]),
                 )
               : undefined,
           apiKeyField:
@@ -1307,6 +1335,13 @@ export default function ChimeraApp() {
           auth,
           config,
           modelCatalog: { models: catalogModels },
+          // The user's rows live apart from the generated catalog so the
+          // mapping table never re-reads the whole fetched list on reopen.
+          modelMappings: {
+            models: draft.catalogModels
+              .filter((row) => row.model.trim())
+              .map((row) => ({ ...row, model: row.model.trim() })),
+          },
         },
       };
       try {
@@ -1341,7 +1376,7 @@ export default function ChimeraApp() {
           );
         } catch (error) {
           await loadProviders();
-          setEditor(null);
+          closeEditor();
           note("应用模型目录", "error", String(error), provider.name);
           toast.error("线路已保存，但模型目录未正确应用", {
             description: String(error),
@@ -1349,7 +1384,7 @@ export default function ChimeraApp() {
           return;
         }
         await loadProviders();
-        setEditor(null);
+        closeEditor();
         setPendingModelReload(draft.model.trim());
         const writtenSummary = automaticFetchFailed
           ? "供应商未返回模型列表，已确保默认模型可用。"
@@ -1446,28 +1481,44 @@ export default function ChimeraApp() {
         latest.name || "未命名供应商",
       );
 
+      // An empty default model gets a suggestion (first fetched entry that is
+      // not an embedding / rerank / speech / image model) but no probe: the
+      // protocol is detected once the user has confirmed a model, on save.
+      if (!latest.model.trim()) {
+        const suggested = pickDefaultFetchedModel(result);
+        if (suggested) {
+          setEditor((currentEditor) =>
+            currentEditor &&
+            currentEditor.id === latest.id &&
+            !currentEditor.model.trim()
+              ? { ...currentEditor, model: suggested }
+              : currentEditor,
+          );
+        }
+        toast.success(`已获取 ${result.length} 个模型`, {
+          description: suggested
+            ? `已填入建议的默认模型 ${suggested}，保存时会自动识别协议。`
+            : "请选择默认模型，保存时会自动识别协议。",
+        });
+        return;
+      }
+
       if (latest.apiFormat !== "auto") {
         toast.success(`已获取 ${result.length} 个模型`);
         return;
       }
 
-      const probeModel = latest.model.trim() || result[0]?.id?.trim();
-      if (!probeModel) {
-        setApiFormatDetection(null);
-        setApiFormatDetectionError(
-          "没有可用于安全探测的模型，请手动填写默认模型后重试。",
-        );
-        toast.warning(`已获取 ${result.length} 个模型，但暂时无法探测协议`);
-        return;
-      }
-
-      const probeIdentity = codexDetectionIdentity(latest, probeModel);
+      // Probe the default model plus the mapping rows only — never the whole
+      // fetched list, which on aggregators always contains models that fail.
+      const probeModels = codexProbeModels(latest.model, latest.catalogModels);
+      const probeModel = probeModels[0];
+      const probeIdentity = codexProtocolIdentity(latest);
       const probeSeq = ++protocolProbeSeqRef.current;
       try {
-        const detectedFormats = await detectCodexApiFormats(
+        const report = await detectCodexApiFormats(
           latest.baseUrl,
           latest.apiKey,
-          [probeModel, ...result.map((model) => model.id.trim())],
+          probeModels,
           latest.isFullUrl,
           latest.customUserAgent.trim() || undefined,
         );
@@ -1477,29 +1528,33 @@ export default function ChimeraApp() {
           !current ||
           current.id !== latest.id ||
           current.apiFormat !== "auto" ||
-          codexDetectionIdentity(
-            current,
-            current.model.trim() || probeModel,
-          ) !== probeIdentity
+          codexProtocolIdentity(current) !== probeIdentity
         ) {
           return;
         }
-        const detected = detectedFormats[probeModel];
-        if (!detected) {
-          throw new Error("默认模型未能识别上游协议");
-        }
+        const detectedFormats = report.detected;
         setApiFormatDetection({
           identity: probeIdentity,
-          result: detected,
           formats: detectedFormats,
+          failures: report.failures,
         });
+        const detected = detectedFormats[probeModel];
+        if (!detected) {
+          setApiFormatDetectionError(
+            "模型已获取，但未能识别默认模型的上游协议。可查看下方原因后重试，或直接按指定协议保存。",
+          );
+          toast.warning(`已获取 ${result.length} 个模型，但协议识别失败`, {
+            description: report.failures[probeModel],
+          });
+          return;
+        }
         setApiFormatDetectionError(null);
         if (detected.anthropicAuthField) {
           setEditor((currentEditor) =>
             currentEditor &&
             currentEditor.id === latest.id &&
             currentEditor.apiFormat === "auto" &&
-            codexEndpointIdentity(currentEditor) === endpointIdentity
+            codexProtocolIdentity(currentEditor) === probeIdentity
               ? {
                   ...currentEditor,
                   anthropicAuthField: detected.anthropicAuthField!,
@@ -1507,8 +1562,14 @@ export default function ChimeraApp() {
               : currentEditor,
           );
         }
+        const failedCount = Object.keys(report.failures).length;
         toast.success(
           `已获取 ${result.length} 个模型，并识别 ${Object.keys(detectedFormats).length} 个模型的上游协议`,
+          failedCount
+            ? {
+                description: `${failedCount} 个映射模型未识别，保存时沿用默认协议。`,
+              }
+            : undefined,
         );
       } catch (error) {
         if (probeSeq !== protocolProbeSeqRef.current) return;
@@ -1574,6 +1635,29 @@ export default function ChimeraApp() {
       return null;
     }
   };
+
+  // "启动时检查 Codex 更新" is a real switch: one silent check after the
+  // first load, skipped entirely when the user turned it off.
+  useEffect(() => {
+    if (!runningInTauri || loading || startupRuntimeCheckRef.current) return;
+    startupRuntimeCheckRef.current = true;
+    void settingsApi
+      .get()
+      .then((settings) => {
+        if (settings.checkCodexUpdatesOnStart === false) return;
+        void checkRuntime(undefined, { announce: false });
+      })
+      .catch(() => {
+        // Startup checks are optional and must never block the main window.
+      });
+  }, [loading]);
+
+  // The update page always shows the current install, not the snapshot taken
+  // when the window opened.
+  useEffect(() => {
+    if (view !== "runtime") return;
+    void loadRuntime();
+  }, [view]);
 
   const refreshRuntimeAfterInstall = async (
     preferences?: RuntimeUpdatePreferences,
@@ -1678,10 +1762,19 @@ export default function ChimeraApp() {
     }
   };
 
-  if (!loading && !providers.length && !editor && !onboardingDeferred) {
+  // A failed read leaves the list empty too, so without this guard a database
+  // or permission error is indistinguishable from a fresh install and the user
+  // gets an onboarding screen with no way back.
+  if (
+    !loading &&
+    !loadError &&
+    !providers.length &&
+    !editor &&
+    !onboardingDeferred
+  ) {
     return (
       <StandaloneOnboarding
-        onAdd={() => setEditor(providerDraft(null, "默认线路"))}
+        onAdd={() => openEditor(providerDraft(null, "默认线路"))}
         onSkip={() => setOnboardingDeferred(true)}
       />
     );
@@ -1752,7 +1845,32 @@ export default function ChimeraApp() {
         <section
           className={`chimera-content${view === "providers" ? " is-provider-view" : ""}`}
         >
-          {view === "providers" && (
+          {view === "providers" && loadError && (
+            <section className="route-load-error" role="alert">
+              <CircleAlert size={26} />
+              <h2>无法读取线路列表</h2>
+              <p>{loadError}</p>
+              <div>
+                <button
+                  className="primary"
+                  onClick={() => void retryLoadProviders()}
+                  disabled={loading}
+                  data-autofocus
+                >
+                  {loading ? (
+                    <>
+                      <LoaderCircle className="spin" size={15} /> 正在重试…
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw size={15} /> 重试
+                    </>
+                  )}
+                </button>
+              </div>
+            </section>
+          )}
+          {view === "providers" && !loadError && (
             <NewProvidersView
               providers={providers}
               currentId={currentId}
@@ -1765,18 +1883,12 @@ export default function ChimeraApp() {
               restartRequired={codexRestartRequired}
               onOpenCodex={openCodex}
               onSwitch={switchProvider}
-              onEdit={(provider) => {
-                setModels(null);
-                setModelFetchError(null);
-                setEditor(providerDraft(provider));
-              }}
-              onAdd={() => {
-                setModels(null);
-                setModelFetchError(null);
-                setEditor(
+              onEdit={(provider) => openEditor(providerDraft(provider))}
+              onAdd={() =>
+                openEditor(
                   providerDraft(null, providers.length ? "新线路" : "默认线路"),
-                );
-              }}
+                )
+              }
             />
           )}
           {view === "runtime" && (
@@ -1835,11 +1947,10 @@ export default function ChimeraApp() {
           <div
             className="provider-sheet-backdrop"
             role="presentation"
-            onMouseDown={(event) =>
-              !savingProvider &&
-              event.target === event.currentTarget &&
-              setEditor(null)
-            }
+            onMouseDown={(event) => {
+              if (savingProvider) return;
+              if (event.target === event.currentTarget) requestCloseEditor();
+            }}
           >
             <ProviderEditor
               editor={editor}
@@ -1862,14 +1973,25 @@ export default function ChimeraApp() {
                 setCommonConfigDirty(true);
               }}
               onFetchModels={fetchModels}
+              connection={draftConnection}
               onTest={() =>
-                void testConnection(editor.baseUrl, editor.name || "Codex")
+                void testConnection(
+                  editor.baseUrl,
+                  editor.name || "Codex",
+                  "draft",
+                )
               }
               onSave={saveProvider}
               onDelete={() => {
                 if (editor.original) setPendingProviderDelete(editor.original);
               }}
-              escapeDisabled={Boolean(pendingProviderDelete) || savingProvider}
+              onRequestClose={requestCloseEditor}
+              escapeDisabled={
+                Boolean(pendingProviderDelete) ||
+                savingProvider ||
+                pendingEditorDiscard ||
+                modelPickerOpen
+              }
             />
           </div>
         )}
@@ -1885,6 +2007,12 @@ export default function ChimeraApp() {
           onClose={() => setModelPickerOpen(false)}
         />
       )}
+      {pendingEditorDiscard && (
+        <ConfirmDiscardEditor
+          onCancel={() => setPendingEditorDiscard(false)}
+          onConfirm={closeEditor}
+        />
+      )}
       {pendingProviderDelete && (
         <ConfirmProviderDelete
           provider={pendingProviderDelete}
@@ -1894,7 +2022,7 @@ export default function ChimeraApp() {
               await providersApi.delete(pendingProviderDelete.id, "codex");
               await loadProviders();
               setPendingProviderDelete(null);
-              setEditor(null);
+              closeEditor();
               toast.success("线路已删除");
             } catch (error) {
               toast.error("删除失败", { description: String(error) });
@@ -1955,275 +2083,6 @@ export default function ChimeraApp() {
         />
       )}
     </div>
-  );
-}
-
-function ProvidersView({
-  providers,
-  currentId,
-  currentSource,
-  connection,
-  loading,
-  runtime,
-  activity,
-  onSwitch,
-  onEdit,
-  onAdd,
-  onTest,
-  onCheckRuntime,
-  onDiagnose,
-}: {
-  providers: Provider[];
-  currentId: string;
-  currentSource: "live" | "stored" | "external" | "none";
-  connection: ConnectionState;
-  loading: boolean;
-  runtime: RuntimeStatus | null;
-  activity: OperationRecord[];
-  onSwitch: (id: string) => void;
-  onEdit: (provider: Provider) => void;
-  onAdd: () => void;
-  onTest: (url: string, name?: string) => Promise<boolean>;
-  onCheckRuntime: () => void;
-  onDiagnose: () => void;
-}) {
-  if (loading) return <Empty label="正在读取供应商…" />;
-  if (!providers.length) return <Onboarding onAdd={onAdd} />;
-  const current =
-    providers.find((provider) => provider.id === currentId) ?? null;
-  if (!current)
-    return (
-      <section className="provider-console">
-        <div className="connection-banner is-warning">
-          <CircleAlert size={18} />
-          <div>
-            <b>检测到外部 Codex 配置</b>
-            <span>
-              当前配置不属于 Chimera++
-              中已保存的供应商；请选择一个供应商应用，或添加现有配置。
-            </span>
-          </div>
-          <em>未接管</em>
-        </div>
-        <div className="console-heading">
-          <h2>已保存的供应商</h2>
-          <button className="primary" onClick={onAdd}>
-            <Plus size={15} /> 添加供应商
-          </button>
-        </div>
-        <div className="provider-list">
-          {providers.map((provider) => (
-            <article className="provider-card" key={provider.id}>
-              <span className="provider-monogram">
-                {provider.name.slice(0, 1).toUpperCase()}
-              </span>
-              <div className="provider-copy">
-                <b>{provider.name}</b>
-                <code>
-                  {extractCodexBaseUrl(
-                    String(provider.settingsConfig?.config ?? ""),
-                  ) || "未配置 URL"}
-                </code>
-              </div>
-              <div className="provider-actions">
-                <button onClick={() => onEdit(provider)}>编辑</button>
-                <button className="dark" onClick={() => onSwitch(provider.id)}>
-                  应用
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
-    );
-  const endpoint =
-    extractCodexBaseUrl(String(current.settingsConfig?.config ?? "")) ||
-    "未配置请求地址";
-  const model =
-    extractCodexModelName(String(current.settingsConfig?.config ?? "")) ||
-    "未设置";
-  const cards = providers.slice(0, 3);
-  const connectionLabel =
-    connection.kind === "connected"
-      ? `已验证 · ${connection.message}`
-      : connection.kind === "checking"
-        ? "验证中"
-        : connection.kind === "error"
-          ? "验证失败"
-          : currentSource === "live"
-            ? "配置已识别"
-            : "等待验证";
-  return (
-    <section className="provider-console">
-      <div
-        className={`connection-banner ${connection.kind === "error" ? "is-warning" : ""}`}
-      >
-        <Zap size={18} />
-        <div>
-          <b>当前正在使用 {current.name}</b>
-          <span>
-            {currentSource === "live"
-              ? "已从 Codex 实时配置识别"
-              : "根据 Chimera++ 保存记录识别"}
-          </span>
-        </div>
-        <em>{connectionLabel}</em>
-      </div>
-      <div className="console-layout">
-        <div className="console-main">
-          <div className="console-heading">
-            <h2>快速切换</h2>
-            <button className="link-button" onClick={() => onEdit(current)}>
-              管理供应商 <span>→</span>
-            </button>
-          </div>
-          <div className="quick-provider-grid">
-            {cards.map((provider) => {
-              const active = provider.id === current.id;
-              return (
-                <button
-                  key={provider.id}
-                  className={`quick-provider ${active ? "selected" : ""}`}
-                  onClick={() => !active && onSwitch(provider.id)}
-                >
-                  <span className="quick-provider-mark">
-                    {provider.name.slice(0, 1).toUpperCase()}
-                  </span>
-                  <b title={provider.name}>{provider.name}</b>
-                  <em>{active ? "当前" : "可切换"}</em>
-                  <small
-                    title={
-                      extractCodexModelName(
-                        String(provider.settingsConfig?.config ?? ""),
-                      ) || "未配置模型"
-                    }
-                  >
-                    {extractCodexModelName(
-                      String(provider.settingsConfig?.config ?? ""),
-                    ) || "未配置模型"}
-                  </small>
-                </button>
-              );
-            })}
-            <button className="quick-provider add-provider" onClick={onAdd}>
-              <Plus size={16} /> 添加供应商
-            </button>
-          </div>
-          <article className="provider-workbench">
-            <header>
-              <div>
-                <h2>{current.name}</h2>
-                <p>Codex 兼容接口 · 模型由供应商 API 获取</p>
-              </div>
-              <button className="preset-badge" onClick={() => onEdit(current)}>
-                编辑
-              </button>
-            </header>
-            <label>
-              接口地址
-              <input value={endpoint} readOnly title={endpoint} />
-            </label>
-            <label>
-              API 密钥
-              <div className="readonly-secret">
-                <input value="••••••••••••••••••" readOnly />
-                <button onClick={() => onEdit(current)}>编辑</button>
-              </div>
-            </label>
-            <label>
-              默认模型
-              <div className="readonly-model">
-                <input value={model} readOnly title={model} />
-                <button onClick={() => onEdit(current)}>获取模型</button>
-              </div>
-            </label>
-            <footer>
-              <button
-                className="secondary"
-                onClick={() => void onTest(endpoint, current.name)}
-                disabled={!endpoint}
-              >
-                测试连接
-              </button>
-              <button className="primary" onClick={() => onEdit(current)}>
-                编辑配置
-              </button>
-            </footer>
-          </article>
-        </div>
-        <aside className="codex-summary">
-          <div className="summary-title">
-            <h2>Codex 更新检测</h2>
-            <button aria-label="更新诊断" onClick={onDiagnose}>
-              <MoreHorizontal size={18} />
-            </button>
-          </div>
-          <div className="runtime-version">
-            <b title={runtime?.version ?? undefined}>
-              {formatVersion(runtime?.version)}
-            </b>
-            <em>{runtime?.installed ? "已安装" : "未安装"}</em>
-            <span>
-              {runtime?.installed
-                ? `${runtimeText(runtime.installMode)} · 路径已识别`
-                : "未检测到可用安装"}
-            </span>
-          </div>
-          <ul className="runtime-facts">
-            <li>
-              <ShieldCheck size={16} />
-              <span>
-                <b>更新检测</b>
-                <small>
-                  {runtime?.installed
-                    ? "已识别当前 Codex 安装"
-                    : "等待安装或重新检测"}
-                </small>
-              </span>
-            </li>
-            <li>
-              <Check size={16} />
-              <span>
-                <b>安装位置</b>
-                <small title={runtime?.installPath ?? undefined}>
-                  {runtime?.installPath || "未检测到"}
-                </small>
-              </span>
-            </li>
-            <li>
-              <Activity size={16} />
-              <span>
-                <b>回滚点</b>
-                <small>
-                  {runtime?.canRollback ? "可用" : "当前安装方式无可用副本"}
-                </small>
-              </span>
-            </li>
-          </ul>
-          <div className="summary-actions">
-            <button className="dark" onClick={onCheckRuntime}>
-              <RefreshCw size={15} /> 检查更新
-            </button>
-            <button onClick={onDiagnose}>
-              <Wrench size={15} /> 查看诊断
-            </button>
-          </div>
-          <div className="summary-activity">
-            <b>最近活动</b>
-            {activity.slice(0, 2).map((item) => (
-              <span key={item.id}>
-                {new Date(item.timestamp).toLocaleTimeString("zh-CN", {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}{" "}
-                · {item.action}
-              </span>
-            ))}
-            {!activity.length && <span>暂无操作记录</span>}
-          </div>
-        </aside>
-      </div>
-    </section>
   );
 }
 
@@ -3058,6 +2917,70 @@ export function NewProvidersView({
     managerOpen,
     managerTriggerRef,
   );
+  // Naming a line requires parsing its config.toml, and disambiguating the
+  // generic Chimera names requires parsing every other line's too. Computed
+  // per render that is quadratic in the number of lines and re-runs on every
+  // keystroke in the search box, so derive it once per provider list.
+  const lineLabels = useMemo(() => {
+    const isOfficial = (provider: Provider) =>
+      provider.id === "codex-official" || provider.category === "official";
+    const isChimera = (provider: Provider) => {
+      const endpoint =
+        extractCodexBaseUrl(String(provider.settingsConfig?.config ?? "")) ??
+        "";
+      let host = endpoint;
+      try {
+        host = new URL(endpoint).hostname;
+      } catch {
+        // Not a parseable URL; match against the raw value instead.
+      }
+      return /(^|\.)chimerahub\.org$/i.test(host);
+    };
+    const chimeraIds = providers.filter(isChimera).map((item) => item.id);
+    const labels = new Map<
+      string,
+      { name: string; source: string; mark: string; official: boolean }
+    >();
+    for (const provider of providers) {
+      const official = isOfficial(provider);
+      const chimera = !official && isChimera(provider);
+      const normalized = provider.name.trim().toLowerCase().replace(/\s+/g, "");
+      const generic = ["chimerahub", "chimera中转站", "default"].includes(
+        normalized,
+      );
+      let name: string;
+      if (official) {
+        name = "官方账户";
+      } else if (!generic) {
+        name = provider.name || "未命名线路";
+      } else if (!chimera) {
+        name = "默认线路";
+      } else {
+        const index = chimeraIds.indexOf(provider.id);
+        name =
+          index <= 0
+            ? "默认线路"
+            : index === 1
+              ? "备用线路"
+              : `线路 ${index + 1}`;
+      }
+      labels.set(provider.id, {
+        name,
+        source: official
+          ? "ChatGPT 官方登录"
+          : chimera
+            ? "Chimera 中转站"
+            : "自定义线路",
+        mark: official
+          ? "O"
+          : chimera
+            ? "C"
+            : provider.name.trim().slice(0, 1).toUpperCase() || "线",
+        official,
+      });
+    }
+    return labels;
+  }, [providers]);
   if (loading) return <Empty label="正在读取线路…" />;
   if (!providers.length) return <Onboarding onAdd={onAdd} />;
   const current =
@@ -3080,46 +3003,15 @@ export function NewProvidersView({
             ? "配置已识别"
             : "等待测试";
   const isOfficialLine = (provider: Provider) =>
-    provider.id === "codex-official" || provider.category === "official";
-  const isChimeraLine = (provider: Provider) => {
-    const endpoint =
-      extractCodexBaseUrl(String(provider.settingsConfig?.config ?? "")) ?? "";
-    return /(^|\.)chimerahub\.org$/i.test(
-      (() => {
-        try {
-          return new URL(endpoint).hostname;
-        } catch {
-          return endpoint;
-        }
-      })(),
-    );
-  };
-  const lineName = (provider: Provider) => {
-    if (isOfficialLine(provider)) return "官方账户";
-    const normalized = provider.name.trim().toLowerCase().replace(/\s+/g, "");
-    const generic = ["chimerahub", "chimera中转站", "default"].includes(
-      normalized,
-    );
-    if (!generic) return provider.name || "未命名线路";
-    if (!isChimeraLine(provider)) return "默认线路";
-    const chimeraLines = providers.filter(isChimeraLine);
-    const index = chimeraLines.findIndex((item) => item.id === provider.id);
-    if (index <= 0) return "默认线路";
-    if (index === 1) return "备用线路";
-    return `线路 ${index + 1}`;
-  };
+    lineLabels.get(provider.id)?.official ??
+    (provider.id === "codex-official" || provider.category === "official");
+  const lineName = (provider: Provider) =>
+    lineLabels.get(provider.id)?.name ?? provider.name ?? "未命名线路";
   const lineSource = (provider: Provider) =>
-    isOfficialLine(provider)
-      ? "ChatGPT 官方登录"
-      : isChimeraLine(provider)
-        ? "Chimera 中转站"
-        : "自定义线路";
+    lineLabels.get(provider.id)?.source ?? "自定义线路";
   const lineMark = (provider: Provider) =>
-    isOfficialLine(provider)
-      ? "O"
-      : isChimeraLine(provider)
-        ? "C"
-        : provider.name.trim().slice(0, 1).toUpperCase() || "线";
+    lineLabels.get(provider.id)?.mark ??
+    (provider.name.trim().slice(0, 1).toUpperCase() || "线");
   const visibleLines = providers.filter((provider) => {
     const haystack =
       `${lineName(provider)} ${lineSource(provider)} ${provider.name} ${extractCodexModelName(String(provider.settingsConfig?.config ?? ""))}`.toLowerCase();
@@ -3511,9 +3403,11 @@ function ProviderEditor({
   commonConfigLoaded,
   onCommonConfigChange,
   onFetchModels,
+  connection,
   onTest,
   onSave,
   onDelete,
+  onRequestClose,
   escapeDisabled,
 }: {
   editor: ReturnType<typeof providerDraft>;
@@ -3530,9 +3424,11 @@ function ProviderEditor({
   commonConfigLoaded: boolean;
   onCommonConfigChange: (value: string) => void;
   onFetchModels: () => void;
+  connection: ConnectionState;
   onTest: () => void;
   onSave: () => void;
   onDelete: () => void;
+  onRequestClose: () => void;
   escapeDisabled: boolean;
 }) {
   const [commonConfigOpen, setCommonConfigOpen] = useState(false);
@@ -3541,11 +3437,28 @@ function ProviderEditor({
     null,
   );
   const dialogRef = useDialogFocus<HTMLElement>(
-    () => setEditor(null),
+    onRequestClose,
     !escapeDisabled,
   );
   const patch = (key: string, value: string) =>
     setEditor({ ...editor, [key]: value });
+  const detectedDefaultFormat =
+    apiFormatDetection?.formats[editor.model.trim()] ?? null;
+  // Only the models this line actually probes are worth explaining; a fetched
+  // catalog entry that failed is corrected by the router at request time.
+  const detectionFailures = useMemo(() => {
+    if (!apiFormatDetection) return [];
+    return codexProbeModels(editor.model, editor.catalogModels)
+      .filter((model) => !apiFormatDetection.formats[model])
+      .map((model) => ({
+        model,
+        ...describeCodexDetectionFailure(apiFormatDetection.failures[model]),
+      }));
+  }, [apiFormatDetection, editor.model, editor.catalogModels]);
+  const commonConfigWarning = useMemo(
+    () => codexApprovalPolicyWarning(commonConfigSnippet),
+    [commonConfigSnippet],
+  );
   return (
     <section
       ref={dialogRef}
@@ -3758,6 +3671,9 @@ function ProviderEditor({
                   <small>
                     供应商地址、密钥、模型和模型目录不会作为通用配置共享。
                   </small>
+                  {commonConfigWarning && (
+                    <small className="error-text">{commonConfigWarning}</small>
+                  )}
                 </label>
               )}
             </div>
@@ -3785,17 +3701,45 @@ function ProviderEditor({
               <small>
                 自动模式会在获取模型后或保存前主动识别协议，再据此决定是否开启本地路由；不会把首次真实请求当作常规探测。
               </small>
-              {editor.apiFormat === "auto" && apiFormatDetection && (
+              {editor.apiFormat === "auto" && detectedDefaultFormat && (
                 <small>
-                  已识别：
-                  {codexApiFormatLabel(apiFormatDetection.result.apiFormat)}
-                  {apiFormatDetection.result.apiFormat === "openai_responses"
+                  已识别：{codexApiFormatLabel(detectedDefaultFormat.apiFormat)}
+                  {detectedDefaultFormat.apiFormat === "openai_responses"
                     ? "（可直连；若启用代理专属功能仍会自动开启路由）"
                     : "（保存后自动开启路由）"}
                 </small>
               )}
               {editor.apiFormat === "auto" && apiFormatDetectionError && (
                 <small className="error-text">{apiFormatDetectionError}</small>
+              )}
+              {editor.apiFormat === "auto" && detectionFailures.length > 0 && (
+                <div className="detection-failures">
+                  <ul>
+                    {detectionFailures.map(({ model, status, excerpt }) => (
+                      <li key={model}>
+                        <code>{model}</code>
+                        <b>{status}</b>
+                        {excerpt && <span title={excerpt}>{excerpt}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="detection-failure-actions">
+                    <span>也可以直接指定协议保存：</span>
+                    {(
+                      ["openai_responses", "openai_chat", "anthropic"] as const
+                    ).map((format) => (
+                      <button
+                        key={format}
+                        type="button"
+                        className="secondary"
+                        disabled={savingProvider}
+                        onClick={() => patch("apiFormat", format)}
+                      >
+                        按 {codexApiFormatLabel(format)} 保存
+                      </button>
+                    ))}
+                  </div>
+                </div>
               )}
             </label>
             <div className="advanced-group">
@@ -4249,10 +4193,16 @@ function ProviderEditor({
         <button
           className="secondary"
           onClick={onTest}
-          disabled={savingProvider}
+          disabled={savingProvider || connection.kind === "checking"}
         >
           测试连接
         </button>
+        <small
+          className={`editor-connection is-${connection.kind}`}
+          role="status"
+        >
+          {connection.message}
+        </small>
         <div>
           {editor.original && (
             <button
@@ -4334,541 +4284,6 @@ function ModelPickerDialog({
         </div>
       </section>
     </div>
-  );
-}
-
-function RuntimeView({
-  runtime,
-  release,
-  progress,
-  onCheck,
-  onDiagnose,
-  onAction,
-}: {
-  runtime: RuntimeStatus | null;
-  release: ReleaseStatus | null;
-  progress: DownloadProgress | null;
-  onCheck: () => void;
-  onDiagnose: () => void;
-  onAction: (value: "update" | "repair" | "rollback" | "uninstall") => void;
-}) {
-  const target = release?.latestVersion ?? runtime?.version ?? "等待检查";
-  const percent = progress?.total
-    ? Math.min(100, Math.round((progress.downloaded / progress.total) * 100))
-    : 0;
-  return (
-    <section className="runtime-update-layout">
-      <article className="runtime-update-card">
-        <h2>{release?.updateAvailable ? "发现可用更新" : "Codex 更新检测"}</h2>
-        <div className="version-compare">
-          <div>
-            <span>当前版本</span>
-            <b title={runtime?.version ?? undefined}>
-              {formatVersion(runtime?.version)}
-            </b>
-          </div>
-          <div
-            className={
-              release?.updateAvailable
-                ? "target-version available"
-                : "target-version"
-            }
-          >
-            <span>目标版本</span>
-            <b title={target}>{target}</b>
-          </div>
-        </div>
-        <dl className="update-details">
-          <div>
-            <dt>更新通道</dt>
-            <dd>
-              <Check size={15} />{" "}
-              {release?.source === "mirror" ? "镜像" : "自动"}
-            </dd>
-          </div>
-          <div>
-            <dt>安装方式</dt>
-            <dd>
-              <Check size={15} />{" "}
-              {release
-                ? runtimeText(release.installMode)
-                : runtimeText(runtime?.installMode)}
-            </dd>
-          </div>
-          <div>
-            <dt>安装状态</dt>
-            <dd>
-              {runtime?.installed ? (
-                <>
-                  <Check size={15} /> 已检测
-                </>
-              ) : (
-                "未安装"
-              )}
-            </dd>
-          </div>
-          <div>
-            <dt>下载大小</dt>
-            <dd>
-              {release?.sizeBytes
-                ? `${(release.sizeBytes / 1024 / 1024).toFixed(1)} MB`
-                : "检查后显示"}
-            </dd>
-          </div>
-        </dl>
-        <div className="update-progress" aria-live="polite">
-          <span>
-            {progress
-              ? `正在下载 ${percent}%`
-              : release?.updateAvailable
-                ? "新版本可以下载安装"
-                : release
-                  ? "当前通道没有更高版本"
-                  : "检查更新以获取最新版本"}
-          </span>
-          <i>
-            <u style={{ width: `${percent}%` }} />
-          </i>
-        </div>
-        <footer>
-          <button onClick={onCheck} disabled={Boolean(progress)}>
-            重新检查
-          </button>
-          {release?.updateAvailable && (
-            <button
-              className="primary"
-              onClick={() => onAction("update")}
-              disabled={Boolean(progress)}
-            >
-              下载并安装
-            </button>
-          )}
-        </footer>
-      </article>
-      <aside className="runtime-diagnostics">
-        <h2>修复与诊断</h2>
-        <p>操作前会二次确认，并会保留 `~/.codex` 用户数据。</p>
-        <button onClick={onDiagnose}>
-          查看诊断结果 <span>↗</span>
-          <small>安装目录、版本、进程和启动状态</small>
-        </button>
-        <button
-          onClick={() => onAction("rollback")}
-          disabled={!runtime?.canRollback}
-        >
-          回滚上一版本 <span>↗</span>
-          <small>仅免安装版且存在回滚点时可用</small>
-        </button>
-        <button
-          onClick={() => onAction("repair")}
-          disabled={!runtime?.canRepair}
-        >
-          重新安装并修复 <span>↗</span>
-          <small>使用当前安装方式</small>
-        </button>
-        <button
-          className="danger-line"
-          onClick={() => onAction("uninstall")}
-          disabled={!runtime?.canUninstall}
-        >
-          卸载 Codex
-        </button>
-      </aside>
-    </section>
-  );
-}
-
-function ActivityView({
-  entries,
-  requests,
-}: {
-  entries: OperationRecord[];
-  requests: RequestLog[];
-}) {
-  const requestErrors = requests.filter(
-    (item) => item.statusCode >= 400,
-  ).length;
-  const success = entries.filter((item) => item.result === "success").length;
-  const errors =
-    entries.filter((item) => item.result === "error").length + requestErrors;
-  return (
-    <section className="activity-dashboard">
-      <div className="activity-metrics">
-        <Metric
-          label="API 请求"
-          value={String(requests.length)}
-          detail="本机路由请求记录"
-        />
-        <Metric
-          label="本机操作"
-          value={String(entries.length)}
-          detail={`${success} 项成功`}
-          success
-        />
-        <Metric label="异常记录" value={String(errors)} detail="需要处理" />
-      </div>
-      <article className="activity-table">
-        <div className="activity-table-head">
-          <span>时间</span>
-          <span>供应商</span>
-          <span>操作 / 模型</span>
-          <span>结果</span>
-        </div>
-        {requests.map((entry) => (
-          <div
-            className="activity-table-row"
-            key={entry.requestId}
-            title={entry.errorMessage}
-          >
-            <span>
-              {new Date(entry.createdAt).toLocaleString("zh-CN", {
-                month: "2-digit",
-                day: "2-digit",
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
-            </span>
-            <span>{entry.providerName || entry.providerId}</span>
-            <span>
-              {entry.model} ·{" "}
-              {formatDuration(entry.durationMs ?? entry.latencyMs)}
-            </span>
-            <span className={entry.statusCode < 400 ? "ok" : "error-text"}>
-              {entry.statusCode}
-            </span>
-          </div>
-        ))}
-        {entries.map((entry) => (
-          <div
-            className="activity-table-row"
-            key={entry.id}
-            title={entry.detail}
-          >
-            <span>
-              {new Date(entry.timestamp).toLocaleString("zh-CN", {
-                month: "2-digit",
-                day: "2-digit",
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
-            </span>
-            <span>{entry.provider}</span>
-            <span>
-              {entry.action}
-              {entry.durationMs != null
-                ? ` · ${formatDuration(entry.durationMs)}`
-                : ""}
-            </span>
-            <span className={entry.result === "success" ? "ok" : "error-text"}>
-              {entry.result === "success"
-                ? "成功"
-                : entry.result === "error"
-                  ? "失败"
-                  : "已跳过"}
-            </span>
-          </div>
-        ))}
-        {!entries.length && !requests.length && (
-          <Empty label="暂无记录。代理请求和 Chimera++ 操作会显示在这里。" />
-        )}
-      </article>
-    </section>
-  );
-}
-
-function AppearanceView({
-  enabled,
-  onRequestSkinAction,
-}: {
-  enabled: boolean;
-  onRequestSkinAction: (action: { label: string; execute: () => void }) => void;
-}) {
-  const [skins, setSkins] = useState<CatalogSkin[]>([]);
-  const [selectedId, setSelectedId] = useState("");
-  const [filter, setFilter] = useState<
-    "featured" | "installed" | "dark" | "light"
-  >("featured");
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState("");
-  const load = async () => {
-    if (!runningInTauri) {
-      setSkins([]);
-      setSelectedId("");
-      setError("");
-      return;
-    }
-    try {
-      setError("");
-      const result = await invoke<CatalogSkin[]>("list_skin_catalog");
-      setSkins(result);
-      setSelectedId((id) =>
-        id && result.some((item) => item.id === id)
-          ? id
-          : (result[0]?.id ?? ""),
-      );
-    } catch (reason) {
-      setError(String(reason));
-    }
-  };
-  useEffect(() => {
-    if (enabled) void load();
-  }, [enabled]);
-  const visibleSkins = skins.filter((skin) => {
-    if (filter === "installed") return skin.installed;
-    if (filter === "dark") {
-      return skin.appearance === "dark" || skin.appearance === "dual";
-    }
-    if (filter === "light") {
-      return skin.appearance === "light" || skin.appearance === "dual";
-    }
-    return true;
-  });
-  const selected =
-    visibleSkins.find((item) => item.id === selectedId) ??
-    visibleSkins[0] ??
-    null;
-  const run = async (
-    label: string,
-    command: string,
-    args?: Record<string, unknown>,
-  ) => {
-    try {
-      setBusy(label);
-      await invoke(command, args);
-      toast.success(`${label}完成`);
-      await load();
-    } catch (reason) {
-      toast.error(`${label}失败`, { description: String(reason) });
-    } finally {
-      setBusy(null);
-    }
-  };
-  const importLocal = async () => {
-    const path = await settingsApi.openFileDialog();
-    if (path) await run("导入皮肤", "import_skin_package", { path });
-  };
-  if (!enabled) return <Empty label="当前产品策略未启用 Codex 皮肤能力。" />;
-  return (
-    <section className="skin-market-reference">
-      <header className="skin-market-heading">
-        <div>
-          <span className="eyebrow">CODEX 外观</span>
-          <h1>皮肤市场</h1>
-          <p>浏览、预览并安装 Codex 客户端皮肤。</p>
-        </div>
-        <div className="skin-filter-tabs">
-          {(
-            [
-              ["featured", "精选"],
-              ["installed", "已安装"],
-              ["dark", "深色"],
-              ["light", "浅色"],
-            ] as const
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              className={filter === id ? "is-active" : ""}
-              aria-pressed={filter === id}
-              onClick={() => setFilter(id)}
-            >
-              {label}
-            </button>
-          ))}
-          <button
-            className="skin-import"
-            onClick={() => void importLocal()}
-            disabled={Boolean(busy)}
-          >
-            导入本地
-          </button>
-        </div>
-      </header>
-      <div className="skin-layout">
-        <aside className="skin-list">
-          {visibleSkins.map((skin) => (
-            <button
-              key={skin.id}
-              className={skin.id === selected?.id ? "active" : ""}
-              onClick={() => setSelectedId(skin.id)}
-            >
-              <span
-                className={`skin-card-preview ${skinToneClass(skin)}`}
-                aria-hidden="true"
-              >
-                {skin.preview === routeGateIcon ? (
-                  <span className="skin-card-miniature">
-                    <i />
-                    <i />
-                    <i />
-                    <i />
-                  </span>
-                ) : (
-                  <img
-                    src={skinPreviewUrl(skin.preview)}
-                    alt=""
-                    loading="lazy"
-                    decoding="async"
-                  />
-                )}
-              </span>
-              <span>
-                <b>{skin.name}</b>
-                <small>{skin.description || `皮肤包 · ${skin.version}`}</small>
-                <code>v{skin.version}</code>
-                {skin.installed && (
-                  <em>{skin.applied ? "已安装" : "已下载"}</em>
-                )}
-              </span>
-            </button>
-          ))}
-          {!skins.length && !error && (
-            <Empty
-              label={
-                runningInTauri
-                  ? "正在读取皮肤目录…"
-                  : "浏览器预览不读取皮肤目录，请在桌面应用中查看真实皮肤。"
-              }
-            />
-          )}
-          {Boolean(skins.length) && !visibleSkins.length && (
-            <Empty label="当前分类暂无皮肤。" />
-          )}
-          {error && (
-            <Empty
-              label={`皮肤目录读取失败：${error}`}
-              action="重试"
-              onAction={() => void load()}
-            />
-          )}
-        </aside>
-        <article className="skin-detail">
-          {selected ? (
-            <>
-              <div
-                key={selected.id}
-                className={`skin-preview skin-preview-image ${skinToneClass(selected)} ${
-                  selected.preview === routeGateIcon
-                    ? "is-fallback"
-                    : "has-catalog-image"
-                }`}
-              >
-                {selected.preview === routeGateIcon ? (
-                  <div className="skin-preview-fallback">
-                    <aside>
-                      <b>CODEX</b>
-                      <span>新对话</span>
-                      <span>Codex</span>
-                      <span>设置</span>
-                    </aside>
-                    <main>
-                      <code>{selected.name} // CODEX ROUTE</code>
-                      <div>
-                        <b>ChimeraHub 已连接</b>
-                        <small>gpt-5.6-sol · 420 ms</small>
-                      </div>
-                      <footer>
-                        给 Codex 发送消息 <i>↑</i>
-                      </footer>
-                    </main>
-                  </div>
-                ) : (
-                  <img
-                    className="skin-catalog-preview-art"
-                    src={skinPreviewUrl(selected.preview)}
-                    alt={`${selected.name} 预览`}
-                    decoding="async"
-                  />
-                )}
-              </div>
-              <div className="skin-detail-footer">
-                <div>
-                  <h2>
-                    {selected.name} {selected.description}
-                  </h2>
-                  <p>
-                    {selected.installed
-                      ? `已安装 · v${selected.version} · 适配当前 Codex`
-                      : `v${selected.version} · 可下载安装`}
-                  </p>
-                </div>
-                <div className="skin-actions">
-                  {!selected.installed && (
-                    <button
-                      className="primary skin-install-action"
-                      onClick={() =>
-                        void run("下载安装", "install_catalog_skin", {
-                          skinId: selected.id,
-                        })
-                      }
-                      disabled={Boolean(busy)}
-                    >
-                      <Download size={14} aria-hidden="true" />
-                      {busy === "下载安装" ? "正在下载…" : "下载并安装"}
-                    </button>
-                  )}
-                  {selected.installed && (
-                    <button
-                      className="primary"
-                      onClick={() =>
-                        onRequestSkinAction({
-                          label: selected.applied ? "重新应用皮肤" : "应用皮肤",
-                          execute: () =>
-                            void run("应用皮肤", "apply_skin_package", {
-                              skinId: selected.id,
-                              confirm: true,
-                            }),
-                        })
-                      }
-                      disabled={Boolean(busy)}
-                    >
-                      {selected.applied ? "重新应用" : "应用"}
-                    </button>
-                  )}
-                  {selected.installed && !selected.applied && (
-                    <button
-                      className="secondary"
-                      onClick={() =>
-                        onRequestSkinAction({
-                          label: "试穿皮肤",
-                          execute: () =>
-                            void run("试穿", "try_skin_package", {
-                              skinId: selected.id,
-                              confirm: true,
-                            }),
-                        })
-                      }
-                      disabled={Boolean(busy) || !selected.installed}
-                    >
-                      试穿
-                    </button>
-                  )}
-                  <button
-                    className="secondary"
-                    onClick={() =>
-                      onRequestSkinAction({
-                        label: "恢复默认外观",
-                        execute: () =>
-                          void run("恢复默认", "restore_skin_package", {
-                            confirm: true,
-                          }),
-                      })
-                    }
-                    disabled={Boolean(busy)}
-                  >
-                    恢复默认
-                  </button>
-                </div>
-              </div>
-              <p className="integrity">
-                <ShieldCheck size={16} /> 皮肤包经过 SHA256 完整性校验。
-              </p>
-            </>
-          ) : (
-            <Empty label="选择一个皮肤查看预览。" />
-          )}
-        </article>
-      </div>
-    </section>
   );
 }
 
@@ -5211,251 +4626,6 @@ export function NewSettingsView() {
   );
 }
 
-function SettingsView({ onCheck }: { onCheck: () => void }) {
-  const [section, setSection] = useState<
-    "general" | "runtime" | "data" | "advanced"
-  >("general");
-  const [settings, setSettings] = useState<Settings | null>(null);
-  const [autoLaunch, setAutoLaunch] = useState<boolean | null>(null);
-  const [configPath, setConfigPath] = useState("");
-  useEffect(() => {
-    void Promise.all([
-      settingsApi.get(),
-      settingsApi.getAutoLaunchStatus(),
-      settingsApi.getAppConfigPath(),
-    ])
-      .then(([value, launch, path]) => {
-        setSettings(value);
-        setAutoLaunch(launch);
-        setConfigPath(path);
-      })
-      .catch((reason) =>
-        toast.error("无法读取设置", { description: String(reason) }),
-      );
-  }, []);
-  const save = async (patch: Partial<Settings>) => {
-    if (!settings) return;
-    const next = { ...settings, ...patch };
-    try {
-      await settingsApi.save(next);
-      setSettings(next);
-      toast.success("设置已保存");
-    } catch (reason) {
-      toast.error("设置保存失败", { description: String(reason) });
-    }
-  };
-  const toggleAutoLaunch = async () => {
-    try {
-      const value = await settingsApi.setAutoLaunch(!(autoLaunch ?? false));
-      setAutoLaunch(value);
-      toast.success(value ? "已开启开机启动" : "已关闭开机启动");
-    } catch (reason) {
-      toast.error("设置失败", { description: String(reason) });
-    }
-  };
-  const pickPortable = async () => {
-    const path = await settingsApi.pickDirectory(settings?.codexPortableRoot);
-    if (path) await save({ codexPortableRoot: path });
-  };
-  const pickData = async () => {
-    const path = await settingsApi.pickDirectory(configPath);
-    if (!path) return;
-    try {
-      await settingsApi.setAppConfigDirOverride(path);
-      setConfigPath(path);
-      toast.success("数据目录已更新，重启后生效");
-    } catch (reason) {
-      toast.error("目录设置失败", { description: String(reason) });
-    }
-  };
-  return (
-    <section className="settings-layout">
-      <aside>
-        {[
-          ["general", "常规"],
-          ["data", "数据与隐私"],
-          ["runtime", "更新策略"],
-          ["advanced", "高级"],
-        ].map(([id, label]) => (
-          <button
-            key={id}
-            className={section === id ? "active" : ""}
-            onClick={() => setSection(id as typeof section)}
-          >
-            {label}
-          </button>
-        ))}
-      </aside>
-      <article className="panel settings-panel">
-        {section === "general" && (
-          <>
-            <h2>常规</h2>
-            <button
-              className="setting-row"
-              onClick={() => void toggleAutoLaunch()}
-            >
-              <div>
-                <b>开机启动 Chimera++</b>
-                <p>登录 Windows 后自动运行</p>
-              </div>
-              <span>
-                {autoLaunch === null ? "读取中" : autoLaunch ? "开启" : "关闭"}
-                <ChevronDown size={14} />
-              </span>
-            </button>
-            <div className="setting-row">
-              <div>
-                <b>语言</b>
-                <p>当前版本的客户界面语言</p>
-              </div>
-              <span>简体中文</span>
-            </div>
-          </>
-        )}
-        {section === "runtime" && (
-          <>
-            <h2>Codex 更新策略</h2>
-            <div className="setting-control">
-              <div>
-                <b>更新来源</b>
-                <p>自动选择官方通道，或使用稳定镜像</p>
-              </div>
-              <div className="segmented">
-                <button
-                  className={
-                    settings?.codexUpdateSource !== "mirror" ? "active" : ""
-                  }
-                  onClick={() => void save({ codexUpdateSource: "auto" })}
-                >
-                  自动
-                </button>
-                <button
-                  className={
-                    settings?.codexUpdateSource === "mirror" ? "active" : ""
-                  }
-                  onClick={() => void save({ codexUpdateSource: "mirror" })}
-                >
-                  镜像
-                </button>
-              </div>
-            </div>
-            <div className="setting-control">
-              <div>
-                <b>安装方式</b>
-                <p>标准安装由 Windows 管理；免安装版由 Chimera++ 管理</p>
-              </div>
-              <div className="segmented">
-                <button
-                  className={
-                    settings?.codexInstallMode !== "portable" ? "active" : ""
-                  }
-                  onClick={() => void save({ codexInstallMode: "standard" })}
-                >
-                  稳定版
-                </button>
-                <button
-                  className={
-                    settings?.codexInstallMode === "portable" ? "active" : ""
-                  }
-                  onClick={() => void save({ codexInstallMode: "portable" })}
-                >
-                  免安装版
-                </button>
-              </div>
-            </div>
-            <button
-              className="setting-row"
-              onClick={() =>
-                void save({
-                  checkCodexUpdatesOnStart: !settings?.checkCodexUpdatesOnStart,
-                })
-              }
-            >
-              <div>
-                <b>启动时检查 Codex 更新</b>
-                <p>仅检查，不会静默安装</p>
-              </div>
-              <span>
-                {settings?.checkCodexUpdatesOnStart ? "开启" : "关闭"}
-                <ChevronDown size={14} />
-              </span>
-            </button>
-            {settings?.codexInstallMode === "portable" && (
-              <button
-                className="setting-row"
-                onClick={() => void pickPortable()}
-              >
-                <div>
-                  <b>免安装版目录</b>
-                  <p title={settings.codexPortableRoot}>
-                    {settings.codexPortableRoot || "使用 Chimera++ 默认目录"}
-                  </p>
-                </div>
-                <FolderOpen size={16} />
-              </button>
-            )}
-            <div className="settings-actions">
-              <button onClick={onCheck}>
-                <RefreshCw size={15} /> 立即检查 Codex 更新
-              </button>
-            </div>
-          </>
-        )}
-        {section === "data" && (
-          <>
-            <h2>数据与隐私</h2>
-            <button className="setting-row" onClick={() => void pickData()}>
-              <div>
-                <b>Chimera++ 数据目录</b>
-                <p title={configPath}>{configPath || "读取中"}</p>
-              </div>
-              <FolderOpen size={16} />
-            </button>
-            <button
-              className="setting-row"
-              onClick={() => void settingsApi.openAppConfigFolder()}
-            >
-              <div>
-                <b>打开数据目录</b>
-                <p>查看配置、日志和本机备份</p>
-              </div>
-              <span>
-                打开 <ChevronDown size={14} />
-              </span>
-            </button>
-          </>
-        )}
-        {section === "advanced" && (
-          <>
-            <h2>高级</h2>
-            <div className="setting-row">
-              <div>
-                <b>Codex 免安装版目录</b>
-                <p title={settings?.codexPortableRoot || undefined}>
-                  {settings?.codexPortableRoot || "自动识别默认安装目录"}
-                </p>
-              </div>
-              <span>只在免安装模式下使用</span>
-            </div>
-            <div className="setting-row">
-              <div>
-                <b>更新与维护操作保护</b>
-                <p>升级、修复、回滚、卸载和皮肤应用均要求二次确认</p>
-              </div>
-              <span>已启用</span>
-            </div>
-            <div className="settings-actions">
-              <button onClick={onCheck}>
-                <RefreshCw size={15} /> 检查 Codex 更新
-              </button>
-            </div>
-          </>
-        )}
-      </article>
-    </section>
-  );
-}
-
 function ConfirmOperation({
   action,
   onCancel,
@@ -5494,6 +4664,40 @@ function ConfirmOperation({
           <button onClick={onCancel}>取消</button>
           <button className="primary" onClick={onConfirm}>
             确认继续
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function ConfirmDiscardEditor({
+  onCancel,
+  onConfirm,
+}: {
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const dialogRef = useDialogFocus<HTMLElement>(onCancel);
+  return (
+    <div className="modal-backdrop">
+      <section
+        ref={dialogRef}
+        className="confirm-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="editor-discard-title"
+        tabIndex={-1}
+      >
+        <CircleAlert size={26} />
+        <h2 id="editor-discard-title">放弃未保存的修改？</h2>
+        <p>这条线路还有没保存的改动，关闭后会丢失。</p>
+        <footer>
+          <button onClick={onCancel} data-autofocus>
+            继续编辑
+          </button>
+          <button className="danger" onClick={onConfirm}>
+            放弃修改
           </button>
         </footer>
       </section>
@@ -5576,9 +4780,14 @@ function ConfirmModelReload({
 }: {
   model: string;
   onCancel: () => void;
-  onConfirm: () => void;
+  onConfirm: () => Promise<void>;
 }) {
-  const dialogRef = useDialogFocus<HTMLElement>(onCancel);
+  // Closing and relaunching Codex takes tens of seconds. Without an in-flight
+  // guard a second click started a second restart, which then collided with
+  // the first one's runtime lock and surfaced as "another Chimera++ operation
+  // is in progress" even though only one window was open.
+  const [restarting, setRestarting] = useState(false);
+  const dialogRef = useDialogFocus<HTMLElement>(onCancel, !restarting);
   return (
     <div className="modal-backdrop">
       <section
@@ -5596,9 +4805,24 @@ function ConfirmModelReload({
           只在启动时读取模型目录，需要完整重启后才会显示。
         </p>
         <footer>
-          <button onClick={onCancel}>稍后重启</button>
-          <button className="primary" onClick={onConfirm}>
-            立即重启 Codex
+          <button onClick={onCancel} disabled={restarting}>
+            稍后重启
+          </button>
+          <button
+            className="primary"
+            disabled={restarting}
+            onClick={() => {
+              setRestarting(true);
+              void onConfirm().finally(() => setRestarting(false));
+            }}
+          >
+            {restarting ? (
+              <>
+                <LoaderCircle className="spin" size={15} /> 正在重启 Codex…
+              </>
+            ) : (
+              "立即重启 Codex"
+            )}
           </button>
         </footer>
       </section>
@@ -5827,46 +5051,3 @@ function Field({
     </label>
   );
 }
-function Empty({
-  label,
-  action,
-  onAction,
-}: {
-  label: string;
-  action?: string;
-  onAction?: () => void;
-}) {
-  return (
-    <div className="empty">
-      <p>{label}</p>
-      {action && (
-        <button className="primary" onClick={onAction}>
-          {action}
-        </button>
-      )}
-    </div>
-  );
-}
-function Metric({
-  label,
-  value,
-  detail,
-  success = false,
-}: {
-  label: string;
-  value: string;
-  detail: string;
-  success?: boolean;
-}) {
-  return (
-    <article>
-      <span>{label}</span>
-      <b className={success ? "ok" : ""}>{value}</b>
-      <small>{detail}</small>
-    </article>
-  );
-}
-void ProvidersView;
-void ActivityView;
-void RuntimeView;
-void SettingsView;

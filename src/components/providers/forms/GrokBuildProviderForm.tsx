@@ -379,7 +379,7 @@ export function GrokBuildProviderForm({
         const detectionModels = Array.from(
           new Set([upstreamModel.trim(), profile.trim()].filter(Boolean)),
         );
-        const detectedFormats = await detectCodexApiFormats(
+        const { detected: detectedFormats } = await detectCodexApiFormats(
           baseUrl,
           apiKey,
           detectionModels,

@@ -1,5 +1,13 @@
-import type { CodexCatalogModel, CodexModelRoute, Provider } from "@/types";
-import type { FetchedModel } from "@/lib/api/model-fetch";
+import type {
+  CodexCatalogModel,
+  CodexModelRoute,
+  Provider,
+  ProviderMeta,
+} from "@/types";
+import type {
+  DetectedCodexApiFormat,
+  FetchedModel,
+} from "@/lib/api/model-fetch";
 import {
   extractCodexBaseUrl,
   extractCodexModelName,
@@ -187,12 +195,198 @@ export function catalogRowSupportsImage(model: CodexCatalogModel): boolean {
   );
 }
 
-/** Catalog models with no detected upstream protocol after auto-detection.
- * The backend probe returns partial success; every model missing from the map
- * would fail closed at request time (400), so callers must surface these at
- * save time instead of persisting a half-detected catalog. Models whose
- * per-model upstream route declares an explicit protocol are exempt: the
- * request follows the route, not the probe result (mirrors the backend
+/** Models whose upstream protocol is probed before a save: the default model
+ * plus every user-entered mapping row, in that order, trimmed and de-duplicated.
+ * Fetched catalog entries are deliberately excluded — they follow the provider
+ * protocol and the router's lazy probe, so an aggregator's embedding or image
+ * models can never block saving a line. */
+export function codexProbeModels(
+  defaultModel: string,
+  mappedModels: CodexCatalogModel[],
+): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const candidate of [
+    defaultModel,
+    ...mappedModels.map((entry) => entry.model),
+  ]) {
+    const model = candidate.trim();
+    if (!model || seen.has(model)) continue;
+    seen.add(model);
+    result.push(model);
+  }
+  return result;
+}
+
+const NON_CHAT_MODEL_PATTERN =
+  /(?<![a-z])(?:embedding|embed|rerank|tts|whisper|image|vision-only|bge|flux|wan|moderation)(?![a-z])/i;
+
+/** Whether a model id looks like a non-chat model (embeddings, rerankers,
+ * speech, image/video generation, moderation). Used only to pick a sensible
+ * default from a fetched list, never to hide models from the catalog. */
+export function isLikelyNonChatModel(modelId: string): boolean {
+  return NON_CHAT_MODEL_PATTERN.test(modelId.trim());
+}
+
+/** First fetched model that can plausibly serve as the default chat model. */
+export function pickDefaultFetchedModel(
+  models: FetchedModel[],
+): string | undefined {
+  for (const entry of models) {
+    const id = entry.id?.trim();
+    if (id && !isLikelyNonChatModel(id)) return id;
+  }
+  return undefined;
+}
+
+/** Detection results persisted on a provider, restored as the same shape the
+ * probe returns so a re-opened editor can reuse them without re-probing. */
+export function persistedCodexModelApiFormats(
+  meta: ProviderMeta | undefined | null,
+): Record<string, DetectedCodexApiFormat> {
+  const stored = meta?.codexModelApiFormats;
+  if (!stored || typeof stored !== "object") return {};
+  const anthropicAuthField =
+    meta?.apiKeyField === "ANTHROPIC_API_KEY"
+      ? "ANTHROPIC_API_KEY"
+      : "ANTHROPIC_AUTH_TOKEN";
+  const result: Record<string, DetectedCodexApiFormat> = {};
+  for (const [rawModel, format] of Object.entries(stored)) {
+    const model = rawModel.trim();
+    if (!model) continue;
+    if (format === "anthropic") {
+      result[model] = { apiFormat: format, anthropicAuthField };
+    } else if (format === "openai_chat" || format === "openai_responses") {
+      result[model] = { apiFormat: format };
+    }
+  }
+  return result;
+}
+
+export interface CodexDetectionFailureDescription {
+  /** `HTTP 400 (generic_validation)` — status and classification only. */
+  status: string;
+  /** Upstream excerpt after the status, possibly empty. */
+  excerpt: string;
+}
+
+const DETECTION_FAILURE_PATTERN = /^(HTTP\s+\d{3}(?:\s*\([^)]*\))?)\s*(.*)$/s;
+
+/** Split a backend failure reason (`HTTP 400 (generic_validation) <excerpt>`)
+ * into the part worth showing prominently and the raw upstream excerpt. */
+export function describeCodexDetectionFailure(
+  reason: string | undefined | null,
+): CodexDetectionFailureDescription {
+  const text = (reason ?? "").trim();
+  if (!text) return { status: "未返回原因", excerpt: "" };
+  const match = text.match(DETECTION_FAILURE_PATTERN);
+  if (!match) return { status: text, excerpt: "" };
+  return { status: match[1].trim(), excerpt: match[2].trim() };
+}
+
+function isCatalogRow(value: unknown): value is CodexCatalogModel {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    typeof (value as CodexCatalogModel).model === "string"
+  );
+}
+
+/** A catalog row carries user intent (rename, context window, reasoning
+ * levels, instructions, image input) rather than being a plain mirror of a
+ * fetched `/models` entry. */
+export function isCustomizedCatalogRow(row: CodexCatalogModel): boolean {
+  const model = row.model.trim();
+  const displayName = row.displayName?.trim();
+  if (displayName && displayName !== model) return true;
+  if (row.contextWindow != null && String(row.contextWindow).trim() !== "")
+    return true;
+  if (row.reasoningLevels?.length) return true;
+  if (row.defaultReasoningLevel) return true;
+  if (row.baseInstructions?.trim()) return true;
+  if (catalogRowSupportsImage(row)) return true;
+  if (row.supportsParallelToolCalls !== undefined) return true;
+  return false;
+}
+
+/** The user's mapping rows for the editor table. Stored separately from the
+ * generated catalog under `settingsConfig.modelMappings`; providers saved
+ * before that key existed fall back to the customized rows of their catalog so
+ * the table never re-reads hundreds of fetched entries. */
+export function extractCodexMappingRows(
+  provider: Provider | null | undefined,
+): CodexCatalogModel[] {
+  const stored = provider?.settingsConfig?.modelMappings?.models;
+  if (Array.isArray(stored)) {
+    return stored.filter(isCatalogRow).map((row) => ({ ...row }));
+  }
+  const catalog = provider?.settingsConfig?.modelCatalog?.models;
+  if (!Array.isArray(catalog)) return [];
+  return catalog
+    .filter(isCatalogRow)
+    .filter(isCustomizedCatalogRow)
+    .map((row) => ({ ...row }));
+}
+
+/** Catalog rows previously written for a provider, as fetched-model stand-ins,
+ * so a save without a fresh `/models` fetch keeps the Codex catalog intact. */
+export function previousCatalogAsFetched(
+  provider: Provider | null | undefined,
+): FetchedModel[] {
+  const catalog = provider?.settingsConfig?.modelCatalog?.models;
+  if (!Array.isArray(catalog)) return [];
+  return catalog
+    .filter(isCatalogRow)
+    .map((row) => row.model.trim())
+    .filter(Boolean)
+    .map((id) => ({ id, ownedBy: null }));
+}
+
+/** `approval_policy` values Codex 0.153+ accepts. `untrusted` was removed and
+ * makes Codex reject the whole config file. */
+export const CODEX_APPROVAL_POLICIES = [
+  "on-request",
+  "on-failure",
+  "never",
+  "granular",
+] as const;
+
+const APPROVAL_POLICY_LINE =
+  /^\s*approval_policy\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:#.*)?$/;
+
+/** Every `approval_policy` value assigned anywhere in a TOML snippet. */
+export function extractCodexApprovalPolicies(
+  configText: string | undefined | null,
+): string[] {
+  const text = typeof configText === "string" ? configText : "";
+  const values: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const match = line.match(APPROVAL_POLICY_LINE);
+    if (match) values.push((match[1] ?? match[2] ?? "").trim());
+  }
+  return values;
+}
+
+/** Short hint when a snippet sets an `approval_policy` Codex no longer loads. */
+export function codexApprovalPolicyWarning(
+  configText: string | undefined | null,
+): string | null {
+  const unsupported = extractCodexApprovalPolicies(configText).filter(
+    (value) => !(CODEX_APPROVAL_POLICIES as readonly string[]).includes(value),
+  );
+  if (!unsupported.length) return null;
+  const first = unsupported[0];
+  if (first === "untrusted") {
+    return 'approval_policy = "untrusted" 已被 Codex 停用，会导致整份配置无法加载；请改为 on-request 或 granular。';
+  }
+  return `approval_policy = "${first}" 不是 Codex 认识的值，可选：${CODEX_APPROVAL_POLICIES.join("、")}。`;
+}
+
+/** Probe-set models with no detected upstream protocol. Since v2.7.0 only the
+ * default model and the user's mapping rows are probed; a miss here no longer
+ * blocks saving — callers show the per-model failure and let the user pick a
+ * protocol. Models whose enabled per-model route declares a protocol are exempt
+ * (the request follows the route, mirroring the backend
  * `codex_model_protocol_mapping_is_missing` guard). */
 export function findCodexCatalogModelsWithoutProtocol(
   catalogModels: CodexCatalogModel[],

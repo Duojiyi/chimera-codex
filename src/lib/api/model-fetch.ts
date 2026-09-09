@@ -56,13 +56,24 @@ export async function detectCodexApiFormat(
   });
 }
 
+/**
+ * Per-model detection report. `detected` holds every model whose protocol was
+ * identified; `failures` maps each undetected model to a human-readable reason
+ * of the form `HTTP <status> (<classification>) <upstream excerpt>` so the UI
+ * can show why a model stayed unresolved instead of a bare "failed".
+ */
+export interface CodexApiFormatDetectionReport {
+  detected: Record<string, DetectedCodexApiFormat>;
+  failures: Record<string, string>;
+}
+
 export async function detectCodexApiFormats(
   baseUrl: string,
   apiKey: string,
   models: string[],
   isFullUrl?: boolean,
   customUserAgent?: string,
-): Promise<Record<string, DetectedCodexApiFormat>> {
+): Promise<CodexApiFormatDetectionReport> {
   return invoke("detect_codex_api_formats", {
     baseUrl,
     apiKey,
