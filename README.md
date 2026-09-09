@@ -6,12 +6,12 @@
 
 Codex 线路切换与桌面运行时管理工具
 
-[![Latest Release](https://img.shields.io/github/v/release/Duojiyi/chimera-codex?label=release)](https://github.com/Duojiyi/chimera-codex/releases/latest)
-[![CI](https://github.com/Duojiyi/chimera-codex/actions/workflows/ci.yml/badge.svg)](https://github.com/Duojiyi/chimera-codex/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/Duojiyi/chimera-plusplus?label=release)](https://github.com/Duojiyi/chimera-plusplus/releases/latest)
+[![CI](https://github.com/Duojiyi/chimera-plusplus/actions/workflows/ci.yml/badge.svg)](https://github.com/Duojiyi/chimera-plusplus/actions/workflows/ci.yml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-555)](#平台支持)
 [![Built with Tauri](https://img.shields.io/badge/Tauri-2-24C8DB)](https://tauri.app/)
 
-[下载最新版](https://github.com/Duojiyi/chimera-codex/releases/latest) · [提交问题](https://github.com/Duojiyi/chimera-codex/issues) · [开发说明](#本地开发)
+[下载最新版](https://github.com/Duojiyi/chimera-plusplus/releases/latest) · [提交问题](https://github.com/Duojiyi/chimera-plusplus/issues) · [开发说明](#本地开发)
 
 </div>
 
@@ -42,7 +42,7 @@ Windows 10/11 与 macOS 12 及以上版本为当前发布目标。
 
 ## 下载与安装
 
-前往 [Releases](https://github.com/Duojiyi/chimera-codex/releases/latest) 下载最新版。
+前往 [Releases](https://github.com/Duojiyi/chimera-plusplus/releases/latest) 下载最新版。
 
 ### Windows
 
@@ -153,7 +153,7 @@ src-tauri/tests/      Rust 集成测试
 
 提交 PR 前请至少运行 TypeScript 类型检查、相关前端测试、Rust 格式检查和相关 Rust 测试。涉及认证、配置写入、进程终止或更新流程的改动应包含回归测试，并说明 Windows/macOS 的行为差异。
 
-Bug 报告和功能建议请使用 [GitHub Issues](https://github.com/Duojiyi/chimera-codex/issues)。不要在 Issue、PR 或日志中公开 API 密钥和 OAuth 令牌。
+Bug 报告和功能建议请使用 [GitHub Issues](https://github.com/Duojiyi/chimera-plusplus/issues)。不要在 Issue、PR 或日志中公开 API 密钥和 OAuth 令牌。
 
 ## 许可与来源
 

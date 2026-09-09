@@ -444,13 +444,13 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
 
       if (!displayVersion) {
         await settingsApi.openExternal(
-          "https://github.com/Duojiyi/chimera-codex/releases",
+          "https://github.com/Duojiyi/chimera-plusplus/releases",
         );
         return;
       }
 
       await settingsApi.openExternal(
-        `https://github.com/Duojiyi/chimera-codex/releases/tag/${displayVersion}`,
+        `https://github.com/Duojiyi/chimera-plusplus/releases/tag/${displayVersion}`,
       );
     } catch (error) {
       console.error("[AboutSection] Failed to open release notes", error);
@@ -463,7 +463,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
       if (isPortable) {
         try {
           await settingsApi.openExternal(
-            "https://github.com/Duojiyi/chimera-codex/releases/latest",
+            "https://github.com/Duojiyi/chimera-plusplus/releases/latest",
           );
           toast.info(t("settings.portableMode"), { closeButton: true });
         } catch (error) {
@@ -872,7 +872,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
               size="sm"
               onClick={() =>
                 settingsApi.openExternal(
-                  "https://github.com/Duojiyi/chimera-codex",
+                  "https://github.com/Duojiyi/chimera-plusplus",
                 )
               }
               className="h-8 gap-1.5 text-xs"
@@ -886,7 +886,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
               size="sm"
               onClick={() =>
                 settingsApi.openExternal(
-                  "https://github.com/Duojiyi/chimera-codex",
+                  "https://github.com/Duojiyi/chimera-plusplus",
                 )
               }
               className="h-8 gap-1.5 text-xs"

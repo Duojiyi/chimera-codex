@@ -28,6 +28,9 @@ jobs:
       - name: Check committed secrets
         run: node scripts/check-committed-secrets.mjs
 
+      - name: Check repository references
+        run: node scripts/check-repo-references.mjs
+
       - name: Setup pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
         with:
@@ -54,6 +57,12 @@ jobs:
 
       - name: Build renderer and enforce bundle budgets
         run: pnpm build:renderer:check
+
+      # Advisory only for now: surfaces known vulnerabilities in production
+      # dependencies without blocking merges until the signal proves stable.
+      - name: Audit production npm dependencies (advisory)
+        continue-on-error: true
+        run: pnpm audit --prod --audit-level=high
 
       - name: Upload frontend test report
         if: always()
@@ -110,3 +119,15 @@ jobs:
 
       - name: Run Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      # Advisory only for now (Linux runner is enough: the lockfile is shared).
+      - name: Install cargo-audit
+        if: runner.os == 'Linux'
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff
+        with:
+          tool: cargo-audit
+
+      - name: Audit Rust dependencies (advisory)
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: cargo audit --file src-tauri/Cargo.lock
