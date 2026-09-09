@@ -23,6 +23,7 @@ pub enum CodexUpstreamProtocol {
 }
 
 impl CodexUpstreamProtocol {
+    #[cfg(test)]
     pub const ALL: [Self; 3] = [Self::Native, Self::Chat, Self::Anthropic];
 
     /// The `api_format` value stored on a provider for this protocol.
@@ -31,15 +32,6 @@ impl CodexUpstreamProtocol {
             Self::Native => "openai_responses",
             Self::Chat => "openai_chat",
             Self::Anthropic => "anthropic",
-        }
-    }
-
-    pub fn from_api_format(api_format: &str) -> Option<Self> {
-        match api_format {
-            "openai_responses" => Some(Self::Native),
-            "openai_chat" => Some(Self::Chat),
-            "anthropic" => Some(Self::Anthropic),
-            _ => None,
         }
     }
 

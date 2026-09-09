@@ -1487,14 +1487,12 @@ impl RequestForwarder {
         // Every Codex upstream URL — native or converted — comes from the same
         // resolver the protocol probe uses, so a probe can never confirm a
         // protocol against a URL the router would then not call.
-        let codex_protocol = (adapter.name() == "Codex").then(|| {
-            if codex_responses_to_chat {
-                super::codex_url::CodexUpstreamProtocol::Chat
-            } else if codex_responses_to_anthropic {
-                super::codex_url::CodexUpstreamProtocol::Anthropic
-            } else {
-                super::codex_url::CodexUpstreamProtocol::Native
-            }
+        let codex_protocol = (adapter.name() == "Codex").then_some(if codex_responses_to_chat {
+            super::codex_url::CodexUpstreamProtocol::Chat
+        } else if codex_responses_to_anthropic {
+            super::codex_url::CodexUpstreamProtocol::Anthropic
+        } else {
+            super::codex_url::CodexUpstreamProtocol::Native
         });
 
         let url = if matches!(resolved_claude_api_format.as_deref(), Some("gemini_native")) {

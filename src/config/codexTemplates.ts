@@ -18,8 +18,10 @@ export interface ChimeraHubTemplate extends CodexTemplate {
  * @returns Codex 模板配置
  */
 export function getCodexCustomTemplate(): CodexTemplate {
+  // `gpt-5.6-sol` is the built-in Codex slug; a bare `gpt-5.6` is not in any
+  // catalog and made the first request of a fresh custom line fail.
   const config = `model_provider = "custom"
-model = "gpt-5.6"
+model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
 
 [model_providers.custom]

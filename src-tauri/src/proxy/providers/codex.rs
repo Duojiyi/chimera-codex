@@ -209,6 +209,10 @@ pub fn codex_provider_uses_chat_completions(provider: &Provider) -> bool {
         .unwrap_or(false)
 }
 
+/// Provider-default view (no model). Production code dispatches on the bridge
+/// the forwarder recorded in `ForwardResult`; this remains for the provider
+/// configuration tests.
+#[cfg(test)]
 pub fn should_convert_codex_responses_to_chat(provider: &Provider, endpoint: &str) -> bool {
     should_convert_codex_responses_to_chat_for_model(provider, endpoint, None)
 }
@@ -437,6 +441,7 @@ pub fn codex_provider_uses_anthropic(provider: &Provider) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(test)]
 pub fn should_convert_codex_responses_to_anthropic(provider: &Provider, endpoint: &str) -> bool {
     should_convert_codex_responses_to_anthropic_for_model(provider, endpoint, None)
 }

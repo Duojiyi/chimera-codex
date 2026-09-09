@@ -76,9 +76,7 @@ pub use codex::{
     provider_needs_responses_namespace_flatten,
     resolve_codex_catalog_tool_profile,
     resolve_codex_chat_reasoning_config,
-    should_convert_codex_responses_to_anthropic,
     should_convert_codex_responses_to_anthropic_for_model,
-    should_convert_codex_responses_to_chat,
     should_convert_codex_responses_to_chat_for_model,
 };
 pub use gemini::GeminiAdapter;

@@ -256,6 +256,94 @@ pub fn delete_codex_provider_config(
     Ok(())
 }
 
+/// `approval_policy` values current Codex (0.153+) still loads. `untrusted` was
+/// removed upstream; a config.toml that sets it — at the root or inside any
+/// `[profiles.*]` table — is rejected as a whole, so Codex starts with no
+/// provider, no model and no MCP servers instead of the line the user picked.
+const CODEX_APPROVAL_POLICIES: &[&str] = &["on-request", "on-failure", "never", "granular"];
+
+/// Remove `approval_policy` assignments Codex no longer accepts, in place, so
+/// every other byte of the user's config.toml survives. Returns the text
+/// unchanged (same allocation) when there is nothing to strip.
+pub fn strip_rejected_codex_settings(config_text: &str) -> Result<String, AppError> {
+    if !config_text.contains("approval_policy") {
+        return Ok(config_text.to_string());
+    }
+    let mut doc = config_text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| AppError::Config(format!("Codex 配置无法解析: {e}")))?;
+    let mut removed = Vec::new();
+
+    let is_rejected = |item: &toml_edit::Item| {
+        item.as_str()
+            .is_some_and(|value| !CODEX_APPROVAL_POLICIES.contains(&value.trim()))
+    };
+
+    if doc.get("approval_policy").is_some_and(is_rejected) {
+        removed.push("approval_policy".to_string());
+        doc.remove("approval_policy");
+    }
+    if let Some(profiles) = doc
+        .get_mut("profiles")
+        .and_then(|item| item.as_table_like_mut())
+    {
+        let names: Vec<String> = profiles
+            .iter()
+            .filter(|(_, profile)| {
+                profile
+                    .as_table_like()
+                    .and_then(|table| table.get("approval_policy"))
+                    .is_some_and(is_rejected)
+            })
+            .map(|(name, _)| name.to_string())
+            .collect();
+        for name in names {
+            if let Some(profile) = profiles
+                .get_mut(&name)
+                .and_then(|item| item.as_table_like_mut())
+            {
+                profile.remove("approval_policy");
+                removed.push(format!("profiles.{name}.approval_policy"));
+            }
+        }
+    }
+
+    if removed.is_empty() {
+        return Ok(config_text.to_string());
+    }
+    log::warn!(
+        "已从 Codex 配置移除 Codex 0.153+ 不再接受的 approval_policy 取值（{}），否则整份 config.toml 会被拒绝加载",
+        removed.join(", ")
+    );
+    Ok(doc.to_string())
+}
+
+/// Startup self-repair: if the live config.toml carries an `approval_policy`
+/// Codex rejects, back it up next to itself and rewrite it without the key.
+/// Nothing else is touched; a config that already loads is left byte-identical.
+pub fn repair_rejected_codex_settings_at_startup() -> Result<bool, AppError> {
+    let config_path = get_codex_config_path();
+    if !config_path.exists() {
+        return Ok(false);
+    }
+    let text = fs::read_to_string(&config_path).map_err(|e| AppError::io(&config_path, e))?;
+    let repaired = strip_rejected_codex_settings(&text)?;
+    if repaired == text {
+        return Ok(false);
+    }
+    let backup_path = config_path.with_extension(format!(
+        "toml.rejected-settings-{}.bak",
+        chrono::Local::now().format("%Y%m%d%H%M%S")
+    ));
+    fs::write(&backup_path, text.as_bytes()).map_err(|e| AppError::io(&backup_path, e))?;
+    write_text_file(&config_path, &repaired)?;
+    log::info!(
+        "✓ Repaired Codex config.toml (backup: {})",
+        backup_path.display()
+    );
+    Ok(true)
+}
+
 /// 原子写 Codex 的 `auth.json` 与 `config.toml`，在第二步失败时回滚第一步
 pub fn write_codex_live_atomic(
     auth: &Value,
@@ -282,7 +370,7 @@ pub fn write_codex_live_atomic(
 
     // 准备写入内容
     let cfg_text = match config_text_opt {
-        Some(s) => s.to_string(),
+        Some(s) => strip_rejected_codex_settings(s)?,
         None => String::new(),
     };
     if !cfg_text.trim().is_empty() {
@@ -438,7 +526,7 @@ pub fn normalize_codex_third_party_auth_config(config_text: &str) -> Result<Stri
 pub fn write_codex_live_config_atomic(config_text_opt: Option<&str>) -> Result<(), AppError> {
     let config_path = get_codex_config_path();
     let cfg_text = match config_text_opt {
-        Some(config_text) => config_text.to_string(),
+        Some(config_text) => strip_rejected_codex_settings(config_text)?,
         None => String::new(),
     };
 
@@ -731,6 +819,18 @@ fn codex_inferred_reasoning_levels(
         );
     }
 
+    // gpt-5.6 and gpt-6 (Codex 0.153+) add the `max` and `ultra` tiers above
+    // xhigh; older gpt-5 releases stop at xhigh.
+    if profile == CodexCatalogToolProfile::NativeResponses
+        && (model.starts_with("gpt-5.6") || model.starts_with("gpt-6"))
+    {
+        return Some(
+            ["low", "medium", "high", "xhigh", "max", "ultra"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        );
+    }
     if profile == CodexCatalogToolProfile::NativeResponses
         && (model.starts_with("gpt-5") || model.starts_with("grok-4.5"))
     {
@@ -4490,7 +4590,10 @@ wire_api = "responses"
             .filter_map(|level| level.get("effort").and_then(|v| v.as_str()))
             .collect();
         assert_eq!(efforts, vec!["low", "high", "max"]);
-        assert_eq!(flash.get("supports_search_tool"), Some(&json!(true)));
+        // DeepSeek's Responses endpoint has no hosted web_search tool. With
+        // `true` here Codex attached the tool to every request and the
+        // gateway dropped the whole tool list, so MCP tools vanished.
+        assert_eq!(flash.get("supports_search_tool"), Some(&json!(false)));
         assert_eq!(
             flash.get("web_search_tool_type").and_then(|v| v.as_str()),
             Some("text")
@@ -4961,6 +5064,69 @@ web_search = "disabled"
         assert!(!codex_catalog_declares_search_unsupported(&json!({
             "models": []
         })));
+    }
+
+    #[test]
+    fn strip_rejected_settings_removes_untrusted_at_root_and_in_profiles_only() {
+        let text = r#"model = "gpt-5.6-sol"
+approval_policy = "untrusted"
+sandbox_mode = "workspace-write" # keep me
+
+[profiles.strict]
+approval_policy = "untrusted"
+model = "gpt-6-astra"
+
+[profiles.loose]
+approval_policy = "granular"
+
+[model_providers.custom]
+name = "custom"
+base_url = "https://relay.example/v1"
+"#;
+        let stripped = strip_rejected_codex_settings(text).expect("valid toml");
+        let parsed: toml::Value = toml::from_str(&stripped).expect("still valid toml");
+        assert!(parsed.get("approval_policy").is_none());
+        assert_eq!(
+            parsed["sandbox_mode"].as_str(),
+            Some("workspace-write"),
+            "unrelated keys survive"
+        );
+        assert!(
+            stripped.contains("# keep me"),
+            "in-place edit keeps the user's comments"
+        );
+        assert!(parsed["profiles"]["strict"]
+            .get("approval_policy")
+            .is_none());
+        assert_eq!(
+            parsed["profiles"]["strict"]["model"].as_str(),
+            Some("gpt-6-astra")
+        );
+        assert_eq!(
+            parsed["profiles"]["loose"]["approval_policy"].as_str(),
+            Some("granular"),
+            "the new granular variant is accepted"
+        );
+        assert_eq!(
+            parsed["model_providers"]["custom"]["base_url"].as_str(),
+            Some("https://relay.example/v1")
+        );
+    }
+
+    #[test]
+    fn strip_rejected_settings_leaves_accepted_configs_byte_identical() {
+        for text in [
+            "model = \"gpt-5.6-sol\"\napproval_policy = \"never\"\n",
+            "model = \"gpt-5.6-sol\"\napproval_policy = \"on-request\"\n\n[profiles.a]\napproval_policy = \"on-failure\"\n",
+            "model = \"gpt-5.6-sol\"\n",
+            "",
+        ] {
+            assert_eq!(
+                strip_rejected_codex_settings(text).expect("valid toml"),
+                text,
+                "{text:?}"
+            );
+        }
     }
 
     #[test]

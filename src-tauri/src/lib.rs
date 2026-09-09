@@ -959,6 +959,15 @@ pub fn run() {
             {
                 let db_for_codex_history_migration = app_state.db.clone();
                 tauri::async_runtime::spawn_blocking(move || {
+                    // A config.toml carrying a setting current Codex rejects makes
+                    // Codex discard the whole file; repair it (with a backup) before
+                    // anything else touches it this session.
+                    match crate::codex_config::repair_rejected_codex_settings_at_startup() {
+                        Ok(true) => log::info!("✓ Removed rejected settings from Codex config.toml"),
+                        Ok(false) => {}
+                        Err(e) => log::warn!("✗ Codex config.toml self-repair failed: {e}"),
+                    }
+
                     match crate::codex_history_migration::maybe_migrate_codex_third_party_history_provider_bucket(
                         &db_for_codex_history_migration,
                     ) {
