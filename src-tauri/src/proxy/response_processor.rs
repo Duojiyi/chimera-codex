@@ -679,6 +679,64 @@ async fn log_usage_internal(
 }
 
 /// 创建带日志记录和超时控制的透传流
+/// Apply the silence (idle) watchdog to the raw upstream bytes of a stream that
+/// is about to be protocol-converted, and return a timeout config for the
+/// converted side with the idle check removed.
+///
+/// A converter legitimately holds bytes back — reassembling a tool-call
+/// argument string, waiting for the end of a `<think>` tag — so measuring
+/// silence on its output reported a live upstream as dead and cut the response.
+/// The first-byte check stays on the converted side: the converter emits
+/// `response.created` as soon as the first upstream chunk lands, so that
+/// deadline is unchanged.
+pub fn watch_upstream_silence(
+    stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
+    tag: &'static str,
+    timeout_config: StreamingTimeoutConfig,
+) -> (
+    impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
+    StreamingTimeoutConfig,
+) {
+    let idle_timeout = (timeout_config.idle_timeout > 0)
+        .then_some(Duration::from_secs(timeout_config.idle_timeout));
+    let converted_config = StreamingTimeoutConfig {
+        first_byte_timeout: timeout_config.first_byte_timeout,
+        idle_timeout: 0,
+    };
+    let watched = async_stream::stream! {
+        tokio::pin!(stream);
+        let mut received_any = false;
+        loop {
+            let next = match idle_timeout.filter(|_| received_any) {
+                Some(duration) => match tokio::time::timeout(duration, stream.next()).await {
+                    Ok(next) => next,
+                    Err(_) => {
+                        log::error!(
+                            "[{tag}] 上游流式响应静默期超时 ({}秒)",
+                            duration.as_secs()
+                        );
+                        yield Err(std::io::Error::other("流式响应静默期超时"));
+                        break;
+                    }
+                },
+                None => stream.next().await,
+            };
+            match next {
+                Some(Ok(bytes)) => {
+                    received_any = true;
+                    yield Ok(bytes);
+                }
+                Some(Err(error)) => {
+                    yield Err(error);
+                    break;
+                }
+                None => break,
+            }
+        }
+    };
+    (watched, converted_config)
+}
+
 pub fn create_logged_passthrough_stream(
     stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
     tag: &'static str,

@@ -36,7 +36,8 @@ use super::{
     response_processor::{
         create_logged_passthrough_stream, create_usage_collector, process_response,
         read_decoded_body, strip_entity_headers_for_rebuilt_body,
-        strip_hop_by_hop_response_headers, usage_logging_enabled, SseUsageCollector,
+        strip_hop_by_hop_response_headers, usage_logging_enabled, watch_upstream_silence,
+        SseUsageCollector,
     },
     server::{CodexWireApiDetection, ProxyState},
     sse::{strip_sse_field, take_sse_block},
@@ -1830,7 +1831,11 @@ async fn handle_codex_chat_to_responses_transform(
     }
 
     if is_stream || response.is_sse() {
-        let stream = response.bytes_stream();
+        let (stream, converted_timeouts) = watch_upstream_silence(
+            response.bytes_stream(),
+            ctx.tag,
+            ctx.streaming_timeout_config(),
+        );
         let sse_stream = create_responses_sse_stream_from_chat_with_context(stream, tool_context);
         let sse_stream = record_responses_sse_stream(sse_stream, state.codex_chat_history.clone());
 
@@ -1902,7 +1907,7 @@ async fn handle_codex_chat_to_responses_transform(
             sse_stream,
             ctx.tag,
             usage_collector,
-            ctx.streaming_timeout_config(),
+            converted_timeouts,
             connection_guard,
         );
 
@@ -2069,7 +2074,11 @@ async fn handle_codex_anthropic_to_responses_transform(
     // explicit JSON media type. Explicit JSON is buffered below so 2xx error
     // envelopes and gateways that ignore stream:true can be converted faithfully.
     if response.is_sse() || (is_stream && !response.is_json()) {
-        let stream = response.bytes_stream();
+        let (stream, converted_timeouts) = watch_upstream_silence(
+            response.bytes_stream(),
+            ctx.tag,
+            ctx.streaming_timeout_config(),
+        );
         let sse_stream =
             create_responses_sse_stream_from_anthropic_with_context(stream, codex_tool_context);
         return build_codex_anthropic_sse_response(
@@ -2077,6 +2086,7 @@ async fn handle_codex_anthropic_to_responses_transform(
             ctx,
             state,
             status,
+            converted_timeouts,
             connection_guard,
         );
     }
@@ -2125,6 +2135,7 @@ async fn handle_codex_anthropic_to_responses_transform(
             ctx,
             state,
             status,
+            ctx.streaming_timeout_config(),
             connection_guard,
         );
     }
@@ -2212,6 +2223,7 @@ fn build_codex_anthropic_sse_response(
     ctx: &RequestContext,
     state: &ProxyState,
     status: StatusCode,
+    timeout_config: super::handler_context::StreamingTimeoutConfig,
     connection_guard: Option<ActiveConnectionGuard>,
 ) -> Result<axum::response::Response, ProxyError> {
     let usage_collector = if usage_logging_enabled(state) {
@@ -2275,7 +2287,7 @@ fn build_codex_anthropic_sse_response(
         sse_stream,
         ctx.tag,
         usage_collector,
-        ctx.streaming_timeout_config(),
+        timeout_config,
         connection_guard,
     );
 

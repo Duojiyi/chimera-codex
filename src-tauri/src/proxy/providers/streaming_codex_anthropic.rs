@@ -374,9 +374,22 @@ impl AnthropicToResponsesState {
                     canonicalize_tool_arguments_str(&raw_input)
                 };
                 let is_custom_tool = self.tool_context.is_custom_tool_chat_name(&name);
+                // Anthropic sends `stop_reason: max_tokens` in message_delta, after
+                // the content_block_stop that closes a cut-off tool call. Marking a
+                // half-written JSON argument string `completed` here let it into
+                // the Codex history, where every later turn replayed it and got a
+                // 400 from the bridge — a permanently stuck session.
+                let arguments_truncated =
+                    !is_custom_tool && serde_json::from_str::<Value>(&arguments).is_err();
+                let incomplete = self.stream_truncated || arguments_truncated;
+                if arguments_truncated {
+                    log::warn!(
+                        "[Codex/Anthropic] tool call {call_id} ({name}) closed with unparsable arguments; marking incomplete"
+                    );
+                }
                 let item = response_tool_call_item_from_chat_name(
                     &item_id,
-                    if self.stream_truncated {
+                    if incomplete {
                         "incomplete"
                     } else {
                         "completed"
@@ -388,7 +401,7 @@ impl AnthropicToResponsesState {
                     &self.tool_context,
                 );
                 let mut events = Vec::new();
-                if !self.stream_truncated {
+                if !incomplete {
                     if is_custom_tool {
                         let input = item.get("input").and_then(Value::as_str).unwrap_or("");
                         events.push(sse::custom_tool_call_input_done(
@@ -472,6 +485,26 @@ impl AnthropicToResponsesState {
 
         let (status, incomplete_reason) =
             map_anthropic_stop_reason_to_status(self.stop_reason.as_deref());
+
+        // `max_tokens` arrives after the block it cut off was already closed as
+        // completed. The cut-off block is the last one; if that is a tool call,
+        // correct the final response so the history Codex rebuilds from it does
+        // not carry a half-written call as a finished one.
+        if self.stop_reason.as_deref() == Some("max_tokens") {
+            if let Some((_, item)) = self
+                .output_items
+                .iter_mut()
+                .max_by_key(|(output_index, _)| *output_index)
+            {
+                let is_tool_call = matches!(
+                    item.get("type").and_then(Value::as_str),
+                    Some("function_call") | Some("custom_tool_call")
+                );
+                if is_tool_call && item.get("status").and_then(Value::as_str) == Some("completed") {
+                    item["status"] = json!("incomplete");
+                }
+            }
+        }
 
         let mut output = self.output_items.clone();
         output.sort_by_key(|(output_index, _)| *output_index);
@@ -1083,6 +1116,39 @@ mod tests {
         );
         let merged = run(input).await;
         assert!(merged.contains("\"status\":\"incomplete\""));
+        assert!(merged.contains("\"reason\":\"max_output_tokens\""));
+    }
+
+    #[tokio::test]
+    async fn test_tool_call_cut_off_by_max_tokens_is_incomplete_not_completed() {
+        // Anthropic closes the half-written tool block first and only then
+        // reports max_tokens. The call must not reach Codex as `completed` with
+        // unparsable arguments: that entry is replayed on every later turn and
+        // used to 400 the whole session.
+        let input = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_cut\",\"model\":\"claude\"}}\n\n",
+            "event: content_block_start\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_cut\",\"name\":\"shell\"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"command\\\": [\\\"ls\\\", \\\"-l\"}}\n\n",
+            "event: content_block_stop\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n"
+        );
+        let merged = run(input).await;
+        assert!(
+            !merged.contains("\"status\":\"completed\""),
+            "a cut-off tool call must never be reported completed: {merged}"
+        );
+        assert!(merged.contains("\"status\":\"incomplete\""));
+        assert!(
+            !merged.contains("function_call_arguments.done"),
+            "no arguments.done event for a call that never finished"
+        );
         assert!(merged.contains("\"reason\":\"max_output_tokens\""));
     }
 

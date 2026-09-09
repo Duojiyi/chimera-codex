@@ -536,20 +536,28 @@ fn convert_input_to_messages(
                 let namespace = item.get("namespace").and_then(|value| value.as_str());
                 let upstream_name = tool_context.chat_name_for_response_function(name, namespace);
                 let args_str = item.get("arguments").and_then(|v| v.as_str()).unwrap_or("");
-                let input: Value = if args_str.trim().is_empty() {
-                    json!({})
-                } else {
-                    serde_json::from_str(args_str).map_err(|error| {
-                        ProxyError::InvalidRequest(format!(
-                            "Invalid function_call arguments for '{name}': {error}"
-                        ))
-                    })?
+                // History can legitimately hold arguments that are not a JSON
+                // object: a call cut off by the token budget, or a model that
+                // emitted a bare value. Rejecting the whole request here made
+                // every later turn of that session fail, because Codex replays
+                // the same history each time. Anthropic accepts any object as
+                // `input`, so wrap what we have and keep the pair intact.
+                let input = match serde_json::from_str::<Value>(args_str) {
+                    Ok(value) if value.is_object() => value,
+                    _ if args_str.trim().is_empty() => json!({}),
+                    Ok(other) => {
+                        log::warn!(
+                            "[Codex/Anthropic] function_call '{name}' arguments are not a JSON object; wrapping"
+                        );
+                        json!({ "__raw_arguments": other })
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "[Codex/Anthropic] function_call '{name}' arguments are not valid JSON ({error}); wrapping raw text"
+                        );
+                        json!({ "__raw_arguments": args_str })
+                    }
                 };
-                if !input.is_object() {
-                    return Err(ProxyError::InvalidRequest(format!(
-                        "Function call arguments for '{name}' must be a JSON object"
-                    )));
-                }
                 let input = sanitize_anthropic_tool_use_input(name, input);
                 push_block(
                     &mut messages,
@@ -1785,6 +1793,47 @@ mod tests {
         let last = messages.last().unwrap();
         assert_eq!(last["role"], "user");
         assert_eq!(last["content"][0]["type"], "tool_result");
+    }
+
+    #[test]
+    fn test_request_truncated_tool_arguments_do_not_fail_the_turn() {
+        // A tool call cut off by the token budget leaves half-written JSON in the
+        // history. Codex replays that history on every later turn, so rejecting
+        // it here wedged the session for good. The pair must survive with the
+        // raw text wrapped in an object Anthropic will accept.
+        let input = json!({
+            "model": "c",
+            "max_output_tokens": 100,
+            "input": [
+                { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "go" }] },
+                { "type": "function_call", "call_id": "c1", "name": "shell", "arguments": "{\"command\": [\"ls\", \"-l" },
+                { "type": "function_call_output", "call_id": "c1", "output": "cancelled" },
+                { "type": "function_call", "call_id": "c2", "name": "shell", "arguments": "\"just a string\"" },
+                { "type": "function_call_output", "call_id": "c2", "output": "ok" }
+            ]
+        });
+        let out = responses_request_to_anthropic(input, 4096).expect("conversion must not 400");
+        let messages = out["messages"].as_array().unwrap();
+        let tool_uses: Vec<&Value> = messages
+            .iter()
+            .flat_map(|m| m["content"].as_array().unwrap().iter())
+            .filter(|block| block["type"] == "tool_use")
+            .collect();
+        assert_eq!(tool_uses.len(), 2);
+        assert_eq!(
+            tool_uses[0]["input"]["__raw_arguments"].as_str(),
+            Some("{\"command\": [\"ls\", \"-l")
+        );
+        assert_eq!(
+            tool_uses[1]["input"]["__raw_arguments"],
+            json!("just a string")
+        );
+        let tool_results = messages
+            .iter()
+            .flat_map(|m| m["content"].as_array().unwrap().iter())
+            .filter(|block| block["type"] == "tool_result")
+            .count();
+        assert_eq!(tool_results, 2, "both results stay paired with their calls");
     }
 
     #[test]
