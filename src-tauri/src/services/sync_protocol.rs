@@ -733,11 +733,18 @@ mod tests {
 
     #[test]
     fn torn_snapshot_error_names_the_artifact_and_the_way_out() {
-        let cause = localized("sync.artifact_hash_mismatch", "hash 不匹配", "hash mismatch");
+        let cause = localized(
+            "sync.artifact_hash_mismatch",
+            "hash 不匹配",
+            "hash mismatch",
+        );
         let err = torn_snapshot_error("db.sql", &cause);
         let text = err.to_string();
         assert!(text.contains("db.sql"), "{text}");
-        assert!(text.contains("强制上传") || text.contains("force upload"), "{text}");
+        assert!(
+            text.contains("强制上传") || text.contains("force upload"),
+            "{text}"
+        );
         match err {
             AppError::Localized { key, .. } => assert_eq!(key, REMOTE_SNAPSHOT_TORN_ERROR_KEY),
             other => panic!("expected AppError::Localized, got {other:?}"),
