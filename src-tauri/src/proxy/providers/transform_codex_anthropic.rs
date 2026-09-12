@@ -1886,8 +1886,8 @@ mod tests {
     }
 
     #[test]
-    fn test_request_invalid_or_non_object_arguments_error() {
-        for arguments in ["{broken", "[1,2]"] {
+    fn test_request_invalid_or_non_object_arguments_are_wrapped() {
+        for (arguments, expected) in [("{broken", json!("{broken")), ("[1,2]", json!([1, 2]))] {
             let input = json!({
                 "model":"c",
                 "input":[
@@ -1895,10 +1895,15 @@ mod tests {
                     {"type":"function_call_output","call_id":"c1","output":"ok"}
                 ]
             });
-            assert!(matches!(
-                responses_request_to_anthropic(input, 4096),
-                Err(ProxyError::InvalidRequest(_))
-            ));
+            let result = responses_request_to_anthropic(input, 4096).unwrap();
+            let tool_use = result["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|message| message["content"].as_array().unwrap())
+                .find(|block| block["type"] == "tool_use")
+                .unwrap();
+            assert_eq!(tool_use["input"]["__raw_arguments"], expected);
         }
     }
 
