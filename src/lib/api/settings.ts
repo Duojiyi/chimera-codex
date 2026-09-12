@@ -158,6 +158,10 @@ export const settingsApi = {
     return await invoke("webdav_sync_upload");
   },
 
+  async webdavSyncForceUpload(): Promise<WebDavSyncResult> {
+    return await invoke("webdav_sync_force_upload");
+  },
+
   async webdavSyncDownload(): Promise<WebDavSyncResult> {
     return await invoke("webdav_sync_download");
   },
@@ -192,6 +196,10 @@ export const settingsApi = {
 
   async s3SyncUpload(): Promise<WebDavSyncResult> {
     return await invoke("s3_sync_upload");
+  },
+
+  async s3SyncForceUpload(): Promise<WebDavSyncResult> {
+    return await invoke("s3_sync_force_upload");
   },
 
   async s3SyncDownload(): Promise<WebDavSyncResult> {

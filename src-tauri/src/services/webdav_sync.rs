@@ -20,10 +20,10 @@ use crate::settings::{update_webdav_sync_status, WebDavSyncSettings, WebDavSyncS
 use super::sync_protocol::{
     apply_snapshot, build_local_snapshot, effective_db_compat_version, localized,
     persist_sync_success_best_effort, remote_changed_conflict_error,
-    remote_unchanged_since_last_sync, sha256_hex, validate_artifact_size_limit,
-    validate_manifest_compat, verify_artifact, ArtifactMeta, RemoteLayout, SyncManifest,
-    DB_COMPAT_VERSION, MAX_MANIFEST_BYTES, MAX_SYNC_ARTIFACT_BYTES, PROTOCOL_VERSION,
-    REMOTE_DB_SQL, REMOTE_MANIFEST, REMOTE_SKILLS_ZIP,
+    remote_unchanged_since_last_sync, sha256_hex, torn_snapshot_error,
+    validate_artifact_size_limit, validate_manifest_compat, verify_artifact, ArtifactMeta,
+    RemoteLayout, SyncManifest, UploadOptions, DB_COMPAT_VERSION, MAX_MANIFEST_BYTES,
+    MAX_SYNC_ARTIFACT_BYTES, PROTOCOL_VERSION, REMOTE_DB_SQL, REMOTE_MANIFEST, REMOTE_SKILLS_ZIP,
 };
 
 pub(crate) mod archive;
@@ -66,6 +66,15 @@ pub async fn upload(
     db: &crate::database::Database,
     settings: &mut WebDavSyncSettings,
 ) -> Result<Value, AppError> {
+    upload_with_options(db, settings, UploadOptions::default()).await
+}
+
+/// Upload local snapshot; `options.force` overwrites the remote unconditionally.
+pub async fn upload_with_options(
+    db: &crate::database::Database,
+    settings: &mut WebDavSyncSettings,
+    options: UploadOptions,
+) -> Result<Value, AppError> {
     settings.validate()?;
     let auth = auth_for(settings);
     let dir_segs = remote_dir_segments(settings, RemoteLayout::Current);
@@ -80,7 +89,11 @@ pub async fn upload(
     // what counts as "unchanged".
     let remote_etag_before = head_etag(&manifest_url, &auth).await?;
     let local_known_etag = settings.status.last_remote_etag.clone();
-    if !remote_unchanged_since_last_sync(&remote_etag_before, &local_known_etag) {
+    if options.force {
+        log::warn!(
+            "[WebDAV] force upload requested: overwriting the remote snapshot regardless of its version (remote etag {remote_etag_before:?}, last known {local_known_etag:?})"
+        );
+    } else if !remote_unchanged_since_last_sync(&remote_etag_before, &local_known_etag) {
         return Err(remote_changed_conflict_error());
     }
 
@@ -108,12 +121,17 @@ pub async fn upload(
     // it's `None` (first sync, or a server that never returns ETags) no
     // conditional header is sent and the PUT is unconditional, same as
     // before this fix.
+    let manifest_if_match = if options.force {
+        None
+    } else {
+        local_known_etag.as_deref()
+    };
     put_bytes(
         &manifest_url,
         &auth,
         snapshot.manifest_bytes,
         "application/json",
-        local_known_etag.as_deref(),
+        manifest_if_match,
     )
     .await?;
 
@@ -298,7 +316,8 @@ async fn download_and_verify(
             )
         })?;
 
-    verify_artifact(&bytes, artifact_name, meta)?;
+    verify_artifact(&bytes, artifact_name, meta)
+        .map_err(|cause| torn_snapshot_error(artifact_name, &cause))?;
     Ok(bytes)
 }
 

@@ -17,9 +17,10 @@ use crate::settings::{update_s3_sync_status, S3SyncSettings, WebDavSyncStatus};
 use super::sync_protocol::{
     apply_snapshot, build_local_snapshot, localized, persist_sync_success_best_effort,
     remote_changed_conflict_error, remote_unchanged_since_last_sync, sha256_hex,
-    validate_artifact_size_limit, validate_manifest_compat, verify_artifact, ArtifactMeta,
-    RemoteLayout, SyncManifest, DB_COMPAT_VERSION, MAX_MANIFEST_BYTES, MAX_SYNC_ARTIFACT_BYTES,
-    PROTOCOL_VERSION, REMOTE_DB_SQL, REMOTE_MANIFEST, REMOTE_SKILLS_ZIP,
+    torn_snapshot_error, validate_artifact_size_limit, validate_manifest_compat,
+    verify_artifact, ArtifactMeta, RemoteLayout, SyncManifest, UploadOptions,
+    DB_COMPAT_VERSION, MAX_MANIFEST_BYTES, MAX_SYNC_ARTIFACT_BYTES, PROTOCOL_VERSION,
+    REMOTE_DB_SQL, REMOTE_MANIFEST, REMOTE_SKILLS_ZIP,
 };
 
 // ─── Sync lock ───────────────────────────────────────────────
@@ -51,6 +52,15 @@ pub async fn upload(
     db: &crate::database::Database,
     settings: &mut S3SyncSettings,
 ) -> Result<Value, AppError> {
+    upload_with_options(db, settings, UploadOptions::default()).await
+}
+
+/// Upload local snapshot; `options.force` overwrites the remote unconditionally.
+pub async fn upload_with_options(
+    db: &crate::database::Database,
+    settings: &mut S3SyncSettings,
+    options: UploadOptions,
+) -> Result<Value, AppError> {
     settings.validate()?;
     let creds = creds_for(settings);
 
@@ -63,7 +73,11 @@ pub async fn upload(
     // what counts as "unchanged".
     let remote_etag_before = s3::head_object(&creds, &manifest_key).await?;
     let local_known_etag = settings.status.last_remote_etag.clone();
-    if !remote_unchanged_since_last_sync(&remote_etag_before, &local_known_etag) {
+    if options.force {
+        log::warn!(
+            "[S3] force upload requested: overwriting the remote snapshot regardless of its version (remote etag {remote_etag_before:?}, last known {local_known_etag:?})"
+        );
+    } else if !remote_unchanged_since_last_sync(&remote_etag_before, &local_known_etag) {
         return Err(remote_changed_conflict_error());
     }
 
@@ -86,12 +100,17 @@ pub async fn upload(
     // Conditional write on the manifest itself: closes most of the race
     // window between the HEAD check above and this PUT on backends that
     // support conditional writes (see `s3::put_object`).
+    let manifest_if_match = if options.force {
+        None
+    } else {
+        local_known_etag.as_deref()
+    };
     s3::put_object(
         &creds,
         &manifest_key,
         snapshot.manifest_bytes,
         "application/json",
-        local_known_etag.as_deref(),
+        manifest_if_match,
     )
     .await?;
 
@@ -234,7 +253,8 @@ async fn download_and_verify(
             )
         })?;
 
-    verify_artifact(&bytes, artifact_name, meta)?;
+    verify_artifact(&bytes, artifact_name, meta)
+        .map_err(|cause| torn_snapshot_error(artifact_name, &cause))?;
     Ok(bytes)
 }
 

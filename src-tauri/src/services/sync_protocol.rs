@@ -279,8 +279,36 @@ pub(crate) fn remote_unchanged_since_last_sync(
 pub(crate) fn remote_changed_conflict_error() -> AppError {
     localized(
         REMOTE_CHANGED_ERROR_KEY,
-        "远端数据自上次同步后已被其他设备修改，为避免覆盖对方的更改，本次上传已取消。请先下载合并后再重试。",
-        "Remote data has changed since your last sync, likely from another device. Upload was cancelled to avoid overwriting those changes — please download and merge before retrying.",
+        "远端数据自上次同步后已被其他设备修改，为避免覆盖对方的更改，本次上传已取消。请先下载合并后再重试；若确认本机数据是正确的，可使用「强制上传」重写远端。",
+        "Remote data has changed since your last sync, likely from another device. Upload was cancelled to avoid overwriting those changes — download and merge before retrying, or use force upload if this device's data is the one to keep.",
+    )
+}
+
+/// How an upload treats the remote snapshot's version check.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UploadOptions {
+    /// Skip the optimistic-concurrency check and write the manifest without a
+    /// conditional header. This is the escape hatch for a torn remote: the
+    /// three files are uploaded one by one, so a device whose manifest write
+    /// lost the race leaves its artifacts under the other device's manifest,
+    /// after which neither device can upload (remote changed) nor download
+    /// (verification fails). One device re-uploading everything unconditionally
+    /// is the only way out.
+    pub force: bool,
+}
+
+pub(crate) const REMOTE_SNAPSHOT_TORN_ERROR_KEY: &str = "sync.remote_snapshot_torn";
+
+/// A downloaded artifact does not match the manifest that lists it.
+pub(crate) fn torn_snapshot_error(artifact_name: &str, cause: &AppError) -> AppError {
+    localized(
+        REMOTE_SNAPSHOT_TORN_ERROR_KEY,
+        format!(
+            "远端快照不完整：{artifact_name} 与 manifest 不一致（{cause}）。通常是另一台设备的上传被中断，或两台设备几乎同时上传。请在数据正确的那台设备上执行「强制上传」重写远端，然后再在本机下载。"
+        ),
+        format!(
+            "The remote snapshot is inconsistent: {artifact_name} does not match its manifest ({cause}). This usually means another device's upload was interrupted, or two devices uploaded at the same time. Run a force upload from the device whose data is correct, then download here."
+        ),
     )
 }
 
@@ -699,6 +727,19 @@ mod tests {
         let err = remote_changed_conflict_error();
         match err {
             AppError::Localized { key, .. } => assert_eq!(key, REMOTE_CHANGED_ERROR_KEY),
+            other => panic!("expected AppError::Localized, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn torn_snapshot_error_names_the_artifact_and_the_way_out() {
+        let cause = localized("sync.artifact_hash_mismatch", "hash 不匹配", "hash mismatch");
+        let err = torn_snapshot_error("db.sql", &cause);
+        let text = err.to_string();
+        assert!(text.contains("db.sql"), "{text}");
+        assert!(text.contains("强制上传") || text.contains("force upload"), "{text}");
+        match err {
+            AppError::Localized { key, .. } => assert_eq!(key, REMOTE_SNAPSHOT_TORN_ERROR_KEY),
             other => panic!("expected AppError::Localized, got {other:?}"),
         }
     }

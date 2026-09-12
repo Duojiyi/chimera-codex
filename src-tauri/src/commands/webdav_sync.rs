@@ -113,6 +113,22 @@ pub async fn webdav_sync_upload(state: State<'_, AppState>) -> Result<Value, Str
 }
 
 #[tauri::command]
+pub async fn webdav_sync_force_upload(state: State<'_, AppState>) -> Result<Value, String> {
+    let db = state.db.clone();
+    let mut settings = require_enabled_webdav_settings()?;
+
+    let result = run_with_webdav_lock(webdav_sync_service::upload_with_options(
+        &db,
+        &mut settings,
+        crate::services::sync_protocol::UploadOptions { force: true },
+    ))
+    .await;
+    map_sync_result(result, |error| {
+        persist_sync_error(&mut settings, error, "manual-force")
+    })
+}
+
+#[tauri::command]
 pub async fn webdav_sync_download(state: State<'_, AppState>) -> Result<Value, String> {
     let db = state.db.clone();
     let db_for_sync = db.clone();

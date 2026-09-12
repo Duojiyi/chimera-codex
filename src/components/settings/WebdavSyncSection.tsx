@@ -589,6 +589,27 @@ export function WebdavSyncSection({
     }
   }, [closeDialog, dirty, queryClient, t]);
 
+  const handleForceUploadConfirm = useCallback(async () => {
+    if (dirty) {
+      toast.error(t("settings.webdavSync.unsavedChanges"));
+      return;
+    }
+    closeDialog();
+    setActionState("uploading");
+    try {
+      await settingsApi.webdavSyncForceUpload();
+      toast.success(t("settings.webdavSync.uploadSuccess"));
+      await queryClient.invalidateQueries();
+    } catch (error) {
+      toast.error(
+        t("settings.webdavSync.uploadFailed", {
+          error: (error as Error)?.message ?? String(error),
+        }),
+      );
+    } finally {
+      setActionState("idle");
+    }
+  }, [closeDialog, dirty, queryClient, t]);
   /** Fetch remote info, then open download confirmation dialog. */
   const handleDownloadClick = useCallback(async () => {
     if (dirty) {
@@ -805,6 +826,27 @@ export function WebdavSyncSection({
     }
   }, [closeS3Dialog, s3Dirty, queryClient, t]);
 
+  const handleS3ForceUploadConfirm = useCallback(async () => {
+    if (s3Dirty) {
+      toast.error(t("settings.s3Sync.unsavedChanges"));
+      return;
+    }
+    closeS3Dialog();
+    setS3ActionState("uploading");
+    try {
+      await settingsApi.s3SyncForceUpload();
+      toast.success(t("settings.s3Sync.uploadSuccess"));
+      await queryClient.invalidateQueries();
+    } catch (error) {
+      toast.error(
+        t("settings.s3Sync.uploadFailed", {
+          error: (error as Error)?.message ?? String(error),
+        }),
+      );
+    } finally {
+      setS3ActionState("idle");
+    }
+  }, [closeS3Dialog, queryClient, s3Dirty, t]);
   const handleS3DownloadClick = useCallback(async () => {
     if (s3Dirty) {
       toast.error(t("settings.s3Sync.unsavedChanges"));
@@ -1608,6 +1650,11 @@ export function WebdavSyncSection({
                     {t("settings.webdavSync.confirmUpload.warning")}
                   </p>
                 )}
+                {remoteInfo && !remoteIsLegacy && (
+                  <p className="text-xs text-muted-foreground">
+                    {t("settings.webdavSync.confirmUpload.forceWarning")}
+                  </p>
+                )}
                 {remoteInfo && remoteIsLegacy && (
                   <p className="font-medium text-amber-600 dark:text-amber-400">
                     {t("settings.webdavSync.confirmUpload.legacyNotice")}
@@ -1620,6 +1667,11 @@ export function WebdavSyncSection({
             <Button variant="outline" onClick={closeDialog}>
               {t("common.cancel")}
             </Button>
+            {remoteInfo && (
+              <Button variant="outline" onClick={handleForceUploadConfirm}>
+                {t("settings.webdavSync.confirmUpload.force")}
+              </Button>
+            )}
             <Button variant="destructive" onClick={handleUploadConfirm}>
               {t("settings.webdavSync.confirmUpload.confirm")}
             </Button>
@@ -1753,6 +1805,11 @@ export function WebdavSyncSection({
                     {t("settings.s3Sync.confirmUpload.warning")}
                   </p>
                 )}
+                {s3RemoteInfo && (
+                  <p className="text-xs text-muted-foreground">
+                    {t("settings.s3Sync.confirmUpload.forceWarning")}
+                  </p>
+                )}
               </div>
             </DialogDescription>
           </DialogHeader>
@@ -1760,6 +1817,11 @@ export function WebdavSyncSection({
             <Button variant="outline" onClick={closeS3Dialog}>
               {t("common.cancel")}
             </Button>
+            {s3RemoteInfo && (
+              <Button variant="outline" onClick={handleS3ForceUploadConfirm}>
+                {t("settings.s3Sync.confirmUpload.force")}
+              </Button>
+            )}
             <Button variant="destructive" onClick={handleS3UploadConfirm}>
               {t("settings.s3Sync.confirmUpload.confirm")}
             </Button>

@@ -10,6 +10,23 @@ numbers belong to a separate upstream line.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.0] - 2026-09-12
+
+### Added
+
+- **Recover inconsistent WebDAV and S3 snapshots safely.** Sync download now verifies artifact size and SHA-256 metadata and reports torn remote snapshots clearly. When the remote snapshot is known to be inconsistent, the confirmation flow offers an explicit force-upload action that replaces it while preserving optimistic concurrency checks for normal uploads.
+
+### Fixed
+
+- **Codex sessions recover across resumed and reverted rollouts.** Session usage no longer leaves a rollout permanently deferred when its filename UUID and `session_meta.id` differ.
+- **Provider validation stays non-blocking.** Saving a provider probes only its default model and mapping rows, while validation failures remain visible without preventing the save.
+- **Proxy and Codex compatibility improved.** URL resolution, protocol detection, truncated tool-call handling, inline reasoning, MCP transport validation, approval-policy cleanup, DeepSeek templates, and current Codex model tiers now follow the actual upstream request shapes.
+- **Runtime restart no longer fails on its own in-flight operation.** Restart coordination now avoids treating the originating operation as a conflicting concurrent request.
+
+### Changed
+
+- **Codex runtime engines updated to v0.5.6.** The release includes the current engine catalog and client compatibility updates.
+
 ## [2.6.5] - 2026-08-28
 
 ### Fixed

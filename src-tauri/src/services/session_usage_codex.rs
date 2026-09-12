@@ -703,11 +703,20 @@ fn parse_codex_file(
                         .or_else(|| payload.get("thread_id"))
                         .or_else(|| payload.get("threadId")),
                 );
+                // Codex's revert/resume writes a fresh rollout whose file name
+                // carries a new UUID while `session_meta.id` keeps the thread's
+                // original id. Those files were deferred as "inconsistent" and,
+                // since neither id ever changes, deferred forever — every token
+                // the resumed thread spent from then on went unrecorded. The
+                // file's own UUID stays the accounting key (its events are new,
+                // so nothing is double counted against the original rollout);
+                // the meta id is only informative.
                 if let (Some(filename_id), Some(meta_id)) = (&root_thread_id, meta_thread_id) {
                     if filename_id != &meta_id {
-                        parent = ParentResolution::Deferred(format!(
-                            "文件名线程 ID ({filename_id}) 与 root meta ID ({meta_id}) 不一致"
-                        ));
+                        log::debug!(
+                            "[CODEX-SYNC] rollout {} continues thread {meta_id} under file id {filename_id} (revert/resume)",
+                            file_path.display()
+                        );
                     }
                 }
 
@@ -1611,6 +1620,50 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(count, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_resumed_rollout_with_new_file_uuid_is_imported_not_deferred() -> Result<(), AppError> {
+        // Revert/resume: the file name carries a new UUID, session_meta keeps
+        // the original thread id. This used to be a permanent deferral and the
+        // resumed thread's usage silently stopped being recorded.
+        clear_codex_replay_caches();
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let original = rollout_path(temp.path(), PARENT_ID);
+        write_jsonl(
+            &original,
+            &[
+                session_meta(PARENT_ID),
+                token_count_at(100, 50, 10, "2026-07-10T03:00:01Z"),
+            ],
+        );
+        let resumed = rollout_path(temp.path(), CHILD_A_ID);
+        write_jsonl(
+            &resumed,
+            &[
+                // Meta id is the ORIGINAL thread, file id is new, no explicit parent.
+                session_meta_at(PARENT_ID, None, None, "2026-07-10T03:05:00Z"),
+                token_count_at(300, 120, 30, "2026-07-10T03:05:01Z"),
+            ],
+        );
+
+        let first = sync_test_file(&db, &original, &[&original, &resumed])?;
+        assert_eq!((first.imported, first.deferred), (1, false));
+        let second = sync_test_file(&db, &resumed, &[&original, &resumed])?;
+        assert_eq!(
+            (second.imported, second.deferred),
+            (1, false),
+            "the resumed rollout's tokens must be recorded"
+        );
+        let conn = lock_conn!(db.conn);
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM proxy_request_logs WHERE data_source = 'codex_session'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(count, 2, "one row per rollout, no double counting");
         Ok(())
     }
 
